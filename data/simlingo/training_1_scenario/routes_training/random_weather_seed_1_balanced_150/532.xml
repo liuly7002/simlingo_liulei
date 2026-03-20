@@ -1,0 +1,20 @@
+<routes><route id="0" town="Town12">
+      <weathers>
+         <weather route_percentage="0.0" cloudiness="10.0" precipitation="40.0" precipitation_deposits="60.0" wetness="60.0" wind_intensity="100.0" sun_azimuth_angle="180.0" sun_altitude_angle="10.0" fog_density="3.0" />
+         <weather route_percentage="100.0" cloudiness="5.0" precipitation="40.0" precipitation_deposits="12.0" wetness="8.0" wind_intensity="50.0" sun_azimuth_angle="45.0" sun_altitude_angle="5.0" fog_density="3.0" />
+      </weathers>
+      <waypoints>  # ego 车辆的全局导航路径（global route）
+         <position x="-4003.5" y="2027.0" z="337.0" />
+         <position x="-3878.2" y="2074.6" z="339.4" />
+      </waypoints>
+      <scenarios>
+         <scenario name="InterurbanActorFlow_1" type="InterurbanActorFlow">  # type="InterurbanActorFlow"表示不是单一车辆，而是一批车辆从起点到终点不断生成
+            <trigger_point x="-3988.5" y="2040.6" z="337.4" yaw="42.2" />    # 触发该场景的条件点，当 ego 车靠近这个点时：这个 scenario 被激活，交通流开始生成
+            <start_actor_flow x="-3827.9" y="2182.1" z="345.0" />  # 交通流车辆生成的位置，车辆从这里生成，按照道路方向开始行使
+            <end_actor_flow x="-3984.2" y="2039.7" z="337.4" />    # 交通流车辆的终点位置，从 start_actor_flow 出发，朝 end_actor_flow 行驶，到达终点后被删除
+            <flow_speed value="20" />                              # 车辆流的速度，km/h，车辆匀速行驶速度
+            <source_dist_interval from="40" to="120" />            # 控制车辆生成的间距（单位：米）。每辆新车生成时，与前车距离在 40m 到 120m 之间随机采样
+         </scenario>
+      </scenarios>
+   </route>
+</routes>

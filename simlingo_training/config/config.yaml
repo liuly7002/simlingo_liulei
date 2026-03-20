@@ -1,0 +1,5 @@
+defaults:
+  - train_base
+  - model/language_model: llm
+  - experiment: debug #simlingo_seed1
+# 主配置文件(这是先加载的)

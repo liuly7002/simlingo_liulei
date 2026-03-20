@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/software/carla0915/Plugins" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/software/carla0915/Plugins/carlaviz" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/software/carla0915/Plugins/carlaviz/backend/third_party/xviz" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/software/carla0915/Plugins/telecarla" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/software/carla0915/Plugins/testpilot" vcs="Git" />
+  </component>
+</project>
