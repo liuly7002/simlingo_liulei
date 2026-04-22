@@ -6,13 +6,15 @@ from transformers import AutoModel
 class LingoInternVLModel(nn.Module):
     def __init__(self, variant, *args, **kwargs):
         super().__init__()
-        self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
+        # 加载模型
+        self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)  # trust_remote_code=True 表示允许 HuggingFace 执行模型仓库里自定义的 Python 代码
+        # 语言模型原始词表一共有多少 token embedding
         try:
             self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings
         except:
             self.num_embeddings = self.model.language_model.vocab_size
-        self.use_global_img = None
-        self.processor = None
+        self.use_global_img = None  # 预留接口
+        self.processor = None       # 预留接口
         
     def replace_placeholder_tokens(
         self,
@@ -25,6 +27,15 @@ class LingoInternVLModel(nn.Module):
         placeholder_values: Optional[List[dict]] = None,
         wp_encoder: Optional[nn.Module] = None,
     ):
+        """
+        函数功能:
+            替换占位token
+        它处理的占位主要有两种:
+            第一种:文本里的特殊placeholder token
+                这些token不是普通自然语言词,而是某些"结构化信息占位符",后面会用wp_encoder编码成embedding去替换
+            第二种:<IMG_CONTEXT> token
+                这是图像上下文占位token,后面会被视觉编码器输出的image feature替换
+        """
         
         if 'tokenizer' in self.processor.__dict__:
             self.tokenizer = self.processor.tokenizer
@@ -47,27 +58,38 @@ class LingoInternVLModel(nn.Module):
             # for_inputs_embeds_ids = input_ids.clone()
             # for_inputs_embeds_ids[(input_ids >= self.num_embeddings)] = 0
             # inputs_embeds = language_model.model.get_input_embeddings()(for_inputs_embeds_ids)
-            inputs_embeds = adaptor_dict['language_inputs']
-            input_ids = adaptor_dict['language__ids']
+            inputs_embeds = adaptor_dict['language_inputs']  # 初始文本 embedding
+            input_ids = adaptor_dict['language__ids']        # 对应的 token id  形状为[B,L] 其中L是文本长度，B是batch size
             
             # 2a replace placeholder
-            smallest_added_id = self.tokenizer.additional_special_tokens_ids[0]
+            smallest_added_id = self.tokenizer.additional_special_tokens_ids[0]  # 表示tokenizer中额外添加的特殊token的id列表的第一个id
+            # special_ids 表示本 batch 出现过三种特殊 token, 例如 special_ids=tensor([32000, 32001, 32002])
             special_ids = torch.tensor(list(set(input_ids[(input_ids >= smallest_added_id)].tolist())), device=input_ids.device)
             # special_ids = torch.tensor(list(set(ids[(ids > 50294)].tolist())), device=ids.device)
-            special_ids = special_ids.view(-1, 1, 1)
+            special_ids = special_ids.view(-1, 1, 1)   #   第 0 维：第几种 special token, 第 1 维：batch 中第几个样本, 第 2 维：序列中的第几个位置
             batch_size, seq_len = input_ids.shape
 
             if special_ids.size(0) > 0 and len(placeholder_values) > 0:
+                # special_ids.size(0) > 0,也就是这个 batch 至少出现过一种特殊 token.
+                # len(placeholder_values) > 0,说明外部真的传进来了 placeholder 的内容,这里我认为实际上placeholder_values就是传进来的waypoint
+                
+                """
+                对于每个样本里出现的某个 special token,找到它第一次出现的位置;
+                然后从 placeholder_values 中取出这个 token 对应的坐标序列，送入 wp_encoder 得到向量序列，再把这段向量序列写回 inputs_embeds 的对应位置。
+                """
+                
+                # 后面创建坐标张量时，要让它的数据类型和 wp_encoder 的参数类型一致
                 wp_encoder_dtype = wp_encoder.mlp[0].weight.dtype
 
                 # Create a mask where the special_ids are located
-                mask = input_ids == special_ids
+                # mask表示对于每一种 special token，在 batch 中每个样本的每个位置，它是否出现
+                mask = input_ids == special_ids  # mask.shape = [K, B, L]
 
                 # Convert the mask to float and use torch.cumsum to get cumulative sum along the sequence length dimension
                 cumsum_mask = torch.cumsum(mask.float(), dim=2)
 
                 # Create a mask to get the first occurrence by checking where cumsum is 1
-                first_occurrence_mask = (cumsum_mask == 1) & mask
+                first_occurrence_mask = (cumsum_mask == 1) & mask  # 构造“只保留第一次出现位置”的 mask
 
                 # Use torch.argmax to get the indices of the first occurrence
                 first_occurrences = torch.argmax(first_occurrence_mask.float(), dim=2)
@@ -80,7 +102,7 @@ class LingoInternVLModel(nn.Module):
                 coords = [torch.tensor(placeholder_values[b_id][special_ids[key_id].item()], device=input_ids.device, dtype=wp_encoder_dtype) for key_id, b_id in zip(special_token_pos[:, 1], special_token_pos[:, 0])]
                 coords_length_org = [len(coord) for coord in coords]
                 coords = torch.cat(coords)
-                wp_embeds = wp_encoder(coords.unsqueeze(0)).squeeze(0)
+                wp_embeds = wp_encoder(coords.unsqueeze(0)).squeeze(0)    # 放入 wp_encoder 得到向量表示
                 wp_embeds = torch.split(wp_embeds, coords_length_org)
 
                 first_occurrences_filtered = [first_occurrences[i] for i in special_token_pos[:, 0]]

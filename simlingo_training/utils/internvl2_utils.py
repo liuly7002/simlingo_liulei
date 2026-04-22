@@ -14,6 +14,8 @@ from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoConfig
 
+from huggingface_hub import snapshot_download
+
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -104,21 +106,47 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
     # taken from:
     # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/train/constants.py#L7
     # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/model/internvl_chat/modeling_internvl_chat.py#L294
-    IMG_START_TOKEN='<img>'
-    IMG_END_TOKEN='</img>'
-    IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'
-    IMG_TOKEN = '<image>'
+    # IMG_START_TOKEN='<img>'
+    # IMG_END_TOKEN='</img>'
+    # IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'
+    # IMG_TOKEN = '<image>'
 
-    cache_dir = f"{cache_root_dir}/{(encoder_variant.split('/')[1])}"
-    # get absolute path from workspace dir not wokring dir
-    cache_dir = to_absolute_path(cache_dir)
-    model_path = f"{cache_dir}/conversation.py"
-    if not os.path.exists(model_path):
-        from huggingface_hub import snapshot_download
-        snapshot_download(repo_id=encoder_variant, local_dir=cache_dir)
+    # cache_dir = f"{cache_root_dir}/{(encoder_variant.split('/')[1])}"
+    # # get absolute path from workspace dir not wokring dir
+    # cache_dir = to_absolute_path(cache_dir)
+    # model_path = f"{cache_dir}/conversation.py"
+    # if not os.path.exists(model_path):
+    #     from huggingface_hub import snapshot_download
+    #     # snapshot_download(repo_id=encoder_variant, local_dir=cache_dir)
+    #     if os.path.isdir(encoder_variant):
+    #         model_path = encoder_variant
+    #     else:
+    #         model_path = snapshot_download(repo_id=encoder_variant, local_dir=cache_dir)
         
-    #import from file from model_path
+    # #import from file from model_path
+    # spec = importlib.util.spec_from_file_location('get_conv_template', model_path)
+    # conv_module = importlib.util.module_from_spec(spec)
+    # sys.modules['get_conv_template'] = conv_module
+    # spec.loader.exec_module(conv_module)
+
+    IMG_START_TOKEN = '<img>'
+    IMG_END_TOKEN = '</img>'
+    IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+    IMG_TOKEN = '<image>'
+    # 确定模型根目录
+    if os.path.isdir(encoder_variant):
+        model_dir = encoder_variant
+    else:
+        cache_dir = f"{cache_root_dir}/{encoder_variant.split('/')[1]}"
+        cache_dir = to_absolute_path(cache_dir)
+        model_dir = snapshot_download(repo_id=encoder_variant, local_dir=cache_dir)
+    # conversation.py 的真实路径
+    model_path = os.path.join(model_dir, "conversation.py")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"conversation.py not found: {model_path}")
     spec = importlib.util.spec_from_file_location('get_conv_template', model_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load module spec from: {model_path}")
     conv_module = importlib.util.module_from_spec(spec)
     sys.modules['get_conv_template'] = conv_module
     spec.loader.exec_module(conv_module)

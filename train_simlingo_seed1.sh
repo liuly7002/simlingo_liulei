@@ -16,12 +16,12 @@ fi
 
 #source ~/.bashrc
 #conda activate ~/miniconda3/envs/simlingo
-source ~/miniconda3/etc/profile.d/conda.sh
+source /root/miniconda3/etc/profile.d/conda.sh
 conda activate simlingo
 
 pwd
 export PYTHONPATH="${CARLA_ROOT}/PythonAPI/carla/":${PYTHONPATH}
-export WORK_DIR=/home/ll/simlingo/
+export WORK_DIR=/root/simlingo/
 export PYTHONPATH=$PYTHONPATH:${WORK_DIR}
 
 export MASTER_ADDR=localhost

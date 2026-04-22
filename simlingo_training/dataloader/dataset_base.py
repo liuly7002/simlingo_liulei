@@ -36,7 +36,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
     def __init__(self, dreamer = False, evaluation = False, **cfg,):
         """
-        __init__：根据配置，扫描磁盘上的数据集目录，筛选合法样本，把后续 __getitem__() 要用到的所有"索引信息"先建立好。
+        __init__: 根据配置，扫描磁盘上的数据集目录, 筛选合法样本, 把后续 __getitem__() 要用到的所有"索引信息"先建立好。
         """
 
         # 把传进来的配置项cfg,全部直接挂到self上,变成成员变量.
@@ -970,7 +970,6 @@ def image_augmenter(prob=0.2, cutout=False):
     augmenter = ia.Sequential(augmentations, random_order=True)
 
     return augmenter  # 返回的是一个增强器对象,后续可以将其作为一套随机增强规则来使用
-
 
 def get_camera_intrinsics(w, h, fov):
     """
