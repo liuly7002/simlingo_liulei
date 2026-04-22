@@ -5,7 +5,7 @@ partially taken from https://github.com/autonomousvision/carla_garage/blob/main/
 """
 
 import os
-import ujson   # 更快的读jso
+import ujson
 import json
 import numpy as np
 import random
@@ -21,39 +21,77 @@ from simlingo_training.dataloader.dataset_base import BaseDataset
 VIZ_DATA = False   # True: 把前视图、route、waypoints、prompt、answer 可视化出来，方便检查样本构造是否正确。
 
 class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
-    """
-    Custom dataset that dynamically loads a CARLA dataset from disk.
-    """
-
+    
+    
+    
     def __init__(self,
             **cfg,
         ):
         super().__init__(dreamer=False, **cfg)  # dreamer=False的含义:告诉父类,现在处理的是driving dataset,不是dreamer dataset
 
+    
+    
+    
+    
+    
+    
     def __getitem__(self, index):
-        """Returns the item at index idx. """
-        # Disable threading because the data loader will already split in threads.
+        
+        
+        
+        
+
         cv2.setNumThreads(0) # 禁用opencv多线程
 
+        
+        
+        
+        
+        
+        ########################################### 初始化(父类初始化得到) ###########################################
+
+        
         # 从索引表里取出该sample的元信息(这里说明在父类初始化时,已经提前把整个数据集扫描了一遍,并把每个sample的"索引信息"存到若干列表里,所以这里不是现查目录,而是直接O(1)取出)
         data = {}
         images = self.images[index]                 # 图像路径
         measurements = self.measurements[index]     # measurement路径
-        sample_start = self.sample_start[index]
+        sample_start = self.sample_start[index]     # 表示这个样本从哪个时间步开始,比如一个样本对应 seq=20,那么后面读取 future waypoints、future measurements 都从这个起点展开
         augment_exists = self.augment_exists[index] # 是否有图像增强
+        # sample 16, 
+        # images: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/rgb/0026.jpg'], 
+        # measurements: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/measurements'], 
+        # sample_start: 26, 
+        # augment_exists: True
+        
+        
+        
+        
+        
+        
+        
+        ########################################### measurements (.json.gz) ###########################################
+        
+        
+        # loaded_measurements: 当前帧及未来若干帧的 measurement .json内容集合
+        # current_measurement: 当前帧的 measurement .json内容
+        # measurement_file_current: 当前 measurement .json文件路径
+        loaded_measurements, current_measurement, measurement_file_current = self.load_current_and_future_measurements(measurements, sample_start)
+        data['measurement_path'] = measurement_file_current  # .json文件名
+        # current_measurement[0] = {'pos_global': [-1932.94677734375, 6059.3369140625], 'theta': 2.716931982836451, 'speed': 10.893928527832031, 'target_speed': 10.0, 'speed_limit': 13.88888888888889, 'target_point': [166.21953678063582, -1.4034610299303338], 'target_point_next': [292.23548401248064, -4.342632889987669], 'command': 4, 'next_command': 4, 'aim_wp': [3.9551499024618035, 0.0007044955744153203], 'route': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'route_original': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'changed_route': False, 'speed_reduced_by_obj_type': None, 'speed_reduced_by_obj_id': None, 'speed_reduced_by_obj_distance': None, 'steer': 0.0, 'throttle': 0.0, 'brake': False, 'control_brake': True, 'junction': False, 'vehicle_hazard': False, 'vehicle_affecting_id': None, 'light_hazard': False, 'walker_hazard': False, 'walker_affecting_id': None, 'stop_sign_hazard': False, 'stop_sign_close': False, 'walker_close': False, 'walker_close_id': None, 'angle': 0.00011339540056267717, 'augmentation_translation': 0.36125444482272595, 'augmentation_rotation': 5.24434331572315, 'ego_matrix': [[-0.9111607074737549, -0.4120118319988251, 0.005693943705409765, -1932.94677734375], [0.4120037257671356, -0.9111785292625427, -0.002586618298664689, 6059.3369140625], [0.0062539163045585155, -1.0898917935264762e-05, 0.9999804496765137, 377.0238952636719], [0.0, 0.0, 0.0, 1.0]]}
+        # measurement_file_current: /root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/measurements/0010.json.gz
 
-        ######################################################
-        ######## load current and future measurements ########
-        ######################################################
-        # 读取当前帧和未来帧的measurements
-        # loaded_measurements: 当前帧及未来若干帧的 measurement 集合
-        # current_measurement: 当前帧的 measurement 字典
-        # measurement_file_current: 当前 measurement 文件路径
-        loaded_measurements, current_measurement, measurement_file_current = self.load_current_and_future_measurements(
-            measurements,
-            sample_start
-            )
-        data['measurement_path'] = measurement_file_current
+
+
+
+
+
+
+
+
+
+
+        ########################################### 图像增强 ###########################################
+
 
         # Determine whether the augmented camera or the normal camera is used.
         # 决定是否使用图像增强
@@ -67,31 +105,101 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             aug_translation = 0.0
 
 
-        ######################################################
-        ################## load waypoints ####################
-        ######################################################
+        
+        
+        
+        
+        
+        ########################################### waypoints ###########################################
+
         # 加载waypoints(根据当前及未来 measurement，生成监督用的 future waypoints)
         data = self.load_waypoints(data, loaded_measurements, aug_translation, aug_rotation)
 
+        # data['waypoints']            : 增强后的2D轨迹
+        # dsta['waypoints_org']        : 原始2D轨迹（GT）
+        # dsta['waypoints_1d']         : 累计路径距离（1D表示）
+        # dsta['ego_waypoints']        : 4×4位姿（增强）
+        # dsta['ego_waypoints_org']    : 4×4位姿（原始）
+
+        
+        
+        
+        
+        
+        ########################################### 速度 ###########################################
+
+        
         # 速度
-        speed_rounded = round(current_measurement['speed'], 1)  # 用于 prompt 文本里显示
+        speed_rounded = round(current_measurement['speed'], 1)  # 用于 prompt 文本里显示 小数后一位
         data['speed'] = current_measurement['speed']            # 用于模型输入或监督保留原始数值
 
-        # route导航信息
+
+
+
+
+
+
+        ########################################### route ###########################################
         data = self.load_route(data, current_measurement, aug_translation, aug_rotation)
+        """
+        data['route'] = route    : 经行旋转+平移之后的路径点(40x2个),增强就是为了匹配增强后的图像的
+
+
+        data['route_adjusted_org'] = route_adjusted_org  : 原始路径点(40x2个)
+
+
+        data['route_adjusted'] = route_adjusted  : 含义及内容均与data['route'],不知道傻鸟作者添加这个东西干什么用,徒增阅读工作量
+
+        """
+
+
+
+
+
+
+
+        
+        
+        ########################################### target point ###########################################
+
 
         target_point = np.array(current_measurement['target_point'])
+        # 旋转+平移
         target_point = self.augment_target_point(target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
-        next_target_point = np.array(current_measurement['target_point_next'])
-        next_target_point = self.augment_target_point(next_target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+        # "target_point": [19.075672365994425,-13.26871181961684]
 
-        ######################################################
-        ################## get commentary & qa ##################
-        ######################################################
+
+
+        
+        
+        
+        
+        ########################################### next target point ###########################################
+
+        next_target_point = np.array(current_measurement['target_point_next'])
+        # 旋转+平移
+        next_target_point = self.augment_target_point(next_target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+        # "target_point_next": [19.703241532357737,-43.26213909836339]
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ########################################### 第一类语言监督 commentary 文件 ###########################################
+
         commentary_exists = False
         commentary = ''
-        if self.use_commentary:
+        if self.use_commentary:  # 执行
             commentary_file_path = measurement_file_current.replace('measurements', 'commentary').replace('data/', 'commentary/') # TODO: move to config
+            # print(f"Loading commentary from {commentary_file_path}...")
+            # Loading commentary from /root/simlingo/database/simlingo_v2_2026_02_28/commentary/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/commentary/0026.json.gz...
+            
+            
             # do not use evaluation routes!!!  验证集不使用 commentary 文件
             if 'validation_' in commentary_file_path:
                 commentary_exists = False
@@ -100,7 +208,8 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                     with gzip.open(commentary_file_path, 'rt') as f:
                         commentary_file = ujson.load(f)
                         commentary_exists = True
-                except (FileNotFoundError, ujson.JSONDecodeError):
+                except (FileNotFoundError, ujson.JSONDecodeError):  # 执行
+                    print(f"[{__file__}] commentary文件是空的")
                     commentary_exists = False
                     commentary_file = None
 
@@ -130,13 +239,32 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                     commentary = commentary.replace('..', '.')
                     commentary = commentary.replace('in in', 'in')
 
-        # 第二类语言监督
-        qa_exists = False
+        
+        
+        
+        
+        
+        ########################################### 第二类语言监督 本地生成的语言###########################################
+
+        
+        qa_exists = False   # 先初始化语言文件不存在
+        
         if self.use_qa:
+
+            ################################# 一、读取语言文件(.json.gz文件)  #################################
             qa_path = measurement_file_current.replace('measurements', 'vqa').replace('data/', 'drivelm/')
+            # print(f"[{__file__}]QA 路径: {qa_path}")
+            # QA 路径: /root/simlingo/database/simlingo_v2_2026_02_28/drivelm/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/vqa/0010.json.gz
+            
+            
             if 'validation_' in qa_path:
-                qa_exists = False
+                qa_exists = False   # 验证数据集默认语言文件不存在
+
+
             else:
+            
+            ################################# 二、下载语言文件 #################################
+
                 try:
                     with gzip.open(qa_path, 'rt') as f:
                         qa = ujson.load(f)
@@ -145,14 +273,19 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                     qa_exists = False
                     qa = None
 
+            
+            ################################# 三、读取语言文件内容 #################################
+
             if qa_exists:
                 qas = qa['QA']
-                qas = [values for values in qas.values()] # list of lists
-                qas = [item for sublist in qas for item in sublist] # flatten list
+                qas = [values for values in qas.values()]           # list of lists
+                qas = [item for sublist in qas for item in sublist] # flatten list  这就是将一个样本中所有的语言罗列出来了
                 while True:
+
+                    ################################# 四、随机选择一条问答(不进行语言增强) #################################
                     qa_chosen = random.choice(qas)  # 随机选一个QA
-                    qa_question = qa_chosen['Q']
-                    qa_answer = qa_chosen['A']
+                    qa_question = qa_chosen['Q']    # 问题
+                    qa_answer = qa_chosen['A']      # 答案
 
                     # 对“无信息/否定型答案”降采样
                     # 含义：
@@ -178,14 +311,26 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                     else:
                         break
                 
-                # we only augment in 60% of the cases and use the default QA in 40% of the cases
-                # augmentation is used to increase generalization to a broader set of sentences
-                # but we do not want to overfit to the augmented sentences
+                
+                
+                
+                
+                
+                ################################# 五、若进行语言增强 #################################
+
+                
+                # 我们仅在 60% 的情况下进行数据增强，而在 40% 的情况下使用默认的问答机制。
+                # 数据增强旨在提升模型对更广泛句集（sentences）的泛化能力，但我们不希望模型对增强后的句子产生过拟合。
+                
+                
                 # 开启增强时, 60% 用增强模板, 40% 保持原始 QA
                 if self.qa_augmentation and random.random() < 0.6:
                     # 做占位符抽象 先把原始question/answer保存
                     qa_question_org = qa_question
                     qa_answer_org = qa_answer
+                    
+                    
+                    
                     locations = [
                         'nearby to the front of the ego vehicle',
                         'nearby to the front right of the ego vehicle',
@@ -202,62 +347,116 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                         'on the left side of the ego vehicle',
                         'on the right side of the ego vehicle',
                     ]
+
+
+                    
+                    # 视觉描述,主要描述的是前视图像中的一些危险的物体,比如某辆车、行人、红绿灯(如果数据收集的时候有这些东西那么就会在"key_object_infos"键里写)
                     objects = [value['Visual_description'] for key, value in qa['key_object_infos'].items()]
-                    q_objects = []
-                    a_objects = []
+                    # objects = ['black police car', 'silver SUV']
+                    
+                    
+                    ############################################# 1.替换"视觉描述"为<OBJECT> #############################################
+                    q_objects = []   # 存放问题中出现的描述
+                    a_objects = []   # 存放回答中出现的描述
                     for object_type in objects:
+                        # 如果这些描述出现在问题里,就将问题中的描述替换为"<OBJECT>",并将描述放在q_objects里
                         if object_type in qa_question:
                             qa_question = qa_question.replace(object_type, '<OBJECT>')
                             q_objects.append(object_type)
+                        # 如果这些描述出现在回答里,就将回答中的描述替换为"<OBJECT>",并将描述放在a_objects里
                         if object_type in qa_answer:
                             qa_answer = qa_answer.replace(object_type, '<OBJECT>')
                             a_objects.append(object_type)
                     
+                    
+                    ############################################# 2.进一步替换"位置描述"为<LOCATION> #############################################
                     q_location = ''
                     a_location = ''
                     for location in locations:
+                        # 如果上述的位置描述出现在qa_question里,就将qa_question中的描述替换为"<LOCATION>,并将位置描述放在q_location里
                         if location in qa_question:
                             qa_question = qa_question.replace(location, '<LOCATION>')
                             q_location = location
+                        # 如果上述的位置描述出现在qa_answer里,就将qa_answer中的描述替换为"<LOCATION>",并将位置描述放在a_location里
                         if location in qa_answer:
                             qa_answer = qa_answer.replace(location, '<LOCATION>')
                             a_location = location
-                        
-                    q_distance = re.search(r'in (\d+) m', qa_question)
-                    qa_question = re.sub(r'in \d+ m', 'in <DISTANCE>', qa_question)
-                    a_distance = re.search(r'in (\d+) m', qa_answer)
-                    qa_answer = re.sub(r'in \d+ m', 'in <DISTANCE>', qa_answer)
+
+                    
+                    ############################################# 3.最后替换"距离描述"为<DISTANCE> #############################################    
+                    q_distance = re.search(r'in (\d+) m', qa_question)                # 提取数值
+                    qa_question = re.sub(r'in \d+ m', 'in <DISTANCE>', qa_question)   # 去掉具体数值,使用<DISTANCE>代替  qa_question
+                    a_distance = re.search(r'in (\d+) m', qa_answer)                  # 提取数值
+                    qa_answer = re.sub(r'in \d+ m', 'in <DISTANCE>', qa_answer)       # 去掉具体数值,使用<DISTANCE>代替  qa_answer
                     if len(q_objects)==0:
                         q_objects = ['']
                     if len(a_objects)==0:
                         a_objects = ['']
                     
+                    
+                    
+
+
+                    ############################################# 4.是否增强问题 40%情况下不增强 60%情况下增强 #############################################
+                    
+                    
+                    
+                    # 40%情况下使用原QA  --> qa_question_org & qa_answer
                     # in 40% of the cases we do not augment the question
                     if len(q_objects) > 1 or len(a_objects) > 1 or random.random() < 0.4: 
                         qa_question = qa_question_org
                         qa_answer = qa_answer_org
+                    
+                    
+                    
+                    # 60%情况下使用增强版本的QA  --> 
                     else:
+                        # 如果模板中有qa_question,那么就在模板中随机选择一个,并将"<OBJECT>"、"<LOCATION>"、<DISTANCE>"替换回去
                         if qa_question in self.q_augment:
                             qa_question = random.choice(self.q_augment[qa_question]).replace('<OBJECT>', q_objects[0]).replace('<LOCATION>', q_location)
                             if q_distance:
                                 qa_question = qa_question.replace('<DISTANCE>', q_distance.group(1))
+                        # 如果模板中不存在的话,就打印警告,并使用qa_question_org
                         else:
                             print(f"WARNING: {qa_question} not in q_augment. Using default question.")
                             qa_question = qa_question_org
+                        # 如果模板中有如果模板中有qa_question,那么就在模板中随机选择一个,并将"<OBJECT>"、"<LOCATION>"、<DISTANCE>"替换回去
                         if qa_answer in self.a_augment:
                             qa_answer = random.choice(self.a_augment[qa_answer]).replace('<OBJECT>', a_objects[0]).replace('<LOCATION>', a_location)
                             if a_distance:
                                 qa_answer = qa_answer.replace('<DISTANCE>', a_distance.group(1))
+                        # 如果模板中不存在的话,就打印警告,并使用qa_answer_org
                         else:
                             print(f"WARNING: {qa_answer} not in a_augment. Using default answer.")
                             qa_answer = qa_answer_org
 
-        ######################################################
-        ######## load navigational_conditioning ########
-        ######################################################
-        # 构造导航条件
-        target_options, placeholder_values = self.get_navigational_conditioning( data, current_measurement, target_point, next_target_point)
+                    # print(f"qa_question: {qa_question}")
+                    # print(f"qa_answer: {qa_answer}")
+                    # qa_question: From which side are other vehicles allowed to change lanes into the ego lane?
+                    # qa_answer: Vehicles are allowed to change lanes from the right side.
 
+        
+        
+        
+        
+        
+        ########################################### target point ###########################################
+
+
+        target_options, placeholder_values = self.get_navigational_conditioning( data, current_measurement, target_point, next_target_point)
+        # target_options: ['Target waypoint: <TARGET_POINT><TARGET_POINT>.', 'Command: follow the road.', 'Command: Maintain your course along this route for precisely 156 meters..']
+        # placeholder_values: {'<TARGET_POINT>': array([[156.29730464,  -1.23297884], [357.25860725,  -6.47138093]])}
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         # 决定本样本训练成哪一类任务
         answer = ''
         prompt_random = random.random()
@@ -292,7 +491,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             answer = f"A: {qa_answer}"
             self.num_sampled_per_type['qa'] += 1
         # 任务三: driving任务
-        else:
+        else:  # 执行
             # 标准的驾驶轨迹预测样本
             prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Predict the waypoints."
             answer = f"Waypoints:"
@@ -321,14 +520,34 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         answer = answer.replace('..', '.')
         prompt = prompt.replace('..', '.')
 
-        ######################################################
-        ######## load current and past images ########
-        ######################################################
-        # 读取图像
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ############################################# 前视图像 #############################################
+
         data = self.load_images(data, images, augment_sample=augment_sample)
+        # data['rgb'] = 增强的并且裁减了原图(images)底部包含自车引擎盖部分的 新图像
+        # data['rgb_org_size'] = 增强的但是并未进行裁减的原图(images)
         
 
-        # 构造对话格式   这里开始把 driving sample 变成 LLM/VLM 训练输入格式
+        
+        
+        
+        
+        
+        
+        
+        ############################################# 构造对话格式 #############################################
+
         # 1. 只包含答案的版本  这是仅包含 assistant 输出的部分，通常用于监督目标
         conversation_answer = [
             {
@@ -356,9 +575,20 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             }
         ]
 
+        
+        
+        
+
+        ############################################# 前视图像 #############################################
+
         # 这里虽然只用了一张前视图，但仍然包成 list，说明整个系统接口可能支持多图输入。
         images = [data['rgb']]
 
+        
+        
+        
+        
+        
         # 最终返回结果
         data_new = DatasetOutput(
             conversation = conversation_all,         # 完整 user-assistant 对话，给模型做输入格式组织用。
@@ -375,11 +605,20 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             dataset = 'driving',                     # 显式标记这个样本来自 driving dataset
         )
 
+        
+        
+        
+        
+        
         # 可视化调试 如果打开,会把图像、commentary、route、waypoints、prompt、answer一起画出来，方便人工检查这个样本是否构造合理
         if VIZ_DATA:
             # front image with path and waypoints and commentary
             self.visualise_cameras(data_new, commentary, data['route_adjusted'], data['waypoints'], options=None, prompt=prompt, answer=answer, name="img")
 
+        
+        
+        
+        
         return data_new
 
 

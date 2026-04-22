@@ -79,18 +79,39 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         # 获取程序启动前的原始项目根目录,这里是/home/liulei/ll/simlingo
         repo_path = get_original_cwd()
         
+        
+        
+        
+        
+        ################################################## 加载模板文件 ##################################################
+
+
         # load templates  加载模板文件,这一块是为了给后续语言任务做准备
         # commentary 模板 无论dreamer与否,这个都会加载,说明commentary模板是通用的
         template_file = f"{repo_path}/data/augmented_templates/commentary_augmented.json"
         with open(template_file, 'r') as f:
             self.templates_commentary = ujson.load(f)
     
+        
+        
+        
+        
+        
+        ################################################## 加载模板文件 ##################################################
+
+        
         # load templates
         # 如果当前是 dreamer 数据集,则额外加载 dreamer 的模板
         if dreamer:
             template_file = f"{repo_path}/data/augmented_templates/dreamer.json"
             with open(template_file, 'r') as f:
                 self.templates_neg = ujson.load(f)
+
+
+
+
+        ################################################## 加载模板文件 ##################################################
+
 
         # 如果配置中开启了 use_lmdrive_commands(目前是开启的),就加载语言命令模板
         if self.use_lmdrive_commands:
@@ -99,6 +120,16 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 self.command_templates = ujson.load(f)
 
 
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         # during eval we only want to load predefines paths
         # evaluation 模式下的特殊处理：评测时不要随便从整个数据集中抽样，而是只评测预定义好的固定样本
         # 这样做的好处是：每次评测一致、可以对比不同模型、可以针对 QA 或 commentary 任务固定 benchmark
@@ -137,8 +168,20 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                             self.all_eval_samples.append(sample)
 
 
+        
+        
+        
+        
+        
         augment_exist = False
 
+        
+        
+        
+        
+        
+        
+        
         # 非 dreamer 情况下，构建 prompt 类型采样配置,这里是在为多任务 prompt 采样做准备
         if not dreamer:
             if self.use_qa:  # 如果开启 QA,则加载 QA 增强模板,对 DriveLM 风格的问答做模板扩充
@@ -232,10 +275,22 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                     else:
                         run_id_dict[run_id_absolut].append(run_id_name)
 
+        
+        
+        
+        
+        
+        
         # 在数据根目录下，把所有 route 目录都找出来
         route_dirs = glob.glob(f"{repo_path}/" + self.data_path + '/data/simlingo/*/*/*/Town*')
         print(f'[liulei]Found {len(route_dirs)} routes in {repo_path + self.data_path} 这里的{len(route_dirs)}代表的是我们在carla上收集了{len(route_dirs)}条路线的数据')
 
+        
+        
+        
+        
+        
+        
         # lb1_split 代表 old towns 数据
         # use_old_towns=False：排除 old towns
         # use_only_old_towns=True：只用 old towns
@@ -288,6 +343,14 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         # route_dirs = route_dirs[:100]
         # print(f'Use {len(route_dirs)} routes.')
 
+        
+        
+        
+        
+        
+        
+        
+        
         # 这里开始真正的处理每条route
         start_route = 0
         for sub_root in tqdm(route_dirs, file=sys.stdout):
@@ -480,11 +543,8 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
     
 
     def load_current_and_future_measurements(self, measurements, sample_start):
+        
         loaded_measurements = []
-
-        ######################################################
-        ######## load current and future measurements ########
-        ######################################################
 
         # Since we load measurements for future time steps, we load and store them separately
         for i in range(self.hist_len):
@@ -496,6 +556,8 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         end = self.pred_len + self.hist_len
         start = self.hist_len
+        # start : 1, end : 12
+
 
         for i in range(start, end):
             try:
@@ -509,21 +571,33 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 print(f"File not found: {measurement_file}")
                 loaded_measurements.append(loaded_measurements[-1])
         current_measurement = loaded_measurements[self.hist_len - 1]
+
+        # current_measurement[0] = {'pos_global': [-1932.94677734375, 6059.3369140625], 'theta': 2.716931982836451, 'speed': 10.893928527832031, 'target_speed': 10.0, 'speed_limit': 13.88888888888889, 'target_point': [166.21953678063582, -1.4034610299303338], 'target_point_next': [292.23548401248064, -4.342632889987669], 'command': 4, 'next_command': 4, 'aim_wp': [3.9551499024618035, 0.0007044955744153203], 'route': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'route_original': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'changed_route': False, 'speed_reduced_by_obj_type': None, 'speed_reduced_by_obj_id': None, 'speed_reduced_by_obj_distance': None, 'steer': 0.0, 'throttle': 0.0, 'brake': False, 'control_brake': True, 'junction': False, 'vehicle_hazard': False, 'vehicle_affecting_id': None, 'light_hazard': False, 'walker_hazard': False, 'walker_affecting_id': None, 'stop_sign_hazard': False, 'stop_sign_close': False, 'walker_close': False, 'walker_close_id': None, 'angle': 0.00011339540056267717, 'augmentation_translation': 0.36125444482272595, 'augmentation_rotation': 5.24434331572315, 'ego_matrix': [[-0.9111607074737549, -0.4120118319988251, 0.005693943705409765, -1932.94677734375], [0.4120037257671356, -0.9111785292625427, -0.002586618298664689, 6059.3369140625], [0.0062539163045585155, -1.0898917935264762e-05, 0.9999804496765137, 377.0238952636719], [0.0, 0.0, 0.0, 1.0]]}
+
+
+
+
+
+
         measurement_file_current = str(measurements[0], encoding='utf-8') + (f'/{(sample_start + start-1):04}.json.gz')
         return loaded_measurements, current_measurement, measurement_file_current
 
     def load_waypoints(self, data, loaded_measurements, aug_translation=0.0, aug_rotation=0.0):
 
-        waypoints = self.get_waypoints(loaded_measurements[self.hist_len - 1:],
-                                                                        y_augmentation=aug_translation,
-                                                                        yaw_augmentation=aug_rotation)
+        
+        waypoints = self.get_waypoints(loaded_measurements[self.hist_len - 1:], y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+        # 自车坐标系下 未来轨迹点（带 augmentation）
         data['waypoints'] = np.array(waypoints[1:-1])
 
-        waypoints_org = self.get_waypoints(loaded_measurements[self.hist_len - 1:],
-                                                                        y_augmentation=0,
-                                                                        yaw_augmentation=0)
-        data['waypoints_org'] = np.array(waypoints_org[1:-1])
 
+
+        waypoints_org = self.get_waypoints(loaded_measurements[self.hist_len - 1:], y_augmentation=0, yaw_augmentation=0)
+        # 自车坐标系下 原始 2D waypoint（无增强）
+        data['waypoints_org'] = np.array(waypoints_org[1:-1])
+        
+        
+        
+        # 自车坐标系下 1D waypoint（路径长度表示）🔥很关键  （没有增强）
         # 1D waypoints: only consider distance between waypoints
         waypoints_1d = [np.linalg.norm(waypoints_org[i+1] - waypoints_org[i]) for i in range(len(waypoints_org)-1)]
         # cumsum to get the distance from the start
@@ -531,21 +605,56 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         waypoints_1d = [[x, 0] for x in waypoints_1d]
         data['waypoints_1d'] = np.array(waypoints_1d[:-1]).reshape(-1, 2)
 
+        
+        
+        # 自车坐标系下 waypoint（4×4矩阵,增强）🔥
         waypoints = [np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, 0], [0, 0, 0, 1]]) for x, y in waypoints]
         data['ego_waypoints'] = np.array(waypoints[:-1])
         
+        
+        # 自车坐标系下 waypoint (4x4矩阵,增强)
         waypoints_org = [np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, 0], [0, 0, 0, 1]]) for x, y in waypoints_org]
         data['ego_waypoints_org'] = np.array(waypoints_org[:-1])
+        
+
+        # data = {
+        #     'waypoints'          : 增强后的2D轨迹
+        #     'waypoints_org'      : 原始2D轨迹（GT）
+        #     'waypoints_1d'       : 累计路径距离（1D表示）
+        #     'ego_waypoints'      : 4×4位姿（增强）
+        #     'ego_waypoints_org'  : 4×4位姿（原始）
+        # }
+
+
 
         return data
     
     def load_route(self, data, current_measurement, aug_translation=0.0, aug_rotation=0.0):
+
+
+        ############################################### 
+        # 实际上,current_measurement['route_original']与current_measurement['route']一模一样,不知道傻鸟作者为什么还起两个名字
+        ############################################### 
+
+        
+
+        ############################# 40个路径点,进行旋转平移,为的是与增强后的图像匹配 #############################
         route = current_measurement['route_original']
         route = self.augment_route(route, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
 
+
+        ############################# 40个路径点,不管图像增补增强都不进行旋转平移,保持原始 #############################
         route_adjusted = np.array(current_measurement['route'])
         route_adjusted_org = self.augment_route(route_adjusted, y_augmentation=0, yaw_augmentation=0)
+        
+
+        ############################# 40个路径点,又进行旋转平移,为的是与增强后的图像匹配 #############################
+        # 傻鸟行为 这个route_adjusted与route一样的东西
         route_adjusted = self.augment_route(route_adjusted, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+        
+        
+
+        ############################# 仅仅对route padding #############################
         if len(route) < self.num_route_points:
             num_missing = self.num_route_points - len(route)
             route = np.array(route)
@@ -554,22 +663,62 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         else:
             route = np.array(route[:self.num_route_points])
             
+
+        ############################# 等间距采样 #############################
         route_adjusted = self.equal_spacing_route(route_adjusted)
+
+
+
+        ############################# 等间距采样 #############################
         route_adjusted_org = self.equal_spacing_route(route_adjusted_org)
+        
+        
+        
+        ############################# 等间距采样 #############################
         route = self.equal_spacing_route(route)
         
         data['route'] = route
         data['route_adjusted_org'] = route_adjusted_org
         data['route_adjusted'] = route_adjusted
 
+        """
+        data['route'] = route  
+        # 主导航路径(来自 route_original)
+        # 1. 已进行数据增强（横向平移 + 旋转），用于提升模型对位姿扰动的鲁棒性
+        # 2. 已裁剪/补齐为固定长度 num_route_points,保证网络输入维度一致
+        # 3. 已通过 equal_spacing_route 做等间距重采样，使路径点分布均匀、几何结构更稳定
+        # 👉 这是模型主要使用的“导航条件输入”(route-level guidance)
+
+
+        data['route_adjusted_org'] = route_adjusted_org  
+        # 调整后路径（无增强版本）：
+        # 1. 来自 current_measurement['route']
+        # 2. 未进行任何 augmentation,保持真实几何关系(ground truth reference)
+        # 3. 已进行等间距重采样(equal spacing),但不改变其真实语义
+        # 👉 主要用于监督、评估或作为“干净参考路径”（不含扰动）
+
+
+        data['route_adjusted'] = route_adjusted  
+        # 调整后路径（增强版本）：
+        # 1. 来自 current_measurement['route']，并施加 augmentation(平移 + 旋转)
+        # 2. 表示在局部坐标系下的“扰动路径”，用于增强模型泛化能力
+        # 3. 同样经过等间距重采样，保证输入结构一致
+        # 👉 常用于训练输入（与 route_adjusted_org 形成增强-原始对照）
+
+        """
+
         return data
     
     def load_images(self, data, images, augment_sample=False):
+        
         loaded_images = []
         loaded_images_org_size = []
+        
         for i in range(self.hist_len):
+            
             images_i = None
-            images_path = str(images[i], encoding='utf-8')
+            images_path = str(images[i], encoding='utf-8')  # 当前帧图像路径
+            
             if augment_sample:
                 images_path = images_path.replace('rgb', 'rgb_augmented')
 
@@ -581,7 +730,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
             images_i = cv2.cvtColor(images_i, cv2.COLOR_BGR2RGB)
 
             if self.img_augmentation: # and random.random() <= self.img_augmentation_prob:
-                images_i = self.tfs(image=images_i)
+                images_i = self.tfs(image=images_i)  # 图像增强
             
             image_org = images_i.copy()
             if self.cut_bottom_quarter or self.img_shift_augmentation:
@@ -599,32 +748,86 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         processed_image = np.transpose(processed_image, (0, 3, 1, 2)) # (T, C, H, W)
         processed_image_org_size = np.transpose(processed_image_org_size, (0, 3, 1, 2)) # (T, C, H, W)
 
-        data['rgb'] = processed_image
-        data['rgb_org_size'] = processed_image_org_size
+        data['rgb'] = processed_image                     # 增强并裁减了图像的底部的图像(裁掉的是自车引擎盖的部分)
+        data['rgb_org_size'] = processed_image_org_size   # 增强但未裁减的图像(原始图像)
 
         return data
 
     def get_navigational_conditioning(self, data, current_measurement, target_point, next_target_point):
-        placeholder_values = {}
-        target_options = []
+
+        """
+        data:当前样本数据字典(会被修改)
+        current_measurement:当前帧状态(包含command等)
+        target_point:当前导航点
+        next_target_point:下一个导航点
+        """
+
+
+
+        placeholder_values = {}  # <TARGET_POINT>': [[19.075672365994425,-13.26871181961684],[19.703241532357737,-43.26213909836339]]
+        target_options = []      # Target waypoint: <TARGET_POINT><TARGET_POINT>.
                 
-        tp = [target_point, next_target_point]
+        
+        
+        
+
+
+
+        #################################################### 一、将"当前目标点"和"下一个目标点"取出来 ####################################################
+        
+        
+        # "target_point": [19.075672365994425,-13.26871181961684]
+        # "next_target_point": [19.703241532357737,-43.26213909836339]
+        tp = [target_point, next_target_point]  # [ 当前导航点, 下一个导航点 ]
         tp = np.array(tp)
+
+
+
+
+
         data['map_route'] = tp
         data['target_points'] = tp
-        target_point1_round = np.round(data['target_points'][0], 2).tolist()
-        target_point2_round = np.round(data['target_points'][1], 2).tolist()
 
+
+
+        # target point 1 (保留量为小数)
+        # target point 2 (保留量为小数)
+        target_point1_round = np.round(data['target_points'][0], 2).tolist()  # 保留两位小数，转换成列表
+        target_point2_round = np.round(data['target_points'][1], 2).tolist()  # 保留两位小数，转换成列表
+
+        
+        
+        
+        
+        #################################################### 二、target_options & placeholder_values ####################################################
+
+
+        # 是否启用目标点作为输入
         if 'target_point' in self.route_as:
             if 'target_point_language' in self.route_as:
                 target_options.append(f"Target waypoint: 1:{target_point1_round} 2:{target_point2_round}")
-            else:
+            else:  # 执行这个
                 target_options.append(f"Target waypoint: <TARGET_POINT><TARGET_POINT>.")
                 placeholder_values = {'<TARGET_POINT>': data['target_points']}
+        
+        
+        
+        
+
+
+        #################################################### 三、加入高级导航指令 ####################################################
+
+
         if 'command' in self.route_as:
-            # get distance from target_point
+
+            #########################  一、计算距离当前第一个 target_point 的欧式距离(m) #########################
             dist_to_command = np.linalg.norm(target_point)
             dist_to_command = int(dist_to_command)
+            
+
+            #########################  二、数字导航指令->语言 之间的映射 #########################
+
+            # 把数字 command → 语言描述
             map_command = {
                 1: 'go left at the next intersection',
                 2: 'go right at the next intersection',
@@ -633,6 +836,8 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 5: 'do a lane change to the left',
                 6: 'do a lane change to the right',        
             }
+
+            # 模板索引（给 LMD drive 用） 用于后面随机增强语言表达（数据增强）
             command_template_mappings = {
                 1: [0, 2, 4, 7],
                 2: [1, 3, 5, 8],
@@ -641,24 +846,53 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 5: [34, 36],
                 6: [35, 37],
             }
+
+
+            #########################  三、当前导航指令文本 & 下一个导航指令文本 #########################
+
+            # 当前指令的语言描述
             command = map_command[current_measurement["command"]]
+            
+            # 下一个指令的语言描述
             next_command = map_command[current_measurement["next_command"]]
+            
+            # 如果当前指令与下一个指令不相同,则下一个导航指令加一个 then
             if command != next_command:
                 next_command = f' then {next_command}'
+            # 如果当前指令与下一个指令相同,则下一个指令为空
             else:
                 next_command = ''
+            
+            
+            ######################### 四、拼接两个导航指令形成综合文本 #########################
+            
+            # 如果当前指令是 "follow the road"，就不提距离，直接说 "follow the road"，因为这个指令本身就包含了持续跟随的意思，不需要再强调距离了。
             if current_measurement["command"] == 4:
                 command_str = f'Command: {command}{next_command}.'
+            # 其他指令的话，就提距离，比如 "go left at the next intersection in 20 meters"
             else:
                 command_str = f'Command: {command} in {dist_to_command} meter{next_command}.'
+            
+            # 这是两个导航指令的文本表述
             target_options.append(command_str)
             
+            
+            
+
+            ######################### 五、启用“语言多样新增强”的话 #########################
+                        
+            # 如果启用“语言多样性增强”
             if self.use_lmdrive_commands:
+                # 从模板库里随机选一个模板
                 lmdrive_index = random.choice(command_template_mappings[current_measurement["command"]])
                 lmdrive_command = random.choice(self.command_templates[str(lmdrive_index)])
+                # 然后把模板里的 [x] 替换成距离数字，得到一个新的指令文本
                 lmdrive_command = lmdrive_command.replace('[x]', str(dist_to_command))
                 lm_command = f'Command: {lmdrive_command}.'
                 target_options.append(lm_command)
+
+            # target_options: ['Target waypoint: <TARGET_POINT><TARGET_POINT>.', 'Command: follow the road.', 'Command: Maintain your course along this route for precisely 156 meters..']
+            # placeholder_values: {'<TARGET_POINT>': array([[156.29730464,  -1.23297884], [357.25860725,  -6.47138093]])}
         
         return target_options, placeholder_values
 

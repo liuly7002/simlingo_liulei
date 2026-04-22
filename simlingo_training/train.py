@@ -126,7 +126,7 @@ def main(cfg: TrainConfig):
     if not cfg.debug: 
         callbacks.append(lr_monitor)
     
-    print(f"Number of GPUS: {cfg.gpus}")
+    # print(f"Number of GPUS: {cfg.gpus}")
     overfit = 0
     
     if cfg.gpus >= 1:

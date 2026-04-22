@@ -75,18 +75,24 @@ class DrivingModel(pl.LightningModule):
 
         self.all_predictions = {}
         self.all_losses = {}
-        
+
+
+
+        # 预测头 + 计算损失
         driving = None
         driving = DrivingAdaptor(
             self.language_model.hidden_size, 
             speed_wps_mode=self.speed_wps_mode,
             predict_route_as_wps=self.predict_route_as_wps,
         )
-
         self.adaptors = AdaptorList(
             language=LanguageAdaptor(self.language_model),
             driving=driving,
         )
+
+
+
+
 
         self.wp_encoder = WaypointInputAdaptor(
             token_size=self.language_model.hidden_size,
@@ -101,8 +107,68 @@ class DrivingModel(pl.LightningModule):
             self.tokenizer = self.processor
 
 
+
+
+
+
+
+
+
+
+    """
+    1. 训练时最外层流程:
+
+        Trainer.fit(...)
+        ↓
+        Lightning 自动调用 training_step(batch)
+        ↓
+        training_step 里调用 forward_loss(batch)
+        ↓
+        forward_loss 里调用 self.adaptors(example)
+        ↓
+        forward_loss 里调用 forward_model(...)
+        ↓
+        forward_model 里调用 language_model.model(...)
+        ↓
+        forward_loss 再调用 self.adaptors.compute_loss(...)
+        ↓
+        返回 loss
+
+
+    2. 验证时最外层流程:
+
+        Trainer.validate(...) 或 fit 中的 val loop
+        ↓
+        Lightning 自动调用 validation_step(batch)
+        ↓
+        validation_step 调 forward_loss(batch)
+        ↓
+        forward_loss 调 forward_model(...)
+        ↓
+        forward_loss 调 compute_loss(...)
+
+
+    3. 推理时最外层流程:
+
+        Trainer.predict(...)
+        ↓
+        Lightning 自动调用 predict_step(batch)
+        ↓
+        predict_step 调 self.forward(batch, return_language=True)
+        ↓
+        forward 内部做推理
+        ↓
+        得到 speed_wps, route, language
+        ↓
+        predict_step 再把预测结果和GT整理保存
+
+    """
+
+
+
+    ########################################### 推理接口 ###########################################
     def forward(self,
-        example: DrivingExample,
+        example: DrivingExample,                 # dataloader产生的batch
         return_language: Optional[bool] = None,
         prompt_ids: Optional[Tensor] = None,
     ) -> DrivingOutput:
@@ -116,12 +182,12 @@ class DrivingModel(pl.LightningModule):
             driving_input = example
         
         if driving_input is not None:
-            adaptor_dict = self.adaptors(example, inference=True)
+            adaptor_dict = self.adaptors(example, inference=True)  # 推理(inference=True)
             adaptor_dict = self.vision_model.image_encoder.replace_placeholder_tokens(
                     adaptor_dict = adaptor_dict,
-                    pixel_values = driving_input.camera_images,
-                    placeholder_values = driving_input.prompt_inference.placeholder_values,
-                    wp_encoder = self.wp_encoder,
+                    pixel_values = driving_input.camera_images,                               # 图像
+                    placeholder_values = driving_input.prompt_inference.placeholder_values,   # waypoint是list类型
+                    wp_encoder = self.wp_encoder,                                             # waypoint编码器
                 )
             
             input_embeds_all = adaptor_dict["language_inputs"]
@@ -129,10 +195,18 @@ class DrivingModel(pl.LightningModule):
 
 
         if self.predict_language:
+
             # per batch item because of padding
             for b_idx, (input_embed, attention_mask) in enumerate(zip(input_embeds_all, attention_masks)):
-                input_embed = input_embed.unsqueeze(0)
-                attention_mask = attention_mask.unsqueeze(0)
+
+                
+                
+                ########################## 1. 预处理 ##########################
+                input_embed = input_embed.unsqueeze(0)       # 👉 从 [L, D] → [1, L, D]  因为模型需要 batch 维度
+                attention_mask = attention_mask.unsqueeze(0) # 👉 从 [L, D] → [1, L, D]  因为模型需要 batch 维度
+
+
+                ########################## 2. 设置 EOS token(不同模型不同), 用来控制生成停止 ##########################
                 if self.language_model.variant == 'OpenGVLab/InternVL2-4B':
                     eos = self.tokenizer.added_tokens_encoder['<|end|>']
                 elif self.language_model.variant == 'OpenGVLab/InternVL2-2B':
@@ -140,27 +214,60 @@ class DrivingModel(pl.LightningModule):
                 else:
                     eos = self.tokenizer.eos_token_id
 
+                
+                
+                
+                ########################## ⭐ 3. 核心：语言生成（greedy decoding） ##########################
                 # BUG: input_embeds, cot
                 sampled_tokens, input_embeds = self.language_model.greedy_sample(
-                    input_embed,
+                    input_embed,   # 当前 prompt embedding（已经包含图像 + target point）
                     eos_token_id=eos,
                     max_new_tokens=100,
-                    input_embed_matrix=self.adaptors.language.embed_tokens.weight,
-                    logit_matrix=self.adaptors.language.lm_head.weight,
-                    attention_mask=attention_mask,
+                    input_embed_matrix=self.adaptors.language.embed_tokens.weight,  # token → embedding
+                    logit_matrix=self.adaptors.language.lm_head.weight,             # embedding → vocab logits
+                    attention_mask=attention_mask,  # mask
                     # position_ids=position_ids,
                 )
+                # sampled_tokens: 生成的 token id
+                # input_embeds: 生成后的 embedding（关键！）不是原始输入！而是原始输入 + 生成的 token embedding 拼接后的结果
                 
+                
+                
+                
+                
+                
+                ########################## 4. 获取 driving 输入 ##########################
                 inputs_driving = self.adaptors.driving(driving_input)
+                
+                
+                
+                
+                ########################## 5. 拼接语言 + driving ##########################
+                # 🔥 这一步是整个设计的核心
+                # 拼接后变成: [语言token（含生成） | driving token] 也就是说 让 driving prediction "看到"语言生成结果
                 input_embed_concat = torch.cat((input_embeds, inputs_driving["inputs"][b_idx].unsqueeze(0)), dim=1)
+
+
+
+
+                ########################## 6. forward ##########################
                 features, logits = self.language_model.forward(input_embed_concat)
 
+                
+                
+                
+                ########################## 7. 取 driving 部分 进行预测 ##########################
                 len_driving = inputs_driving["inputs"].size(1)
 
                 driving_features = features[:, -len_driving:]
                 driving_logits = logits[:, -len_driving:]
                 predictions = self.adaptors.driving.get_predictions(driving_features, driving_logits)
                     
+                
+                
+                
+                
+                ########################## 8. 累加 batch 结果 ##########################
                 for k, v in predictions.items():
                     if v is not None:
                         if hasattr(self, k) and getattr(self, k) is not None:
@@ -173,6 +280,11 @@ class DrivingModel(pl.LightningModule):
                         else:
                             setattr(self, k, v)
                                 
+                
+                
+                
+                
+                ########################## 9. 保存生成的语言(把 token 转成字符串) ##########################
                 self.language.append(self.tokenizer.batch_decode(sampled_tokens, skip_special_tokens=True)[0])
         else:
             # single forward pass same as during training so we can use the same function
@@ -187,6 +299,11 @@ class DrivingModel(pl.LightningModule):
         return self.speed_wps, self.route, self.language
 
 
+    
+    
+    
+    
+    ########################################### 负责“把输入送进模型，得到特征和 logits” ###########################################
     def forward_model(self, 
                       driving_input: DrivingInput, 
                       adaptor_dict: Dict, 
@@ -205,7 +322,7 @@ class DrivingModel(pl.LightningModule):
         )
 
         position_ids = None
-        adaptor_embeds = adaptor_dict["inputs"]
+        adaptor_embeds = adaptor_dict["inputs"]    # 这是最终的完整的embedding，图像的也替换了,target point的也替换了,同时包含了 language 和 driving 的 embedding
         adaptor_mask = adaptor_dict['inputs_mask']
 
         input_embeds = adaptor_embeds
@@ -214,25 +331,44 @@ class DrivingModel(pl.LightningModule):
         )
         attention_mask = adaptor_mask
 
-        outputs = self.language_model.model(
+        outputs = self.language_model.model(   # 把拼好的多模态 embedding 序列，送进 Transformer（LLM），得到每个 token 的“理解表示”和“预测分布”
             attention_mask=attention_mask,
             position_ids=position_ids,
             inputs_embeds=input_embeds,
             output_hidden_states=True,
             return_dict=True,
         )
-        features = outputs.hidden_states[-1]
-        logits = outputs[0]
+        features = outputs.hidden_states[-1]  # 最后一层 Transformer 的输出特征 
+        logits = outputs[0]  # 等价于logits = outputs.logits, 含义:每个 token → 下一个 token 的概率分布  实际上logits就是每个 hidden state 经过输出 head（线性层）得到的预测结果，和 RNN 中的输出层是等价的
+        """
+        在 Transformer 中，每一层都会为每个 token 生成一个 D 维的 hidden state，因此 outputs.hidden_states 是一个包含所有层输出的列表，其中每一项的 shape 为 [B, L, D]。
+        通过 features = outputs.hidden_states[-1] 可以获取最后一层的 hidden states，即每个 token 的最终语义表示。
+        而 logits = outputs[0] 则是将这些最终 hidden states 逐 token 通过输出 head 映射到输出空间（如词表或类别空间）后的结果，因此 logits 的 shape 为 [B, L, V]，表示每个 token 的预测分布。
+        """
 
-        vision_features, adaptor_features = features.split(
-            [features.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1
-        )
-        vision_logits, adaptor_logits = logits.split(
-            [logits.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1
-        )
+        # 把 Transformer 输出的整条序列，按“token来源”拆成两部分：vision部分 和 adaptor部分
+        vision_features, adaptor_features = features.split([features.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
+        vision_logits, adaptor_logits = logits.split([logits.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
+        """
+        features.size(1)          # 总token数 L
+        adaptor_embeds.size(1)    # adaptor token数
+        所以,features.size(1) - adaptor_embeds.size(1) = vision token 数量
+        split等价于features = [ vision部分 | adaptor部分 ]
+        张量形式:
+        features:         [B, L, D]
+        vision_features:  [B, L_vision, D]
+        adaptor_features: [B, L_adaptor, D]
+        """
+
+
+
         return adaptor_features, adaptor_logits
     
 
+    
+    
+    ########################################### 训练/验证阶段内部使用的“前向 + 算损失”函数 ###########################################
+    
     def forward_loss(self, example: DrivingExample, per_sample=False) -> TrainingOutput:
         """
         Forward pass of the model for a driving input, followed by
@@ -260,9 +396,17 @@ class DrivingModel(pl.LightningModule):
 
         return summarise_losses(loss_dict_only_losses), loss_logs
 
+    
+    
+    
+    
+    
+    
+    
+    ########################################### 1. 训练时每个batch的总入口 ###########################################
     def training_step(self, batch: DrivingExample, _batch_idx: int = 0):
         output, loss_logs = self.forward_loss(batch)
-        logs = output #.update(loss_logs)
+        logs = output
         self.log_training_output(logs, "train")
 
         # log the loss
@@ -271,6 +415,13 @@ class DrivingModel(pl.LightningModule):
         return {"loss": output.loss, "outputs": output}
 
 
+    
+    
+    
+    
+    
+    
+    ########################################### 2. 验证时每个batch的总入口 ###########################################
     def validation_step(self, batch: DrivingExample, _batch_idx: int = 0):
         
         output, loss_logs = self.forward_loss(batch)
@@ -282,6 +433,14 @@ class DrivingModel(pl.LightningModule):
 
         return {"loss": output.loss, "outputs": output}
 
+    
+    
+    
+    
+    
+
+    
+    ########################################### 3. 推理时每个batch的总入口 ###########################################
     def predict_step(self, batch: DrivingExample, _batch_idx: int = 0):
         run_ids = decode_uint8(batch.run_id)
         
@@ -326,6 +485,23 @@ class DrivingModel(pl.LightningModule):
             
         
         return speed_wps, route, language, speed_wps_gt, route_gt, language_gt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     def equal_spacing_route(self, points):
         route = np.concatenate((np.zeros_like(points[:1]),  points)) # Add 0 to front
@@ -704,7 +880,6 @@ class DrivingModel(pl.LightningModule):
         with open(save_path_tmp, "w") as f:
             json.dump(ade_fde, f, indent=4)
         
-
     def log_training_output(self, training_output: TrainingOutput, mode: str, dataset: Optional[str] = None):
         losses = {k: n.detach() for k, n in training_output.loss_averages.items()}
         counts = {k: n.detach().sum() for k, n in training_output.loss_counts.items()}
@@ -713,7 +888,6 @@ class DrivingModel(pl.LightningModule):
         for k, v in sorted(losses.items()):
             log_key = f"{mode}_losses/{k}"
             self.log(log_key, v, batch_size=counts[k], sync_dist=True, add_dataloader_idx=False)
-
 
     def configure_optimizers(self):
         optimizer = AdamW(
@@ -729,4 +903,5 @@ class DrivingModel(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer, max_lr=self.lr, total_steps=max_steps, pct_start=self.pct_start, verbose=False
         )
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "frequency": 1, "interval": "step"}}
+        return {""
+        "optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "frequency": 1, "interval": "step"}}

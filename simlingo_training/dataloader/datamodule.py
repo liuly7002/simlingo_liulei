@@ -47,7 +47,7 @@ class DataModule(LightningDataModule):
         
         self.printed = False
 
-        self.NUM_IMAGE_PATCHES = 2             # 盲猜:一张原始输入图像会被拆成几个“图像块”送入视觉模型
+        self.NUM_IMAGE_PATCHES = 2             # 一张原始输入图像会被拆成2个patch
         self.IMAGES_TO_CONSIDER = ['image_ff'] # front-forward image, other images are not supported
         # taken from:
         # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/train/constants.py#L7
@@ -60,11 +60,12 @@ class DataModule(LightningDataModule):
         self.num_image_tokens_per_patch = get_num_image_tokens_per_patch(self.encoder_variant)  # self.encoder_variant=OpenGVLab/InternVL2-1B
         self.num_image_tokens_total = self.num_image_tokens_per_patch * self.NUM_IMAGE_PATCHES
             
-        # add <WAYPOINT> token
+        #
         if 'tokenizer' in self.processor.__dict__:
             self.tokenizer = self.processor.tokenizer
         else:
             self.tokenizer = self.processor
+        
         # TODO: not needed anymore?
         # 给 tokenizer 增加任务专用标记，让语言模型能识别自动驾驶结构化信息。
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
@@ -339,117 +340,299 @@ class DataModule(LightningDataModule):
 
     @line_profiler.profile
     def dl_collate_fn(self, data):
-        BS = len(data)
-        grid_nums = [self.NUM_IMAGE_PATCHES] # we split the front forward into two patches (1x2)
 
+        """
+        这是 PyTorch DataLoader 的 collate_fn,
+        DataLoader 每次从 dataset 里取出 batch_size 个样本后，会把这些样本组成一个列表 data,然后交给这个函数处理.
+        data: 长度为 batch size 的列表;
+        data[i]: 第 i 个样本,一般是单样本版 DrivingExample;
+        """
+
+        
+        
+        
+        
+        BS = len(data)  # 这里就是取 batch size, 比如说此时 batch size=4 那么 BS=4, data=[sample1, sample2, sample3, sample4]
+        grid_nums = [self.NUM_IMAGE_PATCHES] # we split the front forward into two patches (1x2)
+        # 为什么写成列表？
+            # 因为代码是按 self.IMAGES_TO_CONSIDER 循环处理图像的.
+            # 虽然当前只支持 ['image_ff'] 一种图像，但simlingo作者把接口写成了多图像输入可扩展的形式。
+            # 也就是说：
+            # 第 1 种图像对应一个 patch 数
+            # 第 2 种图像也可以对应另一个 patch 数
+            # 只是现在只有前视图一种。
+        
+        
+        
+        
+        
+        
+        
+        # image_ff_pixel：预处理后的前视图图像张量      [BS, T, 2, 3, 448, 448]
+        # image_ff_sizes：图像预处理后保留的一些尺寸信息
         image_ff_pixel, image_ff_sizes = None, None
+
+
+
+
+        # 遍历这个batch中的每一个样本,取出它的img_ff_org_size(这是未经裁减的前视图像)
         image_ff_org = torch.tensor(np.asarray([data[i].image_ff_org_size for i in range(BS)]))
-            
+
+        
+        
+        
+        
+        
+        
+        # 实际上当前只循环一次,indx=0,img_to_consider= 'image_ff',因为 self.IMAGES_TO_CONSIDER 里只有 'image_ff' 这一种图像. self.IMAGES_TO_CONSIDER=['image_ff']
+        # 写成循环的原因仍然是:为了以后支持多路相机
         for idx, img_to_consider in enumerate(self.IMAGES_TO_CONSIDER):
-            img_tmp = getattr(data[0], img_to_consider)
-            T, C, H, W = img_tmp.shape
+            
+
+            
+            ################################################### 1.图像预处理 ###################################################
+            
+            # img_tmp是经过裁减之后的前视图像,就是将image_ff_org的图像的底部包含自车引擎盖的那部分裁减掉了
+            img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_ff  也就是从 batch 第一个样本里取出前视图图像
+            T, C, H, W = img_tmp.shape                  # img_tmp 的 shape 是 [T, C, H, W] 也就是说每个样本的这一种图像是一个有 T 帧的图像序列. 例如 T=4 就是4帧图像(但是当前只支持一帧图像). C=3 是通道数,H和W是图像尺寸.
             assert T == 1, "Only one timestep as input supported"
             
+            # 对于 batch 中每个样本：
+            # 如果这个样本的 image_ff 不为空，就取它
+            # 如果为空，就用一个和 img_tmp 形状相同的全零图像代替
+            # 作用是避免某些样本图像缺失时程序崩掉
+            # 这是一种兜底策略
+            # 把上面的列表变成 numpy 数组, 如果每个单样本图像是 [T,C,H,W]，那么 batch 后就变成[BS, T, C, H, W]
+            # 转成 PyTorch float tensor  注意这里直接转成 float,说明后续视觉预处理函数是按浮点张量来处理的,而不是保留 uint8
             images_batch_tensor = torch.tensor(np.asarray([getattr(data[i], img_to_consider) if getattr(data[i], img_to_consider) is not None else np.zeros_like(img_tmp) for i in range(len(data))])).float()
-            images_batch_tensor = images_batch_tensor.view(BS*T, C, H, W)
-            images_batch_list = list(images_batch_tensor)
+            images_batch_tensor = images_batch_tensor.view(BS*T, C, H, W)  # 把 [B,T,C,H,W] 变成 [B*T,C,H,W]
+            
+            images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，形状是 [C,H,W]
+            # print(f"images batch list 0: {images_batch_list[0]}")
+            # images batch list 0: tensor([[[ 5., 20.,  7.,  ...,  0., 16.,  4.],
+                                        #  [ 7.,  6.,  0.,  ...,  4., 15., 19.],
+                                        #  [ 4.,  8.,  9.,  ...,  3., 10., 25.],
+                                        #  ...,
+                                        #  [72., 60., 54.,  ..., 22., 12.,  0.],
+                                        #  [52., 63., 50.,  ...,  7., 19.,  8.],
+                                        #  [42., 33., 15.,  ...,  6.,  0.,  5.]],
 
-            if 'internvl2' in self.encoder_variant.lower():
+                                        # [[ 2., 17., 19.,  ...,  0., 15.,  0.],
+                                        #  [ 0.,  5.,  0.,  ...,  0.,  8., 13.],
+                                        #  [ 8.,  8.,  2.,  ...,  3.,  0., 23.],
+                                        #  ...,
+                                        #  [40., 50., 43.,  ..., 19.,  6.,  0.],
+                                        #  [40., 42., 26.,  ...,  0.,  5.,  0.],
+                                        #  [29., 19., 17.,  ...,  3.,  9., 10.]],
+
+                                        # [[ 3., 10.,  9.,  ...,  5.,  6.,  6.],
+                                        #  [ 3.,  3.,  5.,  ...,  0.,  0.,  0.],
+                                        #  [ 2.,  0.,  0.,  ...,  0.,  0.,  7.],
+                                        #  ...,
+                                        #  [25., 27., 17.,  ...,  7.,  1.,  0.],
+                                        #  [35., 29.,  6.,  ...,  0.,  0.,  0.],
+                                        #  [21., 17.,  8.,  ...,  4.,  3.,  0.]]])
+
+
+            # 根据视觉编码器类型做图像预处理
+            if 'internvl2' in self.encoder_variant.lower():  # OpenGVLab/InternVL2-1B 转小写 包含 internvl2
                 # get image patches
                 images_processed = preprocess_image_batch(images_batch_list, input_size=448, use_global_img=self.use_global_img, max_num_grid=grid_nums[idx])    
             else:
                 raise ValueError(f"Image preprocessing for {self.encoder_variant} not implemented")
                 
-            images_pixel = images_processed['pixel_values']
-            image_sizes = images_processed['image_sizes']
+            images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
+            image_sizes = images_processed['image_sizes']    # 记录每个 patch 的尺寸信息
             
-            assert images_pixel.shape[0] == BS * T
-            num_patches = images_pixel.shape[1]
-            assert images_pixel.shape[2] == C
-            new_height = images_pixel.shape[3]
-            new_width = images_pixel.shape[4]
-            images_pixel = images_pixel.view(BS, T, num_patches, C, new_height, new_width)
-            
+            assert images_pixel.shape[0] == BS * T   # 检查预处理后第一维是否仍然和输入图像数一致,也就是确保没有多图少图
+            num_patches = images_pixel.shape[1]      # 取出每张图像被切成多少个 patch
+            assert images_pixel.shape[2] == C        # 检查通道数有没有变
+            new_height = images_pixel.shape[3]       # 取patch高度
+            new_width = images_pixel.shape[4]        # 取patch宽度
+            images_pixel = images_pixel.view(BS, T, num_patches, C, new_height, new_width)  # 把图像张量重新 reshape 回 [BS, T, num_patches, C, new_H, new_W] 的形状
+            # images_pixel 就是 DrivingInput.camera_images 的标准格式
+
             if img_to_consider == 'image_ff':
-                image_ff_pixel = images_pixel
+                image_ff_pixel = images_pixel  # [BS, T, 2, 3, 448, 448] 这就是前视图图像的预处理结果
                 image_ff_sizes = image_sizes
             else:
                 raise ValueError(f"Image type {img_to_consider} not supported")
 
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ################################################### 2.文本预处理 ###################################################
+        
+        
+        # 把 batch 中每个样本的对话文本取出来
         conversations = [data[i].conversation for i in range(BS)]
+        # conversations = [[{'role': 'user', 'content': [{'type': 'text', 'text': 'Current speed: 10.0 m/s. Target waypoint: <TARGET_POINT><TARGET_POINT>. Predict the waypoints.'}, {'type': 'image'}]}, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Waypoints:'}]}]]
+
         conversation_dict, question_dict = get_custom_chat_template(conversations, self.tokenizer, self.encoder_variant, self.num_image_tokens_total)
+        
+        """
+            conversation_dict = {
+            'phrase_ids': prompt_tokenized_ids,       # token id 形状为[B,L]
+            'phrase_valid': prompt_tokenized_valid,   # 标记哪些token不是padding 形状为[B,L]
+            'phrase_mask': prompt_tokenized_mask,     # 直接把有效token的位置作为mask 形状为[B,L]
+            'language_string': prompts,               # 原始文本 形状为[B]  包括问题和答案！！！！！！！！！！！！
+            'loss_masking': loss_mask                 # 哪些位置计算loss
+
+            question_dict = {
+            'phrase_ids': prompt_tokenized_ids,       # token id 形状为[B,L]
+            'phrase_valid': prompt_tokenized_valid,   # 标记哪些token不是padding 形状为[B,L]
+            'phrase_mask': prompt_tokenized_mask,     # 直接把有效token的位置作为mask 形状为[B,L]
+            'language_string': prompts,               # 原始文本 形状为[B]  仅包括问题！！！！！！！！！！！！
+            'loss_masking': loss_mask                 # 哪些位置计算loss
+        }
+        """        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ################################################### 3.占位符预处理 ###################################################
+
 
         placeholder_batch_list = []
-        for i in range(BS):
-            tmp = {}
-            for key, value in data[i].placeholder_values.items():
+        for i in range(BS):  # 遍历 batch 中每个样本
+            tmp = {}   # 给当前样本准备一个临时字典
+            # 遍历这个样本里的 placeholder 映射 这里的 key 通常是字符串形式 special token，是 '<TARGET_POINT>' , value 则是它对应的数值内容
+            for key, value in data[i].placeholder_values.items():           # placeholder_values = {'<TARGET_POINT>': data['target_points']}
                 token_nr_key = self.tokenizer.convert_tokens_to_ids(key)
                 tmp[token_nr_key] = value
+                # print(f"Sample {i} placeholder key: {key}, token id: {token_nr_key}, value: {value}")
+                # Sample 0 placeholder key: <TARGET_POINT>, token id: 151662, value: [[156.29730464  -1.23297884],[357.25860725  -6.47138093]]
+
             placeholder_batch_list.append(tmp)
+            # print(f"Sample {i} placeholder batch: {tmp}")
+            # Sample 0 placeholder batch: {151662: array([[156.29730464,  -1.23297884],[357.25860725,  -6.47138093]])}
+            # print(f"placeholder batch list sample {i}: {placeholder_batch_list[i]}")
+            # placeholder batch list sample 0: {151662: array([[16.18833904, -1.86136625],[72.12040229, -4.63741635]])}
+
+
                 
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ################################################### 4.将 placeholder_values 融合进来 ###################################################
+
+
         prompt_languagelabel = LanguageLabel(
-            phrase_ids=conversation_dict['phrase_ids'],
-            phrase_valid=conversation_dict['phrase_valid'],
-            phrase_mask=conversation_dict['phrase_mask'],
-            placeholder_values=placeholder_batch_list,
-            language_string=conversation_dict['language_string'],
-            loss_masking=conversation_dict['loss_masking'],
+            phrase_ids=conversation_dict['phrase_ids'],           # token ids，也就是 tokenizer 编码后的整数序列
+            phrase_valid=conversation_dict['phrase_valid'],       # 标记哪些 token 不是padding的
+            phrase_mask=conversation_dict['phrase_mask'],         # 标记哪些 token 不是padding的(同phrase_valid)
+            placeholder_values=placeholder_batch_list,            # {151662: array([[16.18833904, -1.86136625],[72.12040229, -4.63741635]])}
+            language_string=conversation_dict['language_string'], # 原始文本字符串(包括问题和答案)
+            loss_masking=conversation_dict['loss_masking'],       # 当前language_string里哪些位置需要计算loss
         )
 
         prompt_question_languagelabel = LanguageLabel(
             phrase_ids=question_dict['phrase_ids'],
             phrase_valid=question_dict['phrase_valid'],
             phrase_mask=question_dict['phrase_mask'],
-            placeholder_values=placeholder_batch_list,
-            language_string=question_dict['language_string'],
+            placeholder_values=placeholder_batch_list,            # {151662: array([[16.18833904, -1.86136625],[72.12040229, -4.63741635]])}
+            language_string=question_dict['language_string'],     #
             loss_masking=question_dict['loss_masking'],
         )
+
+        # 从每个样本中抽出文本答案
         answer_string_list = [data[i].answer[0]['content'][0]['text'] for i in range(BS)]
         answer_label =  LanguageLabel(
             phrase_ids=None,
             phrase_valid=None,
             phrase_mask=None,
             placeholder_values=None,
-            language_string=answer_string_list,
+            language_string=answer_string_list,  # 这说明此处的 answer_label 更像是一个“容器对象”，用来统一接口；当前这里只需要保存 ground-truth 文本答案本身
             loss_masking=None,
         )
         
+        
+        
+        
+
+
+
+
+
+
+
+        ################################################### 5.拉取 waypoints 信息 ###################################################
+        
+
+        # 构造 waypoints 标签 这里的 waypoints 是未来轨迹标签，通常是一个点序列，形状是 [B, F, 2]，其中 F 是未来轨迹点的数量，每个点有 x,y 两个坐标
         if self.base_dataset.use_1d_wps:
             waypoints = torch.tensor(np.asarray([data[i].waypoints_1d for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         else:
             waypoints = torch.tensor(np.asarray([data[i].waypoints for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         
-        if self.predict:
+        
+        
+        
+        
+        
+        ################################################### 6.额外信息(预测/评估模式才有) ###################################################
+        
+        
+        if self.predict:  # 如果当前是预测/评估模式，那么保留一些额外信息
             qa_templates = [data[i].qa_templates[0] if data[i].qa_templates is not None else None for i in range(BS) ]
             eval_infos = [data[i].eval_infos if data[i].eval_infos is not None else None for i in range(BS) ]
         else:
             qa_templates = None
             eval_infos = None
         
+        
+        
+        
+        
+        
+        
+        ################################################### 7.最终形态 ###################################################
+
+
+        # 这是整个函数最重要的结构之一: 模型输入对象
         driving_input=DrivingInput(
-                camera_images=image_ff_pixel,  # [B, T, N, C, H, W] uint8 [0, 255]
-                image_sizes=image_ff_sizes,
-                camera_intrinsics = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), BS, dim=0).view(BS, 3, 3).float(),
-                camera_extrinsics = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), BS, dim=0).view(BS, 4, 4).float(),
-                vehicle_speed=torch.tensor(np.asarray([data[i].speed for i in range(len(data))])).float(),  # [B, S] float32
-                target_point=torch.tensor(np.asarray([data[i].target_points for i in range(len(data))])).float(),  # [B, 2] float32
-                prompt=prompt_languagelabel,
-                prompt_inference=prompt_question_languagelabel,
+                camera_images=image_ff_pixel,  # [B, T, N, C, H, W] uint8 [0, 255]  这是视觉主输入
+                image_sizes=image_ff_sizes,    # 每个 patch 的尺寸信息
+                camera_intrinsics = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), BS, dim=0).view(BS, 3, 3).float(),  # 相机内参
+                camera_extrinsics = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), BS, dim=0).view(BS, 4, 4).float(),           # 相机外参
+                vehicle_speed=torch.tensor(np.asarray([data[i].speed for i in range(len(data))])).float(),  # [B, S] float32                     速度
+                target_point=torch.tensor(np.asarray([data[i].target_points for i in range(len(data))])).float(),  # [B, 2] float32              target point
+                prompt=prompt_languagelabel,                            # 训练用 prompt 包含问题和答案
+                prompt_inference=prompt_question_languagelabel,         # 推理用 prompt 包含问题但不包含答案
             )
 
+        # 整个 batch 的监督信号对象
         driving_label=DrivingLabel(
-                waypoints=waypoints,
+                waypoints=waypoints,        # waypoints 未来轨迹监督 [B, F, 2] float32
                 path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # [B, 3, RH, RW] uint8 [0, 255]
-                answer=answer_label,
-                image_ff_org=image_ff_org,
-                eval_infos=eval_infos,
+                answer=answer_label,        # 文本答案监督
+                image_ff_org=image_ff_org,  # 没有经过裁剪的原始图像
+                eval_infos=eval_infos,      # 预测模式下的额外评估信息
             )
             
         return DrivingExample(
-            driving_input=driving_input,
-            driving_label=driving_label,
-            run_id=encode_uint8([data[i].measurement_path for i in range(BS)], 1000),  # [B] str
-            qa_templates=qa_templates,
+            driving_input=driving_input,  # 把刚才整理好的"模型输入"塞进去
+            driving_label=driving_label,  # 把刚才整理好的"监督标签"塞进去
+            run_id=encode_uint8([data[i].measurement_path for i in range(BS)], 1000),  # [B] str  把每个样本的 measurement_path 编码成固定长度 uint8 张量
+            qa_templates=qa_templates,    # 保留预测模式下的问题模板信息
         )
 
     def dl_collate_fn_val(self, data):

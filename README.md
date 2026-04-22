@@ -261,3 +261,17 @@ Bench2Drive benchmark:
 - [tuPlan garage](https://github.com/autonomousvision/tuplan_garage) | [CARLA garage](https://github.com/autonomousvision/carla_garage) | [Survey on E2EAD](https://github.com/OpenDriveLab/End-to-end-Autonomous-Driving)
 - [DriveLM](https://github.com/OpenDriveLab/DriveLM/tree/main) | [PlanT](https://github.com/autonomousvision/plant) | [KING](https://github.com/autonomousvision/king) | [TransFuser](https://github.com/autonomousvision/transfuser) | [NEAT](https://github.com/autonomousvision/neat)
 
+
+
+
+## 收集数据
+
+使用如下命令来收集数据：
+```
+python data_collection.py
+```
+备注：需要修改的内容如下：
+```
+code_root   = r"/home/liulei/ll/simlingo"                         # 项目根目录
+carla_root  = "/home/liulei/ll/simlingo/software/carla0915"       # Carla根位置
+```

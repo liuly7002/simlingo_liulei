@@ -2,7 +2,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple, TypedDict
 import torch
 from torch import Tensor
 
-class DatasetOutput(NamedTuple):
+class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     conversation: Optional[list]
     answer: Optional[str]
     image_ff: Optional[Tensor]

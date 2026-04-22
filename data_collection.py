@@ -197,19 +197,19 @@ if __name__ == "__main__":
     repetitions = 1               # 重复收集的结束
     repetition_start = 0          # 重复收集的开始
 
-    code_root   = r"/home/liulei/ll/simlingo"                         # repo root
-    carla_root  = "/home/liulei/ll/simlingo/software/carla0915"       # contains CarlaUE4.sh
-    root_folder = r"database/"                                        # under code_root
+    code_root   = r"/home/liulei/ll/simlingo"                         # 项目根目录
+    carla_root  = "/home/liulei/ll/simlingo/software/carla0915"       # Carla根位置
+    root_folder = r"database/"                                        # 这是数据集存放的根目录
 
     date = datetime.today().strftime("%Y_%m_%d")                      # 时间格式:年_月_日
     dataset_name = "simlingo_v2_" + date                              # 文件夹命名格式(示例): simlingo_v2_2026_02_27
     data_save_directory = root_folder + dataset_name                  # 收集数据集存放的位置: database/simlingo_v2_2026_02_27/
 
-    route_folder = f"{code_root}/data/simlingo"                                                # 收集路线文件(.xml)存放的位置
+    route_folder = f"{code_root}/data/simlingo"                       # 收集路线文件(.xml)存放的位置
     if not DEBUG:
         routes = glob.glob(f"{route_folder}/**/*balanced*/*.xml", recursive=True)     # 只对含balanced的目录当前层下的 .xml 文件
         routes_lb1 = glob.glob(f"{route_folder}/**/*lb1*/**/*.xml", recursive=True)   # 对lb1_split文件夹下的所有路线进行收集
-        routes = routes + routes_lb1                                                            # 用于收集数据的全部路线
+        routes = routes + routes_lb1                                                  # 用于收集数据的全部路线
         # Set a random seed of 42 to shuffle the order of routes in a reproducible manner.
         random.seed(42)
         random.shuffle(routes)
