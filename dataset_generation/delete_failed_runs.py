@@ -4,7 +4,10 @@ import shutil
 import pathlib
 
 
+# 数据集目录
 dataset_path = '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo'
+
+
 all_data_folders = glob.glob(f'{dataset_path}/**/Town*', recursive=True)
 delete = True   # True: 真正的删除需要删除的文件夹 False: 打印需要删除的文件夹
 

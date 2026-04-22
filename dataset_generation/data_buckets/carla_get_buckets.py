@@ -37,6 +37,18 @@ from tqdm import tqdm
 from simlingo_base_training.utils.custom_types import DrivingExample, DrivingInput, DrivingLabel
 
 
+"""
+函数作用:
+    扫描数据集，把每一帧驾驶样本按场景特征自动分类到不同 bucket(桶)里，并统计数据分布。
+最终输出四个文件: 
+    1. buckets_paths.pkl: 每个桶对应的样本路径列表（包含重复路径）bucket标签 → 属于这个标签的 measurement 文件路径列表
+    2. buckets_stats.json: 每个桶的样本数量统计                bucket标签 → 样本数量
+    3. speeds_hist.png: 目标车速分布的直方图                   规划目标速度 → 样本数量
+    4. buckets_stats.png: 各桶样本数量的柱状图                 bucket标签 → 样本数量
+    这些文件可以帮助我们了解数据分布
+"""
+
+
 class CARLA_Data(Dataset):
     """
     Custom dataset that dynamically loads a CARLA dataset from disk.
@@ -498,8 +510,8 @@ class DataModule(LightningDataModule):
 
 def main():
 
-    data_path = '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28'
-    save_path = f'/home/liulei/ll/simlingo/database/bucketsv2_simlingo'
+    data_path = '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28'  # 数据集目录
+    save_path = f'/home/liulei/ll/simlingo/database/bucketsv2_simlingo'     # 存储桶结果目录
 
     Path(save_path).mkdir(parents=True, exist_ok=True)
 
@@ -611,6 +623,7 @@ def main():
 
     buckets_stats.pop('total')
     buckets_stats = dict(sorted(buckets_stats.items(), key=lambda item: item[1], reverse=True))
+    
     plt.figure(figsize=(20, 10))
     sns.barplot(x=list(buckets_stats.keys()), y=list(buckets_stats.values()))
     plt.xticks(rotation=90)
