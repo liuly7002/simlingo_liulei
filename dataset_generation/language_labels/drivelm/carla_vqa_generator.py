@@ -1641,6 +1641,7 @@ class QAsGenerator():
                     same_future_road,
                     other_vehicle_points_towards_ego,
                     pointing_towards_junction,
+                    path_crossing_answer,
                     qas_conversation_vehicle,
                     object_tags):
                 """
@@ -1697,6 +1698,10 @@ class QAsGenerator():
                     risk_level = "medium"
                 else:
                     risk_level = "low"
+                # If the original path-crossing QA says there is no path conflict,
+                # avoid assigning a contradictory high interaction risk.
+                if path_crossing_answer.startswith("No,"):
+                    risk_level = "low" if risk_score < 5 else "medium"
 
                 # =========================
                 # 3. Evidence sentence
@@ -1729,7 +1734,7 @@ class QAsGenerator():
                     evidence_list.append("it is on the right lane of the ego vehicle")
 
                 if len(evidence_list) == 0:
-                    evidence_sentence = "there is no strong evidence of an immediate path conflict"
+                    evidence_sentence = "there is no strong evidence of an immediate risky interaction"
                 elif len(evidence_list) == 1:
                     evidence_sentence = evidence_list[0]
                 else:
@@ -1798,9 +1803,24 @@ class QAsGenerator():
                     f"will the interaction risk with {other_vehicle_location_description} be reduced?"
                 )
 
-                if risk_level in ["high", "medium"]:
+                # if risk_level in ["high", "medium"]:
+                #     answer = (
+                #         f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
+                #         f"more time to react to the {other_vehicle_description}."
+                #     )
+                # else:
+                #     answer = (
+                #         f"Slowing down is not necessary for this object because the current "
+                #         f"interaction risk with the {other_vehicle_description} is low."
+                #     )
+                if risk_level == "high":
                     answer = (
                         f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
+                        f"more time to react to the {other_vehicle_description}."
+                    )
+                elif risk_level == "medium":
+                    answer = (
+                        f"Slowing down may reduce the risk because it gives the ego vehicle "
                         f"more time to react to the {other_vehicle_description}."
                     )
                 else:
@@ -2046,6 +2066,7 @@ class QAsGenerator():
                     same_future_road=same_future_road,
                     other_vehicle_points_towards_ego=other_vehicle_points_towards_ego,
                     pointing_towards_junction=pointing_towards_junction,
+                    path_crossing_answer=answer,
                     qas_conversation_vehicle=qas_conversation_vehicle,
                     object_tags=object_tags
                 )
