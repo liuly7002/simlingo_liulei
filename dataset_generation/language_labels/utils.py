@@ -10,6 +10,9 @@ import simlingo_training.utils.transfuser_utils as t_u
 
 def build_projection_matrix(w, h, fov):
     """
+
+    函数作用:根据图像宽度、高度和相机视场角FOV,构建一个3x3的投影矩阵K(相机内参矩阵K),用于将3D点投影到2D图像平面上
+
     Build a projection matrix based on image dimensions and field of view.
     
     Args:
@@ -20,12 +23,17 @@ def build_projection_matrix(w, h, fov):
     Returns:
         np.ndarray: 3x3 projection matrix
     """
-    focal = w / (2.0 * np.tan(np.radians(fov / 2)))
-    K = np.identity(3)
+    focal = w / (2.0 * np.tan(np.radians(fov / 2)))  # 焦距
+    K = np.identity(3)  # 3✖3单位矩阵
     K[0, 0] = K[1, 1] = focal
     K[0, 2] = w / 2.0
     K[1, 2] = h / 2.0
     return K
+    # K为相机内参矩阵,它可以用于把相机坐标系中的3D点投影到图像坐标系中的2D点。K的形式如下:
+    # [focal, 0, w/2]
+    # [0, focal, h/2]
+    # [0, 0, 1]
+    # 其中focal是焦距,w/2和h/2是图像中心在图像坐标系中的位置。这个矩阵假设相机的主点在图像中心,并且没有径向畸变。 
 
 
 def project_points(points2D_list, K):

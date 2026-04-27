@@ -38,7 +38,7 @@ class QAsGenerator():
         self.MAX_Y = args.max_y          # ROI(用于切割底部部分)的最大Y坐标
 
         # Sampling parameters
-        self.random_subset_count = args.random_subset_count
+        self.random_subset_count = args.random_subset_count  # 随机采样的样本数量,如果设置此值>0,那么就代表在完整数据集中随机抽取这么多样本进行处理,如果设置为-1,那么就代表使用完整数据集
         self.sample_frame_mode = args.sample_frame_mode
         self.sample_uniform_interval = args.sample_uniform_interval
 
@@ -48,8 +48,8 @@ class QAsGenerator():
         self.filter_routes_by_result = args.filter_routes_by_result
         self.remove_pedestrian_scenarios = args.remove_pedestrian_scenarios
 
-        self.data_directory = args.data_directory 
-        self.path_keyframes = args.path_keyframes 
+        self.data_directory = args.data_directory       # 数据集根目录
+        self.path_keyframes = args.path_keyframes       # 关键帧文件路径
 
         self.output_directory = args.output_directory   # 指定生成的 VQA graph 保存位置
         self.skip_existing = args.skip_existing         # 保存示例时跳过现有文件,默认default=True(此时运行时不添加这个参数的话,检测到生成了文件的话就自动跳过不再生成),但是现在我将default改为False了
@@ -67,21 +67,22 @@ class QAsGenerator():
         self.data_boxes_paths = self.data_boxes_paths_all
         # Randomly sample a subset of data (if random_subset_count > 0)
         if self.random_subset_count > 0:
-            random.shuffle(self.data_boxes_paths)
-            self.data_boxes_paths = self.data_boxes_paths[:self.random_subset_count]
+            random.shuffle(self.data_boxes_paths)  # 先把列表随机打乱顺序
+            self.data_boxes_paths = self.data_boxes_paths[:self.random_subset_count]  # 然后截取前random_subset_count个样本
         # self.data_boxes_paths = self.data_boxes_paths[28100:]
-        self.data_boxes_paths = list(sorted(self.data_boxes_paths))  # 排序,否则是乱序的
+        self.data_boxes_paths = list(sorted(self.data_boxes_paths))  # 对路径按照字典顺序排序,为什么必须排序,因为glob.glob()返回的文件列表顺序可能不固定
 
         self.list_next_junction_id_minus_one = []
         self.reset_qa_stats()
 
         # Load keyframes list if sampling keyframes
+        # 当数据采样模式设置为 keyframes 时，只使用关键帧（key frames）作为训练样本，而不是全部帧
         if self.sample_frame_mode == 'keyframes':
-            keyframes_list_path = self.path_keyframes
+            keyframes_list_path = self.path_keyframes  # 关键帧列表文件路径
             with open(keyframes_list_path, 'r', encoding="utf-8") as f:
-                self.keyframes_list = f.readlines()
-            self.keyframes_list = [x.strip() for x in self.keyframes_list]
-            self.keyframes_list = [x.replace('rgb', 'boxes').replace('.jpg', '.json.gz') for x in self.keyframes_list]
+                self.keyframes_list = f.readlines()   # 读取全部行
+            self.keyframes_list = [x.strip() for x in self.keyframes_list]  # 去掉每行的换行符
+            self.keyframes_list = [x.replace('rgb', 'boxes').replace('.jpg', '.json.gz') for x in self.keyframes_list]  # 关键帧文件中记录的是图像路径, 但是我们需要对应的box文件路径,所以把路径中的'rgb'替换为'boxes',把'.jpg'替换为'.json.gz'
 
     def reset_qa_stats(self):
         # Initialize data structures
@@ -107,6 +108,13 @@ class QAsGenerator():
         """
         Create all question answer pairs in llava format, convert them to NuScenes afterwards and finally save them
         """
+        
+        
+        
+
+
+
+        ################################################ 👇获取boxes、measurements及它们的同级目录👇 ################################################
         # Process each frame
         # for path in tqdm.tqdm(self.data_boxes_paths):
         path = self.data_boxes_paths[path_id]
@@ -117,6 +125,12 @@ class QAsGenerator():
         #   示例(path_measurements): database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/measurements/0032.json.gz
         #   示例(route_dir)        : database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28
 
+        
+        
+        
+        
+
+        ################################################ 👇如果文件存在,则直接跳过👇 ################################################
         # 保存示例时跳过现有文件, 默认default=True(此时运行时不添加这个参数的话,检测到生成了文件的话就自动跳过不再生成), 但是现在我改为default=False了
         if self.skip_existing:  # 所以现在不执行这里
             save_dir = (self.output_directory + "/" + path.split("/data/")[1]).replace('boxes', 'vqa')
@@ -124,14 +138,24 @@ class QAsGenerator():
                 print("Skip existing folder......")
                 return
 
+        
+        
+        
+        
+        
+        
+        ################################################ 👇从当前样本文件路径 path_measurements 中解析出场景名称、路线编号、所属文件夹信息👇 ################################################
+        # 情况A: 如果路径中包含 'lb1_split', 那么场景名称、路线编号等信息的解析方式如下:
         if 'lb1_split' in path_measurements:
             scenario_name = path_measurements.split('lb1_split/')[-1].split('/')[1]
             route_file_number = re.search(rf'Rep*(\d+)_Town[\d\w]*_[\d\w]*_*(\d+)_route_*(\d+)', path_measurements).group(2)
             route_number = re.search(rf'Rep*(\d+)_Town[\d\w]*_[\d\w]*_*(\d+)_route_*(\d+)', path_measurements).group(3)
+        # 情况B: 如果路径中包含 'parking_lane', 那么场景名称、路线编号等信息的解析方式如下:
         elif 'parking_lane' in path_measurements:
             scenario_name = 'noScenario'
             route_file_number = re.search(rf'Rep*(\d+)_*(\d+)_route_*(\d+)', path_measurements).group(2)
             route_number = re.search(rf'Rep*(\d+)_*(\d+)_route_*(\d+)', path_measurements).group(3)
+        # 情况C: 其他情况，场景名称、路线编号等信息的解析方式如下:
         else:
             try:
                 scenario_name = get_scenario_name(path_measurements)
@@ -143,9 +167,15 @@ class QAsGenerator():
             route_number = re.search(rf'Rep*(\d+)_*(\d+)_route_*(\d+)', path_measurements).group(3)       # 0  : 这是该路径中路线的ID
         route_folder = path_measurements.split('simlingo/')[-1].split('/Town')[0].split('/')
         route_folder = '_'.join(route_folder) # training_1_scenario_routes_training_random_weather_seed_1_balanced_150
-        # 这是包含该采集数据的路径.xml文件的目录
+        # 上级目录结构,用于保存输出文件夹
 
 
+        
+        
+        
+        
+        
+        
         ################################################ 👇一些预处理操作,目的是不对不好的数据进行处理👇 ################################################
         # Skip this scenario because it is not annotated correctly
         # 跳过此场景，因为它未正确标注。
@@ -203,9 +233,18 @@ class QAsGenerator():
         if not os.path.exists(path_measurements):  # 如果measurements文件不存在,直接跳出
             return
 
-        ################################################ 👆一些预处理操作,目的是不对不好的数据进行处理👆 ################################################
 
 
+
+
+
+
+
+
+
+
+
+        ################################################ 👇预处理操作, 根据results文件过滤掉不好的数据👇 ################################################
         # Read results file
         if self.filter_routes_by_result:
             results_file = path.split('boxes')[0] + 'results.json.gz'
@@ -232,6 +271,14 @@ class QAsGenerator():
                                 (route_results['scores']['score_route'] < 98.0): # 低速违规并且得分小于98
                 return                                                           # 直接跳出
 
+        
+        
+        
+        
+        
+        
+        ################################################ 👇加载boxes、measurements、image_path、relative_image_path👇 ################################################
+        
         # Read data(box) and measurements files
         # path              = database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/boxes/0032.json.gz
         # path_measurements = database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/measurements/0032.json.gz
@@ -249,6 +296,16 @@ class QAsGenerator():
         # relative_image_path = database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/rgb/0032.jpg
 
 
+        
+        
+        
+
+
+
+
+
+
+        ################################################ 👇核心函数👇 ################################################
         self.current_path = image_path
         try:  # ！！！核心函数！！！
             res = self.generate_perception_questions(data, measurements, scenario_name)
@@ -264,6 +321,17 @@ class QAsGenerator():
             for value in values:
                 self.stats_p3[value['type']] += 0.5  # We have questions and answers
 
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        ################################################ 👇👇 ################################################        
         # Save examples if specified
         if self.save_examples:
             # Load and draw on the image
@@ -313,6 +381,13 @@ class QAsGenerator():
             image_resized = image.crop((0, self.MIN_Y, self.ORIGINAL_IMAGE_SIZE[0], self.MAX_Y))
             image_resized.save(f'{path_resimg}/{frame_number}.jpg')
 
+        
+        
+        
+        
+        
+        
+        
         # Update minimum number of questions
         self.min_num_questions = min(self.min_num_questions, num_questions)
 
@@ -2355,10 +2430,12 @@ class QAsGenerator():
         """(中文解释)
         根据给定的场景数据、当前测量数据和场景，生成基于感知的问答。
         它会处理场景中的各种对象，例如车辆、行人、交通信号灯、停车标志和地标，并生成与这些对象相关的问答。
-        参数：
+        
+        传入参数：
         scene_data（列表）：包含场景中对象信息的字典列表。
         measurements（字典）：包含当前测量数据的字典。
         scenario（字符串）：当前场景。
+        
         返回值：
         combined_qas（字典）：包含不同类别问答对列表的字典。
         num_questions（整数）：生成的问答总数。
@@ -2377,9 +2454,17 @@ class QAsGenerator():
         old_traffic_lights = []
         stop_signs = []
         landmarks = []
-        landmark_ids = []   # Needed to avoid duplicates of landmarks
+        landmark_ids = []   # 需要避免地标重复
         vehicles_by_id = {}
 
+
+
+
+
+
+
+
+        ################################################ 👇根据box信息进行处理👇 ################################################        
         # Categorize objects from the scene data
         # 对场景数据中的对象进行分类
         for actor in scene_data:
@@ -2390,23 +2475,33 @@ class QAsGenerator():
                 vehicles_by_id[actor['id']] = actor
             elif actor['class'] == 'walker':      # 行人
                 pedestrians.append(actor)
-            elif actor['class'] == 'landmark' and actor['id'] not in landmark_ids:
+            elif actor['class'] == 'landmark' and actor['id'] not in landmark_ids:  # 地标（需要避免地标重复）
                 landmarks.append(actor)
                 landmark_ids.append(actor['id'])
             elif actor['class'] == 'ego_info':    # 以自车为中心的道路拓扑信息
                 ego = actor
                 if ego['next_junction_id'] == -1:
-                    self.list_next_junction_id_minus_one.append(1)
-            elif actor['class'] == 'traffic_light_vqa':
+                    self.list_next_junction_id_minus_one.append(1)   # 下一个交叉路口 ID -1 的场景数量加 1
+            elif actor['class'] == 'traffic_light_vqa':  # 交通信号灯 VQA
                 traffic_lights.append(actor)
-            elif actor['class'] == 'traffic_light':
+            elif actor['class'] == 'traffic_light':  # 交通灯
                 old_traffic_lights.append(actor)
             elif actor['class'] == 'stop_sign':  # 停止线
                 stop_signs.append(actor)
             elif actor['class'] == 'static_car':  # 静态车辆
                 static_cars.append(actor)
-            elif actor['class'] == 'static' or actor['class'] == 'static_trafficwarning': # 静态物(静态交通标识)
+            elif actor['class'] == 'static' or actor['class'] == 'static_trafficwarning': # 静态物(静态交通警告牌)
                 static_objects.append(actor)
+
+        
+        
+        
+        
+        
+        
+        
+
+        ################################################ 👇根据box信息进行处理👇 ################################################        
 
         important_objects = []  # 场景中重点关注的对象
         key_object_infos = {}   # 场景中重点关注的对象的信息

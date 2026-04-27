@@ -22,7 +22,7 @@ def parse_arguments():
                             help='Data directory containing the dataset')  # 数据集根目录
     path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_02_28/drivelm',
                             help='Output directory for the vqa-graph')     # VQA graph 保存位置
-    path_group.add_argument('--output-graph-examples-directory', type=str, default='database/simlingo/drivelm',
+    path_group.add_argument('--output-graph-examples-directory', type=str, default='database/simlingo_v2_2026_02_28/drivelm',
                             help='Output directory for examples of the vqa-graph')
 
     # Image and camera parameters
