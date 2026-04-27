@@ -22,6 +22,10 @@ from dataset_generation.language_labels.utils import *
 Main class for processing and converting the pdm_lite dataset to the Graph-QAs for DriveLM-Carla.
 """
 
+
+DEBUG = True  # 是否创新
+
+
 class QAsGenerator():
     # all_qa_pairs = []
 
@@ -499,7 +503,7 @@ class QAsGenerator():
             json.dump(tick_data, f, indent=4)
 
 
-    def generate_2d_box_from_projected_points(self, projected_points):  # 计算最小外接轴对齐矩形
+    def generate_2d_box_from_projected_points(self, projected_points):  # 计算最小外接轴对齐矩形  坐标为左上、右下
         return [
                 [round(projected_points[:, 0].min(), 1), round(projected_points[:, 1].min(), 1)],
                 [round(projected_points[:, 0].max(), 1), round(projected_points[:, 1].max(), 1)],
@@ -512,7 +516,7 @@ class QAsGenerator():
         visual description, 2D bounding box coordinates, and position.
         """
         """
-        生成一个键值对，表示图像中检测到的对象，包括其类别、视觉描述、2D 边界框坐标和位置。
+        生成一个键值对,表示图像中检测到的对象,包括其类别、视觉描述、2D 边界框坐标和位置.
         """
         # Create a dictionary to store the object's information
         object_info = {
@@ -1627,6 +1631,205 @@ class QAsGenerator():
             key_object_infos（dict）：对象信息更新字典。
         """
 
+        # 创新点函数
+        if DEBUG:
+            def determine_risk_counterfactual_path_crossing(
+                    other_vehicle_location_description,
+                    other_vehicle,
+                    other_vehicle_description,
+                    command_str,
+                    same_future_road,
+                    other_vehicle_points_towards_ego,
+                    pointing_towards_junction,
+                    qas_conversation_vehicle,
+                    object_tags):
+                """
+                Generate risk-aware and counterfactual QA pairs for vehicle-centric path-crossing reasoning.
+                """
+
+                distance = other_vehicle.get('distance', 999.0)
+                lane_relative = other_vehicle.get('lane_relative_to_ego', None)
+                vehicle_cuts_in = other_vehicle.get('vehicle_cuts_in', False)
+                is_in_junction = other_vehicle.get('is_in_junction', False)
+                same_direction = other_vehicle.get('same_direction_as_ego', False)
+
+                # =========================
+                # 1. Rule-based risk score
+                # =========================
+                risk_score = 0
+
+                if distance < 10:
+                    risk_score += 3
+                elif distance < 20:
+                    risk_score += 2
+                elif distance < 40:
+                    risk_score += 1
+
+                if vehicle_cuts_in:
+                    risk_score += 3
+
+                if same_future_road:
+                    risk_score += 2
+
+                if other_vehicle_points_towards_ego:
+                    risk_score += 2
+
+                if pointing_towards_junction:
+                    risk_score += 1
+
+                if is_in_junction:
+                    risk_score += 1
+
+                if lane_relative == 0:
+                    risk_score += 2
+                elif lane_relative in [-1, 1]:
+                    risk_score += 1
+
+                if not same_direction:
+                    risk_score += 1
+
+                # =========================
+                # 2. Risk level
+                # =========================
+                if risk_score >= 6:
+                    risk_level = "high"
+                elif risk_score >= 3:
+                    risk_level = "medium"
+                else:
+                    risk_level = "low"
+
+                # =========================
+                # 3. Evidence sentence
+                # =========================
+                evidence_list = []
+
+                if distance < 20:
+                    evidence_list.append("it is close to the ego vehicle")
+
+                if vehicle_cuts_in:
+                    evidence_list.append("it is cutting into the lane of the ego vehicle")
+
+                if same_future_road:
+                    evidence_list.append("it may share the same future road with the ego vehicle")
+
+                if other_vehicle_points_towards_ego:
+                    evidence_list.append("it is pointing towards the ego vehicle")
+
+                if pointing_towards_junction:
+                    evidence_list.append("it is pointing towards the junction")
+
+                if is_in_junction:
+                    evidence_list.append("it is inside or near a junction")
+
+                if lane_relative == 0:
+                    evidence_list.append("it is in the same lane as the ego vehicle")
+                elif lane_relative == -1:
+                    evidence_list.append("it is on the left lane of the ego vehicle")
+                elif lane_relative == 1:
+                    evidence_list.append("it is on the right lane of the ego vehicle")
+
+                if len(evidence_list) == 0:
+                    evidence_sentence = "there is no strong evidence of an immediate path conflict"
+                elif len(evidence_list) == 1:
+                    evidence_sentence = evidence_list[0]
+                else:
+                    evidence_sentence = ", ".join(evidence_list[:-1]) + ", and " + evidence_list[-1]
+
+                object_id = other_vehicle['id']
+
+                # ============================================================
+                # QA 1: Risk-level QA
+                # ============================================================
+                question = f"How risky is the potential interaction with {other_vehicle_location_description}?"
+                answer = f"The interaction risk is {risk_level} because {evidence_sentence}."
+
+                self.add_qas_questions(
+                    qa_list=qas_conversation_vehicle,
+                    chain=4,
+                    layer=4,
+                    qa_type='planning',
+                    connection_up=[(4, 3)],
+                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    question=question,
+                    answer=answer,
+                    object_id=object_id,
+                    object_tags=object_tags
+                )
+
+                # ============================================================
+                # QA 2: Evidence-grounded QA
+                # ============================================================
+                question = f"Why should the ego vehicle pay attention to {other_vehicle_location_description}?"
+
+                if risk_level == "high":
+                    answer = (
+                        f"The ego vehicle should pay close attention to the {other_vehicle_description} "
+                        f"because {evidence_sentence}."
+                    )
+                elif risk_level == "medium":
+                    answer = (
+                        f"The ego vehicle should monitor the {other_vehicle_description} "
+                        f"because {evidence_sentence}."
+                    )
+                else:
+                    answer = (
+                        f"The ego vehicle does not need to pay strong attention to the "
+                        f"{other_vehicle_description} because {evidence_sentence}."
+                    )
+
+                self.add_qas_questions(
+                    qa_list=qas_conversation_vehicle,
+                    chain=4,
+                    layer=5,
+                    qa_type='planning',
+                    connection_up=[(4, 3), (4, 4)],
+                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    question=question,
+                    answer=answer,
+                    object_id=object_id,
+                    object_tags=object_tags
+                )
+
+                # ============================================================
+                # QA 3: Counterfactual slowing-down QA
+                # ============================================================
+                question = (
+                    f"If the ego vehicle slows down while it {command_str}, "
+                    f"will the interaction risk with {other_vehicle_location_description} be reduced?"
+                )
+
+                if risk_level in ["high", "medium"]:
+                    answer = (
+                        f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
+                        f"more time to react to the {other_vehicle_description}."
+                    )
+                else:
+                    answer = (
+                        f"Slowing down is not necessary for this object because the current "
+                        f"interaction risk with the {other_vehicle_description} is low."
+                    )
+
+                self.add_qas_questions(
+                    qa_list=qas_conversation_vehicle,
+                    chain=4,
+                    layer=6,
+                    qa_type='planning',
+                    connection_up=[(4, 3), (4, 4), (4, 5)],
+                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    question=question,
+                    answer=answer,
+                    object_id=object_id,
+                    object_tags=object_tags
+                )
+            
+
+
+
+
+        
+        
+        
+        # planning
         def determine_path_crossing(current_measurement, ego_vehicle, other_vehicle_location_description, 
                             other_vehicle, vehicles_by_id, other_vehicle_description, scenario, 
                             ego_distance_to_junction, other_vehicle_points_towards_ego, 
@@ -1833,7 +2036,21 @@ class QAsGenerator():
                                     answer=answer,
                                     object_id=other_vehicle['id'],
                                     object_tags=object_tags)
-
+            
+            if DEBUG:
+                determine_risk_counterfactual_path_crossing(
+                    other_vehicle_location_description=other_vehicle_location_description,
+                    other_vehicle=other_vehicle,
+                    other_vehicle_description=other_vehicle_description,
+                    command_str=command_str,
+                    same_future_road=same_future_road,
+                    other_vehicle_points_towards_ego=other_vehicle_points_towards_ego,
+                    pointing_towards_junction=pointing_towards_junction,
+                    qas_conversation_vehicle=qas_conversation_vehicle,
+                    object_tags=object_tags
+                )
+                        
+        # prediction
         def determine_vehicle_motion_status(other_vehicle_location_description, other_vehicle, 
                                            other_vehicle_description, qas_conversation_vehicle, object_tags):
             """
@@ -1876,6 +2093,7 @@ class QAsGenerator():
                                     object_id=other_vehicle['id'],
                                     object_tags=object_tags)
 
+        # prediction
         def determine_vehicle_trajectory(other_vehicle_location_description, other_vehicle, other_vehicle_description,
                                                                                 qas_conversation_vehicle, object_tags):
             """
@@ -1925,6 +2143,7 @@ class QAsGenerator():
                                     object_id=other_vehicle['id'],
                                     object_tags=object_tags)
 
+        # perception
         def determine_other_vehicle_position(other_vehicle_location_description, other_vehicle, ego_vehicle,
                                         is_ego_on_highway, is_ego_in_accel_lane, is_ego_in_exit_lane,
                                         other_vehicle_description, is_ego_in_entry_lane, ego_about_to_exit_highway,
@@ -1951,8 +2170,9 @@ class QAsGenerator():
             """
 
             """
-            答案：“{other_vehicle_location_description} 位于道路上的哪个位置？”
-                参数：
+            问题: "Where on the road is {other_vehicle_location_description} located?".
+
+            参数：
                 other_vehicle_location_description (str): 另一辆车的位置描述。              
                 other_vehicle (dict): 另一辆车的信息。             
                 ego_vehicle (dict): 自我车辆的信息。              
@@ -1966,8 +2186,8 @@ class QAsGenerator():
                 qas_conversation_vehicle (list): 车辆的问答对列表。             
                 返回值：               
                 pointing_towards_junction (bool 或 None): 
-                如果另一辆车指向路口，则返回 True；               
-                如果指向远离路口的方向，则返回 False；
+                如果另一辆车指向路口，则返回 True;               
+                如果指向远离路口的方向，则返回 False;
                 如果方向未知，则返回 None。
             """
 
@@ -2255,37 +2475,62 @@ class QAsGenerator():
 
 
         for vehicle in other_vehicles:
+            
+            
+            
+
+            ################################################ 👇判断当前该周围车辆"是否需要考虑"👇 ################################################        
+
             # Check if the vehicle should be considered based on some criteria
-            # 根据某些标准检查该周围车辆是否应被考虑。
+            # 该周围车辆是否在ROI内,如果在就考虑它，否则不考虑它
             consider_vehicle = should_consider_vehicle(vehicle, self.MIN_X, self.MAX_X, self.MIN_Y, self.MAX_Y, self.CAMERA_MATRIX)
             if not consider_vehicle:
-                continue    # 不考虑的话直接跳出
+                continue    # 如果不考虑, 直接跳出
+
+            
+            
+            
+            
+            
+            
+            ################################################ 👇判断当前该周围车辆与自车的"行使方向是否相同"👇 ################################################        
 
             # Get the position of the ego vehicle (every other vehicles positions are in the local coordinate system
             # of the ego vehicle)
-            # 获取本车的位置（其他所有车辆的位置均位于本车的局部坐标系中）
+            # 1. 获取本车的位置（其他所有车辆的位置均位于本车的局部坐标系中）
             pos_ego = np.array([0,0,0])
             
+
+            # 2. 获取当前周围车辆的位置
             # Get the position of the current vehicle
             pos_vehicle = np.array(vehicle['position'])
 
+            
+            # 3. 计算周围车辆与自车之间的角度
             # Calculate the angle between the vehicle and the ego vehicle
             angle_rad = np.arctan2(pos_vehicle[1] - pos_ego[1], pos_vehicle[0] - pos_ego[0])
             angle_deg = angle_rad * 180. / np.pi
             angle_deg = angle_deg % 360. # Normalize the angle to [0, 360]
 
+            
+            # 4. 计算当前该周围车辆在自车坐标系下的航向角
             # Get the yaw angle (heading) of the vehicle
             vehicle_heading_angle_rad = vehicle['yaw']
             vehicle_heading_angle_deg = vehicle_heading_angle_rad * 180 / np.pi
             vehicle_heading_angle_deg = vehicle_heading_angle_deg % 360. # Normalize the angle to [0, 360]
 
-            # True表示周围车与自车行驶方向相同 False行驶方向相反
+            # 5. True表示周围车与自车行驶方向相同 False行驶方向相反
             other_vehicle_points_towards_ego = abs(vehicle_heading_angle_deg - angle_deg + 180) % 360 < 90
 
-            # Determine the rough position of the vehicle relative to the ego (front, front-left, front-right)
-            # ADDED: distinguish rough distance as often the same vehicles are in the scene
-            # 确定车辆相对于自身（正前方、左前侧、右前侧）的大致位置
-            # 新增：区分大致距离，因为场景中经常会出现相同的车辆
+            
+            
+            
+            
+            
+            
+            
+            ################################################ 👇判断当前该周围车辆与自车的"前后左右位置关系"👇 ################################################                    
+            
             # 区分前后
             if vehicle['distance'] > 25:
                 far_or_close = 'far '
@@ -2303,27 +2548,40 @@ class QAsGenerator():
                 rough_pos_str = f'{far_or_close}to the front left of the ego vehicle'
 
 
-            # Determine the type of vehicle based on its type_id
-            if 'firetruck' in vehicle['type_id']:     # 消防车
+
+
+
+
+
+            ################################################ 👇判断当前该周围车辆与自车的"类型"👇 ################################################                    
+
+            if 'firetruck' in vehicle['type_id']:        # 消防车
                 vehicle_type = 'firetruck'
-            elif 'police' in vehicle['type_id']:      # 警车
+            elif 'police' in vehicle['type_id']:         # 警车
                 vehicle_type = 'police car'
-            elif 'ambulance' in vehicle['type_id']:   # 救护车
+            elif 'ambulance' in vehicle['type_id']:      # 救护车
                 vehicle_type = 'ambulance'
-            elif 'jeep' in vehicle['type_id']:        # 吉普
+            elif 'jeep' in vehicle['type_id']:           # 吉普
                 vehicle_type = 'jeep'
-            elif 'micro' in vehicle['type_id']:       # 小轿车
+            elif 'micro' in vehicle['type_id']:          # 小轿车
                 vehicle_type = 'small car'
             elif 'nissan.patrol' in vehicle['type_id']:  # SUV
                 vehicle_type = 'SUV'
-            elif 'european_hgv' in vehicle['type_id']:   #欧洲重型货车
+            elif 'european_hgv' in vehicle['type_id']:   # 欧洲重型货车
                 vehicle_type = 'HGV'
-            elif 'sprinter' in vehicle['type_id']:
+            elif 'sprinter' in vehicle['type_id']:       # 
                 vehicle_type = 'sprinter'
             else:
-                vehicle_type = vehicle['base_type']
+                vehicle_type = vehicle['base_type']      # 其他类型
 
-            # Determine the color of the vehicle
+
+
+
+
+
+
+            ################################################ 👇判断当前该周围车辆与自车的"颜色"👇 ################################################                    
+
             color_str = vehicle["color_name"] + ' ' if vehicle["color_name"] is not None \
                                                         and vehicle["color_name"] != 'None' else ''
             if vehicle['color_rgb'] == [0, 28, 0] or vehicle['color_rgb'] == [12, 42, 12]:
@@ -2334,6 +2592,12 @@ class QAsGenerator():
                 color_str = 'blue '
             elif vehicle['color_rgb'] == [215, 88, 0]:
                 color_str = 'orange '
+
+
+
+
+
+            ################################################ 👇构建当前该周围车辆的字符串描述👇 ################################################                    
 
             # Construct a string description of the vehicle
             description = vehicle_type
@@ -2346,14 +2610,29 @@ class QAsGenerator():
 
             important_objects.append(important_object_str)
 
+            
+            
+            
+            
+            
+            ################################################ 👇将当前该周围车辆的边界框点投影到图像平面上👇 ################################################                    
+            
             # Project the vehicle's bounding box points onto the image plane
-            # 将车辆的边界框点投影到图像平面上
+            # 将当前该周围车辆的边界框点投影到图像平面上
             projected_points, projected_points_meters = project_all_corners(vehicle, self.CAMERA_MATRIX)
-            # projected_points            每个角点在图像坐标系中的像素坐标(2Dx向右y向下z向前) 8×2(底部:左后->左前->右前->右后 上部:左后->左前->右前->右后)
-            # projected_points_meters     每个角点在自车坐标系中的坐标(3Dx向前y向右)         8×3(底部:左后->左前->右前->右后 上部:左后->左前->右前->右后)
+            # projected_points            每个角点在图像坐标系中的像素坐标      8×2(左后下->右后下->右前下->左前下->左后上->右后上->右前上->左前上)
+            # projected_points_meters     每个角点在自车坐标系中的坐标         8×3(左后下->右后下->右前下->左前下->左后上->右后上->右前上->左前上)
             projected_points_meters[:, 2] -= vehicle['position'][2]
 
-            # Generate a unique key and value for the vehicle object
+
+
+
+
+
+
+
+            ################################################ 👇为当前该周围车辆生成唯一的键和值👇 ################################################                    
+
             key, value = self.generate_object_key_value(
                 category='Vehicle',
                 visual_description = f'{color_str}{description}',  # 什么颜色的什么类型车
@@ -2363,6 +2642,18 @@ class QAsGenerator():
             )
             key_object_infos[key] = value                          # 这里的关键物体信息就是指的需要关注的，也就是ROI内的
             object_tags = [key]
+
+
+
+
+
+
+
+
+            ################################################ 👇一次调用生成一对QA 感知👇 ################################################                    
+
+            # 固定问题: "Where on the road is {the black car that is nearby to the front of the ego vehicle} located?".
+            # 当前该周围车辆在哪里
 
             pointing_towards_junction = determine_other_vehicle_position(vehicle_location_description, 
                                                                                 vehicle, ego_vehicle, 
@@ -2376,19 +2667,44 @@ class QAsGenerator():
                                                                                 qas_conversation_vehicle,
                                                                                 object_tags)
             
-            # 周围车的转向
+            
+            
+
+
+            ################################################ 👇一次调用生成一对QA 预测👇 ################################################                    
+
+            # 固定问题: "Where is {the black car that is nearby to the front of the ego vehicle} going?"
+            # 当前该周围车辆将要去哪里
+
             determine_vehicle_trajectory(vehicle_location_description, vehicle,
                                               vehicle_description, 
                                               qas_conversation_vehicle,
                                               object_tags)
             
-            # 周围车的驾驶状态(不动 (自行车)缓慢移动/(周围车)缓慢驾驶 (自行车)正在移动/(周围车)正在驾驶 )
+            
+            
+            
+            
+            ################################################ 👇一次调用生成一对QA 预测👇 ################################################                    
+            
+            # 固定问题: "What is the moving status of {the black car that is nearby to the front of the ego vehicle}?"
+            # 当前该周围车辆的行驶状态是什么（正在移动还是静止）
             determine_vehicle_motion_status(vehicle_location_description,
                                                  vehicle, 
                                                  vehicle_description, 
                                                  qas_conversation_vehicle,
                                                  object_tags)
             
+            
+            
+            
+            
+            
+            
+            ################################################ 👇一次调用生成一对QA 规划👇 ################################################                    
+
+            # 固定问题: "The ego vehicle {下个路口左转\下个路口右转\下个路口直行\车道保持\左变道\右变道}. Is {the black car that is nearby to the front of the ego vehicle} potentially crossing the path of the ego vehicle?"
+            # 自车将要执行某个动作（下个路口左转\下个路口右转\下个路口直行\车道保持\左变道\右变道）。当前该周围车辆是否有可能与自车的行驶路径发生交叉（即存在潜在的碰撞风险）？
             determine_path_crossing(current_measurement, 
                                             ego_vehicle, 
                                             vehicle_location_description, 
@@ -2501,7 +2817,7 @@ class QAsGenerator():
         
         
 
-        ################################################ 👇根据box信息进行处理👇 ################################################        
+        ################################################ 👇根据box信息进行处理生成QA👇 ################################################        
 
         important_objects = []  # 场景中重点关注的对象
         key_object_infos = {}   # 场景中重点关注的对象的信息
@@ -2533,6 +2849,15 @@ class QAsGenerator():
                                                 vehicles_by_id, tl_info, ss_info, static_objects, measurements,
                                                 scenario, stop_signs, ss_object_tags, tl_object_tags)
         qas_conversation_ego, important_objects, key_object_infos = res
+        
+        
+        
+        
+        
+        
+        
+        
+        
         
         num_objects = len(important_objects)   # 重点关注对象的数量
         num_questions = len(qas_conversation_vehicle) + len(qas_conversation_roadlayout) + \

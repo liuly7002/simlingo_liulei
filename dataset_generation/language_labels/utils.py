@@ -65,13 +65,29 @@ def project_center_corners(obj, K):
     Returns:
         np.ndarray: 2D array of projected corner points
     """
-    # check if obj is dict
+
+
+    """
+    函数作用:把三维空间中bbox中心位置左右的两个角点（左右两个点）投影到二维图像坐标系中
+            最终输出：
+            [[u1, v1],
+            [u2, v2]]
+            也就是图像上的两个像素点的位置
+    """
+
+
+    # 1. check if obj is dict
     if isinstance(obj, dict):
-        pos = obj['position']
+        # 1. 获取周围车在自车坐标系下的位置 [x,y,z]
+        pos = obj['position']   
+        
+        # 2. 获取周围车辆的几何尺寸(长宽高,但是是一半),如果没有就默认是 [0.15,0.15,0.15]
         if 'extent' not in obj:
             extent = [0.15,0.15,0.15]
         else:
             extent = obj['extent']
+        
+        # 3. 获取周围车在自车坐标系下的航向角,如果没有就默认是 0
         if 'yaw' not in obj:
             yaw = 0
         else:
@@ -82,32 +98,39 @@ def project_center_corners(obj, K):
         extent = [obj.extent.x, obj.extent.y, obj.extent.z]
         yaw = obj.rotation.yaw
         
+    # 2. 在 3D 里构造 2 个角点(左右两个点,相对于bbox中心),这里的坐标是以bbox中心为原点的局部坐标系下的坐标 
     # get bbox corners coordinates
     corners = np.array([[-extent[0], 0, 0.75],
                         [extent[0], 0, 0.75]])
 
+    # 3. 旋转
+    # 绕 Z 轴旋转 2 个角点(含义:把2个角点坐标从bbox坐标系旋转到自车坐标系中)
     # rotate bbox
     rotation_matrix = np.array([[np.cos(yaw), -np.sin(yaw), 0],
                                 [np.sin(yaw), np.cos(yaw), 0],
                                 [0, 0, 1]])
     corners = corners @ rotation_matrix.T
 
+    # 4. 平移
+    # 把 2 个角点从“局部坐标(这里指的是b_box的坐标系)”挪到自车所在坐标系中。
     # translate bbox
     corners = corners + np.array(pos)
+    
+    # 5. 把 2 个角点从自车坐标系投影到相机成像平面（像素坐标）。
     all_points_2d = []
-    for corner in  corners:
-        pos_3d = np.array([corner[1], -corner[2], corner[0]])
-        rvec = np.zeros((3, 1), np.float32) 
-        tvec = np.array([[0.0, 2.0, 1.5]], np.float32)
+    for corner in  corners: # 遍历 2 个角点
+        pos_3d = np.array([corner[1], -corner[2], corner[0]])  # CARLA坐标转OpenCV坐标
+        rvec = np.zeros((3, 1), np.float32)                    # 相机外参中的旋转向量,这里假设相机没有旋转,所以是全零
+        tvec = np.array([[0.0, 2.0, 1.5]], np.float32)         # 相机外参中的平移向量,这里假设相机在自车坐标系中的位置是(0,2,1.5),也就是相机在自车前方2米、上方1.5米的位置
         # Define the distortion coefficients 
-        dist_coeffs = np.zeros((5, 1), np.float32) 
-        points_2d, _ = cv2.projectPoints(pos_3d, 
+        dist_coeffs = np.zeros((5, 1), np.float32)             # 相机畸变系数,这里假设相机没有畸变,所以是全零
+        points_2d, _ = cv2.projectPoints(pos_3d,               # 使用OpenCV的projectPoints函数把3D点投影到2D图像平面上
                             rvec, tvec, 
                             K, 
                             dist_coeffs)
         all_points_2d.append(points_2d[0][0])
         
-    return np.array(all_points_2d)
+    return np.array(all_points_2d)  # 2个角点在图像坐标系中的像素坐标   [[u1, v1], [u2, v2]]
 
 def project_all_corners(obj, K):
     """
@@ -135,14 +158,14 @@ def project_all_corners(obj, K):
         yaw = obj['yaw']       # 周围车在自车坐标系下的航向角
             
     corners = np.array([
-        [-extent[0], -extent[1], 0],  # 左后
-        [extent[0], -extent[1], 0],   # 左前
-        [extent[0], extent[1], 0],    # 右前
-        [-extent[0], extent[1], 0],   # 右后
-        [-extent[0], -extent[1], 2*extent[2]],   #
-        [extent[0], -extent[1], 2*extent[2]],    #
-        [extent[0], extent[1], 2*extent[2]],     #
-        [-extent[0], extent[1], 2*extent[2]]     #
+        [-extent[0], -extent[1], 0],  # 左后下
+        [extent[0], -extent[1], 0],   # 右后下
+        [extent[0], extent[1], 0],    # 右前下
+        [-extent[0], extent[1], 0],   # 左前下
+        [-extent[0], -extent[1], 2*extent[2]],   # 左后上
+        [extent[0], -extent[1], 2*extent[2]],    # 右后上
+        [extent[0], extent[1], 2*extent[2]],     # 右前上
+        [-extent[0], extent[1], 2*extent[2]]     # 左前上
     ])   # 目标中心 pos 当作“底面中心”，而不是“几何中心”。
 
     # rotate bbox
@@ -186,6 +209,7 @@ def is_vehicle_visible_in_image(vehicle_obj, MIN_X, MAX_X, MIN_Y, MAX_Y, CAMERA_
     if projected_2d_points is None:
         return False
 
+    # 遍历每个投影点,如果有一个点在图像范围内,就认为这个车在图像中的ROI范围内,也就是在图像中可见
     for point_2d in projected_2d_points:
         if (point_2d[0] > MIN_X and point_2d[0] < MAX_X and
             point_2d[1] > MIN_Y and point_2d[1] < MAX_Y):
