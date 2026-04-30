@@ -1689,13 +1689,13 @@ class QAsGenerator():
 
                 if distance_delta < -2.0:
                     trend = "increasing"
-                    reason = "the vehicle becomes closer to the ego vehicle in future frames"
+                    reason = "the vehicle becomes closer to the ego vehicle over the short-term horizon"
                 elif distance_delta > 2.0:
                     trend = "decreasing"
-                    reason = "the vehicle moves farther away from the ego vehicle in future frames"
+                    reason = "the vehicle moves farther away from the ego vehicle over the short-term horizon"
                 else:
                     trend = "stable"
-                    reason = "the vehicle keeps a similar distance from the ego vehicle in future frames"
+                    reason = "the vehicle keeps a similar distance from the ego vehicle over the short-term horizon"
 
                 return {
                     'trend': trend,
@@ -1766,14 +1766,21 @@ class QAsGenerator():
                 # =========================
                 if risk_score >= 6:
                     risk_level = "high"
+                    risk_level_id = 3
                 elif risk_score >= 3:
                     risk_level = "medium"
+                    risk_level_id = 2
                 else:
                     risk_level = "low"
-                # If the original path-crossing QA says there is no path conflict,
-                # avoid assigning a contradictory high interaction risk.
+                    risk_level_id = 1
+
                 if path_crossing_answer.startswith("No,"):
-                    risk_level = "low" if risk_score < 5 else "medium"
+                    if risk_score < 5:
+                        risk_level = "low"
+                        risk_level_id = 1
+                    else:
+                        risk_level = "medium"
+                        risk_level_id = 2
 
                 # =========================
                 # 3. Evidence sentence
@@ -1812,13 +1819,23 @@ class QAsGenerator():
                 else:
                     evidence_sentence = ", ".join(evidence_list[:-1]) + ", and " + evidence_list[-1]
 
+                if len(evidence_list) == 0:
+                    structured_evidence_sentence = "Risk evidence: no strong evidence of an immediate risky interaction."
+                else:
+                    structured_evidence_items = []
+                    for idx, evidence in enumerate(evidence_list, start=1):
+                        structured_evidence_items.append(f"{idx}) {evidence}")
+                    structured_evidence_sentence = "Risk evidence: " + "; ".join(structured_evidence_items) + "."
+                
                 object_id = other_vehicle['id']
 
                 # ============================================================
                 # QA 1: Risk-level QA
                 # ============================================================
                 question = f"How risky is the potential interaction with {other_vehicle_location_description}?"
-                answer = f"The interaction risk is {risk_level} because {evidence_sentence}."
+                # answer = f"The interaction risk is {risk_level} because {evidence_sentence}."
+                answer = (f"The interaction risk is level {risk_level_id} ({risk_level}) "
+                          f"because {evidence_sentence}." )
 
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
@@ -1839,20 +1856,17 @@ class QAsGenerator():
                 question = f"Why should the ego vehicle pay attention to {other_vehicle_location_description}?"
 
                 if risk_level == "high":
-                    answer = (
-                        f"The ego vehicle should pay close attention to the {other_vehicle_description} "
-                        f"because {evidence_sentence}."
-                    )
+                    attention_action = "pay close attention to"
                 elif risk_level == "medium":
-                    answer = (
-                        f"The ego vehicle should monitor the {other_vehicle_description} "
-                        f"because {evidence_sentence}."
-                    )
+                    attention_action = "monitor"
                 else:
-                    answer = (
-                        f"The ego vehicle does not need to pay strong attention to the "
-                        f"{other_vehicle_description} because {evidence_sentence}."
-                    )
+                    attention_action = "not pay strong attention to"
+
+                answer = (
+                    f"The ego vehicle should {attention_action} the {other_vehicle_description}. "
+                    f"{structured_evidence_sentence}"
+                )
+
 
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
@@ -1875,21 +1889,46 @@ class QAsGenerator():
                     f"will the interaction risk with {other_vehicle_location_description} be reduced?"
                 )
 
-                if risk_level == "high":
+                if risk_level == "low":
                     answer = (
-                        f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
-                        f"more time to react to the {other_vehicle_description}."
-                    )
-                elif risk_level == "medium":
-                    answer = (
-                        f"Slowing down may reduce the risk because it gives the ego vehicle "
-                        f"more time to react to the {other_vehicle_description}."
-                    )
-                else:
-                    answer = (
-                        f"Slowing down is not necessary for this object because the current "
+                        f"No, slowing down is not necessary for this object because the current "
                         f"interaction risk with the {other_vehicle_description} is low."
                     )
+
+                elif path_crossing_answer.startswith("Yes,"):
+                    answer = (
+                        f"Yes, slowing down would reduce the risk because the {other_vehicle_description} "
+                        f"is expected to interact with the ego vehicle's path, so a lower speed gives the ego vehicle "
+                        f"more time to react."
+                    )
+
+                elif vehicle_cuts_in:
+                    answer = (
+                        f"Yes, slowing down would reduce the risk because the {other_vehicle_description} "
+                        f"is cutting into the ego vehicle's lane, so a lower speed gives the ego vehicle "
+                        f"more time to react."
+                    )
+
+                elif lane_relative == 0:
+                    answer = (
+                        f"Slowing down may help, but the effect is limited because the "
+                        f"{other_vehicle_description} is not expected to directly cross the ego vehicle's path. "
+                        f"The ego vehicle should mainly monitor its motion and keep a safe following distance."
+                    )
+
+                elif lane_relative in [-1, 1]:
+                    answer = (
+                        f"Slowing down may not significantly reduce the interaction risk because the "
+                        f"{other_vehicle_description} is not expected to directly cross the ego vehicle's path. "
+                        f"The ego vehicle should mainly monitor its motion."
+                    )
+
+                else:
+                    answer = (
+                        f"Slowing down may reduce the risk, but the effect is uncertain because the "
+                        f"{other_vehicle_description} is not clearly on the ego vehicle's immediate path."
+                    )
+
 
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
@@ -1919,19 +1958,21 @@ class QAsGenerator():
                 )
 
                 if future_trend_info is not None:
-                    question = f"Will the interaction risk with {other_vehicle_location_description} increase in the near future?"
-
+                    question = (
+                                    f"Based on the short-term motion trend, is the interaction risk with "
+                                    f"{other_vehicle_location_description} likely to increase?"
+                                )
                     if future_trend_info['trend'] == "increasing":
                         if path_crossing_answer.startswith("No,"):
-                                answer = (
-                                    f"The interaction risk may increase because "
-                                    f"{future_trend_info['reason']}, even though it is not expected to directly cross the ego vehicle's path."
-                                )
+                            answer = (
+                                f"The risk may slightly increase because {future_trend_info['reason']}, "
+                                f"but it is not expected to directly cross the ego vehicle's path."
+                            )
                         else:
                             answer = (
-                                f"Yes, the interaction risk is likely to increase because "
+                                f"Yes, the risk is likely to increase because "
                                 f"{future_trend_info['reason']}."
-                                )
+                            )
                     elif future_trend_info['trend'] == "decreasing":
                         answer = (
                             f"No, the interaction risk is likely to decrease because "
