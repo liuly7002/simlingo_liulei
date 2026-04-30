@@ -1633,6 +1633,78 @@ class QAsGenerator():
 
         # 创新点函数
         if DEBUG:
+
+            def load_future_vehicle_by_id(current_image_path, vehicle_id, future_offsets=[1, 2]):
+                """
+                Load future boxes and find the same vehicle by actor id.
+                If the same vehicle cannot be found in future frames, return None.
+                """
+
+                current_boxes_path = current_image_path.replace('rgb', 'boxes').replace('.jpg', '.json.gz')
+                current_frame = int(os.path.basename(current_boxes_path).split('.')[0])
+                boxes_dir = os.path.dirname(current_boxes_path)
+
+                future_vehicles = []
+
+                for offset in future_offsets:
+                    future_frame = current_frame + offset
+                    future_boxes_path = os.path.join(boxes_dir, f"{future_frame:04d}.json.gz")
+
+                    if not os.path.exists(future_boxes_path):
+                        continue
+
+                    try:
+                        with gzip.open(future_boxes_path, 'rb') as f:
+                            future_data = json.loads(f.read().decode('utf-8'))
+                    except Exception:
+                        continue
+
+                    for obj in future_data:
+                        if obj.get('id', None) == vehicle_id and obj.get('class', None) in ['car', 'truck', 'bus', 'motorcycle', 'bicycle']:
+                            future_vehicles.append({
+                                'offset': offset,
+                                'vehicle': obj
+                            })
+                            break
+
+                if len(future_vehicles) == 0:
+                    return None
+
+                return future_vehicles
+
+
+            def summarize_future_interaction_trend(current_vehicle, future_vehicles):
+                """
+                Compare current distance with future distance of the same actor.
+                """
+
+                if future_vehicles is None or len(future_vehicles) == 0:
+                    return None
+
+                current_distance = float(current_vehicle.get('distance', 999.0))
+                last_future_vehicle = future_vehicles[-1]['vehicle']
+                future_distance = float(last_future_vehicle.get('distance', 999.0))
+
+                distance_delta = future_distance - current_distance
+
+                if distance_delta < -2.0:
+                    trend = "increasing"
+                    reason = "the vehicle becomes closer to the ego vehicle in future frames"
+                elif distance_delta > 2.0:
+                    trend = "decreasing"
+                    reason = "the vehicle moves farther away from the ego vehicle in future frames"
+                else:
+                    trend = "stable"
+                    reason = "the vehicle keeps a similar distance from the ego vehicle in future frames"
+
+                return {
+                    'trend': trend,
+                    'reason': reason,
+                    'current_distance': current_distance,
+                    'future_distance': future_distance,
+                    'distance_delta': distance_delta
+                }
+
             def determine_risk_counterfactual_path_crossing(
                     other_vehicle_location_description,
                     other_vehicle,
@@ -1803,16 +1875,6 @@ class QAsGenerator():
                     f"will the interaction risk with {other_vehicle_location_description} be reduced?"
                 )
 
-                # if risk_level in ["high", "medium"]:
-                #     answer = (
-                #         f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
-                #         f"more time to react to the {other_vehicle_description}."
-                #     )
-                # else:
-                #     answer = (
-                #         f"Slowing down is not necessary for this object because the current "
-                #         f"interaction risk with the {other_vehicle_description} is low."
-                #     )
                 if risk_level == "high":
                     answer = (
                         f"Yes, slowing down would reduce the risk because it gives the ego vehicle "
@@ -1841,9 +1903,58 @@ class QAsGenerator():
                     object_id=object_id,
                     object_tags=object_tags
                 )
-            
 
+                # ============================================================
+                # QA 4: Future-verified temporal risk QA
+                # ============================================================
+                future_vehicles = load_future_vehicle_by_id(
+                    current_image_path=self.current_path,
+                    vehicle_id=other_vehicle['id'],
+                    future_offsets=[1, 2]
+                )
 
+                future_trend_info = summarize_future_interaction_trend(
+                    current_vehicle=other_vehicle,
+                    future_vehicles=future_vehicles
+                )
+
+                if future_trend_info is not None:
+                    question = f"Will the interaction risk with {other_vehicle_location_description} increase in the near future?"
+
+                    if future_trend_info['trend'] == "increasing":
+                        if path_crossing_answer.startswith("No,"):
+                                answer = (
+                                    f"The interaction risk may increase because "
+                                    f"{future_trend_info['reason']}, even though it is not expected to directly cross the ego vehicle's path."
+                                )
+                        else:
+                            answer = (
+                                f"Yes, the interaction risk is likely to increase because "
+                                f"{future_trend_info['reason']}."
+                                )
+                    elif future_trend_info['trend'] == "decreasing":
+                        answer = (
+                            f"No, the interaction risk is likely to decrease because "
+                            f"{future_trend_info['reason']}."
+                        )
+                    else:
+                        answer = (
+                            f"The interaction risk is likely to remain stable because "
+                            f"{future_trend_info['reason']}."
+                        )
+
+                    self.add_qas_questions(
+                        qa_list=qas_conversation_vehicle,
+                        chain=4,
+                        layer=7,
+                        qa_type='planning',
+                        connection_up=[(4, 3), (4, 4), (4, 5), (4, 6)],
+                        connection_down=[(4, 0), (4, 1), (4, 2)],
+                        question=question,
+                        answer=answer,
+                        object_id=object_id,
+                        object_tags=object_tags
+                    )
 
 
         
@@ -2671,9 +2782,9 @@ class QAsGenerator():
 
 
 
-            ################################################ 👇一次调用生成一对QA 感知👇 ################################################                    
+            ################################################ 👇重点: 一次调用生成一对QA 感知👇 ################################################                    
 
-            # 固定问题: "Where on the road is {the black car that is nearby to the front of the ego vehicle} located?".
+            # "Where on the road is {the black car that is nearby to the front of the ego vehicle} located?".
             # 当前该周围车辆在哪里
 
             pointing_towards_junction = determine_other_vehicle_position(vehicle_location_description, 
@@ -2692,9 +2803,9 @@ class QAsGenerator():
             
 
 
-            ################################################ 👇一次调用生成一对QA 预测👇 ################################################                    
+            ################################################ 👇重点: 一次调用生成一对QA(预测)👇 ################################################                    
 
-            # 固定问题: "Where is {the black car that is nearby to the front of the ego vehicle} going?"
+            # "Where is {the black car that is nearby to the front of the ego vehicle} going?"
             # 当前该周围车辆将要去哪里
 
             determine_vehicle_trajectory(vehicle_location_description, vehicle,
@@ -2706,9 +2817,9 @@ class QAsGenerator():
             
             
             
-            ################################################ 👇一次调用生成一对QA 预测👇 ################################################                    
+            ################################################ 👇重点: 一次调用生成一对QA(预测)👇 ################################################                    
             
-            # 固定问题: "What is the moving status of {the black car that is nearby to the front of the ego vehicle}?"
+            # "What is the moving status of {the black car that is nearby to the front of the ego vehicle}?"
             # 当前该周围车辆的行驶状态是什么（正在移动还是静止）
             determine_vehicle_motion_status(vehicle_location_description,
                                                  vehicle, 
@@ -2722,9 +2833,9 @@ class QAsGenerator():
             
             
             
-            ################################################ 👇一次调用生成一对QA 规划👇 ################################################                    
+            ################################################ 👇重点: 一次调用生成一对QA(规划)👇 ################################################                    
 
-            # 固定问题: "The ego vehicle {下个路口左转\下个路口右转\下个路口直行\车道保持\左变道\右变道}. Is {the black car that is nearby to the front of the ego vehicle} potentially crossing the path of the ego vehicle?"
+            # "The ego vehicle {下个路口左转\下个路口右转\下个路口直行\车道保持\左变道\右变道}. Is {the black car that is nearby to the front of the ego vehicle} potentially crossing the path of the ego vehicle?"
             # 自车将要执行某个动作（下个路口左转\下个路口右转\下个路口直行\车道保持\左变道\右变道）。当前该周围车辆是否有可能与自车的行驶路径发生交叉（即存在潜在的碰撞风险）？
             determine_path_crossing(current_measurement, 
                                             ego_vehicle, 
