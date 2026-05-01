@@ -1908,11 +1908,12 @@ class QAsGenerator():
                 if same_future_road:
                     evidence_list.append("it may share the same future road with the ego vehicle")
 
-                if other_vehicle_points_towards_ego:
-                    evidence_list.append("it is pointing towards the ego vehicle")
-
+                # Direction-related evidence:
+                # Prefer junction-oriented description to avoid conflicting expressions.
                 if pointing_towards_junction:
                     evidence_list.append("it is pointing towards the junction")
+                elif other_vehicle_points_towards_ego:
+                    evidence_list.append("its heading may indicate a potential interaction with the ego vehicle")
 
                 if is_in_junction:
                     evidence_list.append("it is inside or near a junction")
