@@ -1659,13 +1659,27 @@ class QAsGenerator():
                     except Exception:
                         continue
 
+                    # for obj in future_data:
+                    #     if obj.get('id', None) == vehicle_id and obj.get('class', None) in ['car', 'truck', 'bus', 'motorcycle', 'bicycle']:
+                    #         future_vehicles.append({
+                    #             'offset': offset,
+                    #             'vehicle': obj
+                    #         })
+                    #         break
+                    vehicle_classes = ['car', 'truck', 'bus', 'motorcycle', 'bicycle']
                     for obj in future_data:
-                        if obj.get('id', None) == vehicle_id and obj.get('class', None) in ['car', 'truck', 'bus', 'motorcycle', 'bicycle']:
-                            future_vehicles.append({
-                                'offset': offset,
-                                'vehicle': obj
-                            })
-                            break
+                                if (
+                                    obj.get('id', None) == vehicle_id
+                                    and (
+                                        obj.get('class', None) in vehicle_classes
+                                        or obj.get('base_type', None) in vehicle_classes
+                                    )
+                                ):
+                                    future_vehicles.append({
+                                        'offset': offset,
+                                        'vehicle': obj
+                                    })
+                                    break
 
                 if len(future_vehicles) == 0:
                     return None
