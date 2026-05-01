@@ -105,6 +105,24 @@ class QAsGenerator():
         }
         self.stats_p3 = {'perception': 0, 'planning': 0, 'prediction': 0}
 
+        self.risk_chain_stats = {
+            'num_risk_chains': 0,
+            'risk_level_low': 0,
+            'risk_level_medium': 0,
+            'risk_level_high': 0,
+            'num_counterfactual_qas': 0,
+            'num_future_trend_qas': 0,
+            'future_trend_increasing': 0,
+            'future_trend_decreasing': 0,
+            'future_trend_stable': 0,
+            'num_inconsistent_risk_chains': 0,
+
+            # 下面这3个只用于调试一致性规则
+            'inconsistent_low_with_many_evidence': 0,
+            'inconsistent_high_without_evidence': 0,
+            'warning_low_risk_but_future_increasing': 0  # 当前风险等级较低,但短时未来趋势显示风险正在上升
+        }
+
         self.frame_num = 0
         self.skipped_frames = 0
 
@@ -426,6 +444,7 @@ class QAsGenerator():
                 'num_objects': self.total_num_objects, 
                 'num_questions_per_category': self.num_questions_per_category,
                 'stats_p3': self.stats_p3,
+                'risk_chain_stats': self.risk_chain_stats,
             }, f, indent=4)
         print("Stats saved.")
 
@@ -490,6 +509,12 @@ class QAsGenerator():
                 if 'object_tags' in q_dic:
                     qa_item['object_tags'] = q_dic['object_tags']
 
+                if 'object_id' in q_dic:
+                    qa_item['object_id'] = q_dic['object_id']
+
+                if 'qa_meta' in q_dic:
+                    qa_item['qa_meta'] = q_dic['qa_meta']
+
                 qa_data[q_dic['type']].append(qa_item)
 
         # easier to debug:
@@ -501,7 +526,6 @@ class QAsGenerator():
         pathlib.Path(save_dir).parent.mkdir(exist_ok=True, parents=True)
         with gzip.open(save_dir, 'wt', encoding='utf-8') as f:
             json.dump(tick_data, f, indent=4)
-
 
     def generate_2d_box_from_projected_points(self, projected_points):  # 计算最小外接轴对齐矩形  坐标为左上、右下
         return [
@@ -545,26 +569,46 @@ class QAsGenerator():
         return object_key, object_info
 
     def add_qas_questions(self, qa_list, chain, layer, qa_type, connection_up, connection_down, 
-                          question, answer, object_id=None, object_tags=[]):
-        qa_list.append({'chain': chain, 
-                        'layer': layer, 
-                        'type': qa_type,
-                        'object_id': object_id,
-                        'connection_up': connection_up, 
-                        'connection_down': connection_down, 
-                        'from': 'human', 
-                        'value': question,
-                        'object_tags': object_tags})
-        
-        qa_list.append({'chain': chain, 
-                        'layer': layer, 
-                        'type': qa_type,
-                        'object_id': object_id,
-                        'connection_up': connection_up, 
-                        'connection_down': connection_down, 
-                        'from': 'gpt', 
-                        'value': answer,
-                        'object_tags': object_tags})
+                          question, answer, object_id=None, object_tags=None, qa_meta=None):
+        """
+        Add a QA pair.
+
+        qa_meta is optional and is mainly used for the risk reasoning chain.
+        It will not affect existing QA generation if not provided.
+        """
+        if object_tags is None:
+            object_tags = []
+
+        q_item = {
+            'chain': chain,
+            'layer': layer,
+            'type': qa_type,
+            'object_id': object_id,
+            'connection_up': connection_up,
+            'connection_down': connection_down,
+            'from': 'human',
+            'value': question,
+            'object_tags': object_tags
+        }
+
+        a_item = {
+            'chain': chain,
+            'layer': layer,
+            'type': qa_type,
+            'object_id': object_id,
+            'connection_up': connection_up,
+            'connection_down': connection_down,
+            'from': 'gpt',
+            'value': answer,
+            'object_tags': object_tags
+        }
+
+        if qa_meta is not None:
+            q_item['qa_meta'] = qa_meta
+            a_item['qa_meta'] = qa_meta
+
+        qa_list.append(q_item)
+        qa_list.append(a_item)
 
     def process_pedestrians(self, other_pedestrians, important_objects, object_infos):
         """
@@ -1659,13 +1703,6 @@ class QAsGenerator():
                     except Exception:
                         continue
 
-                    # for obj in future_data:
-                    #     if obj.get('id', None) == vehicle_id and obj.get('class', None) in ['car', 'truck', 'bus', 'motorcycle', 'bicycle']:
-                    #         future_vehicles.append({
-                    #             'offset': offset,
-                    #             'vehicle': obj
-                    #         })
-                    #         break
                     vehicle_classes = ['car', 'truck', 'bus', 'motorcycle', 'bicycle']
                     for obj in future_data:
                                 if (
@@ -1685,7 +1722,6 @@ class QAsGenerator():
                     return None
 
                 return future_vehicles
-
 
             def summarize_future_interaction_trend(current_vehicle, future_vehicles):
                 """
@@ -1734,6 +1770,8 @@ class QAsGenerator():
                 Generate risk-aware and counterfactual QA pairs for vehicle-centric path-crossing reasoning.
                 """
 
+                object_id = other_vehicle.get('id', None)
+
                 distance = other_vehicle.get('distance', 999.0)
                 lane_relative = other_vehicle.get('lane_relative_to_ego', None)
                 vehicle_cuts_in = other_vehicle.get('vehicle_cuts_in', False)
@@ -1776,6 +1814,29 @@ class QAsGenerator():
                     risk_score += 1
 
                 # =========================
+                # Structured risk evidence
+                # =========================
+
+                # 可以直接统计模型回答是否覆盖了这些 evidence
+                path_crossing_flag = path_crossing_answer.startswith("Yes,")
+
+                risk_evidence_dict = {
+                    'close_distance': bool(distance < 20),
+                    'very_close_distance': bool(distance < 10),
+                    'path_crossing': bool(path_crossing_flag),
+                    'vehicle_cuts_in': bool(vehicle_cuts_in),
+                    'same_future_road': bool(same_future_road),
+                    'points_towards_ego': bool(other_vehicle_points_towards_ego),
+                    'points_towards_junction': bool(pointing_towards_junction),
+                    'in_junction': bool(is_in_junction),
+                    'same_lane': bool(lane_relative == 0),
+                    'neighbor_lane': bool(lane_relative in [-1, 1]),
+                    'opposite_or_different_direction': bool(not same_direction)
+                }
+
+                risk_chain_id = f"risk_chain_vehicle_{object_id if object_id is not None else 'unknown'}"
+
+                # =========================
                 # 2. Risk level
                 # =========================
                 if risk_score >= 6:
@@ -1788,6 +1849,10 @@ class QAsGenerator():
                     risk_level = "low"
                     risk_level_id = 1
 
+                # 如果当前规则判断该车辆不会与自车路径发生直接交叉，
+                # 则即使综合 risk_score 较高，也不直接标记为 high risk，
+                # 而是最高限制为 medium risk。
+                # 这样可以避免把“附近但不直接交互”的车辆误标为最高风险。
                 if path_crossing_answer.startswith("No,"):
                     if risk_score < 5:
                         risk_level = "low"
@@ -1795,6 +1860,39 @@ class QAsGenerator():
                     else:
                         risk_level = "medium"
                         risk_level_id = 2
+
+                risk_level_id = {'low': 1, 'medium': 2, 'high': 3}[risk_level]
+
+                base_risk_meta = {
+                    'chain_type': 'risk_reasoning_chain',
+                    'risk_chain_id': risk_chain_id,
+                    'object_id': object_id,
+                    'object_tags': object_tags,
+                    'risk_score': int(risk_score),
+                    'risk_level': risk_level,
+                    'risk_level_id': int(risk_level_id),
+                    'risk_evidence': risk_evidence_dict,
+                    'distance': float(distance),
+                    'lane_relative_to_ego': lane_relative,
+                    'same_future_road': bool(same_future_road),
+                    'path_crossing': bool(path_crossing_flag)
+                }
+
+                def check_risk_chain_consistency(risk_level, risk_evidence_dict, future_trend_info=None):
+                    """
+                    Lightweight consistency check for the generated risk reasoning chain.
+                    This is only used for debugging/statistics and does not stop generation.
+                    """
+                    num_evidence = sum(bool(v) for v in risk_evidence_dict.values())
+
+                    if risk_level == 'low' and num_evidence >= 5:
+                        return False, 'low_with_many_evidence'
+
+                    if risk_level == 'high' and num_evidence == 0:
+                        return False, 'high_without_evidence'
+
+                    return True, None
+
 
                 # =========================
                 # 3. Evidence sentence
@@ -1840,17 +1938,18 @@ class QAsGenerator():
                     for idx, evidence in enumerate(evidence_list, start=1):
                         structured_evidence_items.append(f"{idx}) {evidence}")
                     structured_evidence_sentence = "Risk evidence: " + "; ".join(structured_evidence_items) + "."
-                
-                object_id = other_vehicle['id']
 
                 # ============================================================
-                # QA 1: Risk-level QA
+                # QA 1: Risk-level QA 风险链第一阶段:风险评估
                 # ============================================================
                 question = f"How risky is the potential interaction with {other_vehicle_location_description}?"
                 # answer = f"The interaction risk is {risk_level} because {evidence_sentence}."
                 answer = (f"The interaction risk is level {risk_level_id} ({risk_level}) "
                           f"because {evidence_sentence}." )
 
+                qa1_meta = dict(base_risk_meta)
+                qa1_meta['risk_chain_stage'] = 'risk_level_estimation'
+                
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
                     chain=4,
@@ -1861,11 +1960,12 @@ class QAsGenerator():
                     question=question,
                     answer=answer,
                     object_id=object_id,
-                    object_tags=object_tags
+                    object_tags=object_tags,
+                    qa_meta=qa1_meta
                 )
 
                 # ============================================================
-                # QA 2: Evidence-grounded QA
+                # QA 2: Evidence-grounded QA 风险链第二阶段:证据归因
                 # ============================================================
                 question = f"Why should the ego vehicle pay attention to {other_vehicle_location_description}?"
 
@@ -1881,6 +1981,12 @@ class QAsGenerator():
                     f"{structured_evidence_sentence}"
                 )
 
+                qa2_meta = dict(base_risk_meta)
+                qa2_meta['risk_chain_stage'] = 'evidence_attribution'
+                # qa2_meta['num_positive_evidence'] = int(sum(risk_evidence_dict.values()))
+                # 这里统计的是自然语言答案中真正写出来的 evidence 数量
+                qa2_meta['num_positive_evidence'] = len(evidence_list)
+                qa2_meta['evidence_text_list'] = evidence_list
 
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
@@ -1892,24 +1998,29 @@ class QAsGenerator():
                     question=question,
                     answer=answer,
                     object_id=object_id,
-                    object_tags=object_tags
+                    object_tags=object_tags,
+                    qa_meta=qa2_meta
                 )
 
                 # ============================================================
-                # QA 3: Counterfactual slowing-down QA
+                # QA 3: Counterfactual slowing-down QA 风险链第三阶段:反事实干预
                 # ============================================================
                 question = (
                     f"If the ego vehicle slows down while it {command_str}, "
                     f"will the interaction risk with {other_vehicle_location_description} be reduced?"
                 )
 
+                counterfactual_effect = "uncertain"
+
                 if risk_level == "low":
+                    counterfactual_effect = "not_necessary"
                     answer = (
                         f"No, slowing down is not necessary for this object because the current "
                         f"interaction risk with the {other_vehicle_description} is low."
                     )
 
                 elif path_crossing_answer.startswith("Yes,"):
+                    counterfactual_effect = "risk_reduced"
                     answer = (
                         f"Yes, slowing down would reduce the risk because the {other_vehicle_description} "
                         f"is expected to interact with the ego vehicle's path, so a lower speed gives the ego vehicle "
@@ -1917,6 +2028,7 @@ class QAsGenerator():
                     )
 
                 elif vehicle_cuts_in:
+                    counterfactual_effect = "risk_reduced"
                     answer = (
                         f"Yes, slowing down would reduce the risk because the {other_vehicle_description} "
                         f"is cutting into the ego vehicle's lane, so a lower speed gives the ego vehicle "
@@ -1924,6 +2036,7 @@ class QAsGenerator():
                     )
 
                 elif lane_relative == 0:
+                    counterfactual_effect = "partially_reduced"
                     answer = (
                         f"Slowing down may help, but the effect is limited because the "
                         f"{other_vehicle_description} is not expected to directly cross the ego vehicle's path. "
@@ -1931,6 +2044,7 @@ class QAsGenerator():
                     )
 
                 elif lane_relative in [-1, 1]:
+                    counterfactual_effect = "limited_effect"
                     answer = (
                         f"Slowing down may not significantly reduce the interaction risk because the "
                         f"{other_vehicle_description} is not expected to directly cross the ego vehicle's path. "
@@ -1938,11 +2052,16 @@ class QAsGenerator():
                     )
 
                 else:
+                    counterfactual_effect = "uncertain"
                     answer = (
                         f"Slowing down may reduce the risk, but the effect is uncertain because the "
                         f"{other_vehicle_description} is not clearly on the ego vehicle's immediate path."
                     )
 
+                qa3_meta = dict(base_risk_meta)
+                qa3_meta['risk_chain_stage'] = 'counterfactual_intervention'
+                qa3_meta['counterfactual_action'] = 'slow_down'
+                qa3_meta['counterfactual_effect'] = counterfactual_effect
 
                 self.add_qas_questions(
                     qa_list=qas_conversation_vehicle,
@@ -1954,11 +2073,12 @@ class QAsGenerator():
                     question=question,
                     answer=answer,
                     object_id=object_id,
-                    object_tags=object_tags
+                    object_tags=object_tags,
+                    qa_meta=qa3_meta
                 )
 
                 # ============================================================
-                # QA 4: Future-verified temporal risk QA
+                # QA 4: Future-verified temporal risk QA 风险链第四阶段:未来趋势验证
                 # ============================================================
                 future_vehicles = load_future_vehicle_by_id(
                     current_image_path=self.current_path,
@@ -1973,8 +2093,8 @@ class QAsGenerator():
 
                 if future_trend_info is not None:
                     question = (
-                                    f"Based on the short-term motion trend, is the interaction risk with "
-                                    f"{other_vehicle_location_description} likely to increase?"
+                                    f"Based on the short-term motion trend, how is the short-term interaction risk with "
+                                    f"{other_vehicle_location_description} likely to change?"
                                 )
                     if future_trend_info['trend'] == "increasing":
                         if path_crossing_answer.startswith("No,"):
@@ -1998,6 +2118,13 @@ class QAsGenerator():
                             f"{future_trend_info['reason']}."
                         )
 
+                    qa4_meta = dict(base_risk_meta)
+                    qa4_meta['risk_chain_stage'] = 'future_temporal_verification'
+                    qa4_meta['future_risk_trend'] = future_trend_info['trend']
+                    qa4_meta['future_current_distance'] = float(future_trend_info['current_distance'])
+                    qa4_meta['future_distance'] = float(future_trend_info['future_distance'])
+                    qa4_meta['future_distance_delta'] = float(future_trend_info['distance_delta'])
+
                     self.add_qas_questions(
                         qa_list=qas_conversation_vehicle,
                         chain=4,
@@ -2008,9 +2135,56 @@ class QAsGenerator():
                         question=question,
                         answer=answer,
                         object_id=object_id,
-                        object_tags=object_tags
+                        object_tags=object_tags,
+                        qa_meta=qa4_meta
                     )
 
+                # =========================
+                # Update risk-chain statistics
+                # =========================
+                self.risk_chain_stats['num_risk_chains'] += 1
+
+                if risk_level == 'low':
+                    self.risk_chain_stats['risk_level_low'] += 1
+                elif risk_level == 'medium':
+                    self.risk_chain_stats['risk_level_medium'] += 1
+                elif risk_level == 'high':
+                    self.risk_chain_stats['risk_level_high'] += 1
+
+                self.risk_chain_stats['num_counterfactual_qas'] += 1
+
+                if future_trend_info is not None:
+                    self.risk_chain_stats['num_future_trend_qas'] += 1
+                    trend = future_trend_info['trend']
+                    if trend == 'increasing':
+                        self.risk_chain_stats['future_trend_increasing'] += 1
+                    elif trend == 'decreasing':
+                        self.risk_chain_stats['future_trend_decreasing'] += 1
+                    elif trend == 'stable':
+                        self.risk_chain_stats['future_trend_stable'] += 1
+                
+                # 当前风险等级较低，但短时未来趋势显示风险正在上升。
+                # 这不是严格冲突，只作为 warning 统计。
+                if (
+                    future_trend_info is not None
+                    and future_trend_info['trend'] == 'increasing'
+                    and risk_level == 'low'
+                ):
+                    self.risk_chain_stats['warning_low_risk_but_future_increasing'] += 1
+
+                # 一致性检查：如果风险等级较低但有很多证据，或者风险等级较高但没有证据，则标记为不一致
+                is_consistent, inconsistent_reason = check_risk_chain_consistency(
+                                    risk_level=risk_level,
+                                    risk_evidence_dict=risk_evidence_dict,
+                                    future_trend_info=future_trend_info
+                                )
+                if not is_consistent:
+                    self.risk_chain_stats['num_inconsistent_risk_chains'] += 1
+
+                    if inconsistent_reason == 'low_with_many_evidence':
+                        self.risk_chain_stats['inconsistent_low_with_many_evidence'] += 1
+                    elif inconsistent_reason == 'high_without_evidence':
+                        self.risk_chain_stats['inconsistent_high_without_evidence'] += 1
 
         
         

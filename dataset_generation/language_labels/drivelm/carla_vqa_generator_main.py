@@ -171,4 +171,4 @@ if __name__ == '__main__':
         for i in range(len_data_boxes):
             qas_generator.create_qa_pairs(i)
 
-    # qas_generator.save_stats() # does not work with multi_processing
+    qas_generator.save_stats() # does not work with multi_processing
