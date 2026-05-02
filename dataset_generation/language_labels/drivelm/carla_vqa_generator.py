@@ -353,7 +353,7 @@ class QAsGenerator():
         
         
         
-        ################################################ 👇👇 ################################################        
+        ################################################ 👇保存👇 ################################################        
         # Save examples if specified
         if self.save_examples:
             # Load and draw on the image
@@ -511,7 +511,6 @@ class QAsGenerator():
 
                 if 'object_id' in q_dic:
                     qa_item['object_id'] = q_dic['object_id']
-
                 if 'qa_meta' in q_dic:
                     qa_item['qa_meta'] = q_dic['qa_meta']
 
@@ -1816,10 +1815,8 @@ class QAsGenerator():
                 # =========================
                 # Structured risk evidence
                 # =========================
-
                 # 可以直接统计模型回答是否覆盖了这些 evidence
                 path_crossing_flag = path_crossing_answer.startswith("Yes,")
-
                 risk_evidence_dict = {
                     'close_distance': bool(distance < 20),
                     'very_close_distance': bool(distance < 10),
@@ -1920,10 +1917,10 @@ class QAsGenerator():
 
                 if lane_relative == 0:
                     evidence_list.append("it is in the same lane as the ego vehicle")
-                elif lane_relative == -1:
-                    evidence_list.append("it is on the left lane of the ego vehicle")
-                elif lane_relative == 1:
-                    evidence_list.append("it is on the right lane of the ego vehicle")
+                # elif lane_relative == -1:
+                #     evidence_list.append("it is on the left lane of the ego vehicle")
+                # elif lane_relative == 1:
+                #     evidence_list.append("it is on the right lane of the ego vehicle")
 
                 if len(evidence_list) == 0:
                     evidence_sentence = "there is no strong evidence of an immediate risky interaction"
@@ -1944,7 +1941,6 @@ class QAsGenerator():
                 # QA 1: Risk-level QA 风险链第一阶段:风险评估
                 # ============================================================
                 question = f"How risky is the potential interaction with {other_vehicle_location_description}?"
-                # answer = f"The interaction risk is {risk_level} because {evidence_sentence}."
                 answer = (f"The interaction risk is level {risk_level_id} ({risk_level}) "
                           f"because {evidence_sentence}." )
 
@@ -1957,7 +1953,8 @@ class QAsGenerator():
                     layer=4,
                     qa_type='planning',
                     connection_up=[(4, 3)],
-                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    # connection_down=[(4, 0), (4, 1), (4, 2)],
+                    connection_down=[(4, 0), (4, 1), (4, 2), (4, 3)],
                     question=question,
                     answer=answer,
                     object_id=object_id,
@@ -1984,7 +1981,6 @@ class QAsGenerator():
 
                 qa2_meta = dict(base_risk_meta)
                 qa2_meta['risk_chain_stage'] = 'evidence_attribution'
-                # qa2_meta['num_positive_evidence'] = int(sum(risk_evidence_dict.values()))
                 # 这里统计的是自然语言答案中真正写出来的 evidence 数量
                 qa2_meta['num_positive_evidence'] = len(evidence_list)
                 qa2_meta['evidence_text_list'] = evidence_list
@@ -1995,7 +1991,8 @@ class QAsGenerator():
                     layer=5,
                     qa_type='planning',
                     connection_up=[(4, 3), (4, 4)],
-                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    # connection_down=[(4, 0), (4, 1), (4, 2)],
+                    connection_down=[(4, 0), (4, 1), (4, 2), (4, 3), (4, 4)],
                     question=question,
                     answer=answer,
                     object_id=object_id,
@@ -2070,7 +2067,8 @@ class QAsGenerator():
                     layer=6,
                     qa_type='planning',
                     connection_up=[(4, 3), (4, 4), (4, 5)],
-                    connection_down=[(4, 0), (4, 1), (4, 2)],
+                    # connection_down=[(4, 0), (4, 1), (4, 2), (4, 3)],
+                    connection_down=[(4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5)],
                     question=question,
                     answer=answer,
                     object_id=object_id,
@@ -2097,16 +2095,32 @@ class QAsGenerator():
                                     f"Based on the short-term motion trend, how is the short-term interaction risk with "
                                     f"{other_vehicle_location_description} likely to change?"
                                 )
+                    # if future_trend_info['trend'] == "increasing":
+                    #     if path_crossing_answer.startswith("No,"):
+                    #         answer = (
+                    #             f"The risk may slightly increase because {future_trend_info['reason']}, "
+                    #             f"but it is not expected to directly cross the ego vehicle's path."
+                    #         )
+                    #     else:
+                    #         answer = (
+                    #             f"Yes, the risk is likely to increase because "
+                    #             f"{future_trend_info['reason']}."
+                    #         )
                     if future_trend_info['trend'] == "increasing":
                         if path_crossing_answer.startswith("No,"):
                             answer = (
                                 f"The risk may slightly increase because {future_trend_info['reason']}, "
                                 f"but it is not expected to directly cross the ego vehicle's path."
                             )
+                        elif risk_level == "high":
+                            answer = (
+                                f"The risk is likely to increase because {future_trend_info['reason']}. "
+                                f"The ego vehicle should pay close attention and be prepared to slow down."
+                            )
                         else:
                             answer = (
-                                f"Yes, the risk is likely to increase because "
-                                f"{future_trend_info['reason']}."
+                                f"The risk may increase because {future_trend_info['reason']}. "
+                                f"The ego vehicle should monitor the vehicle and keep a safe margin."
                             )
                     elif future_trend_info['trend'] == "decreasing":
                         answer = (
@@ -2132,7 +2146,8 @@ class QAsGenerator():
                         layer=7,
                         qa_type='planning',
                         connection_up=[(4, 3), (4, 4), (4, 5), (4, 6)],
-                        connection_down=[(4, 0), (4, 1), (4, 2)],
+                        # connection_down=[(4, 0), (4, 1), (4, 2)],
+                        connection_down=[(4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6)],
                         question=question,
                         answer=answer,
                         object_id=object_id,
@@ -2838,8 +2853,6 @@ class QAsGenerator():
 
         for vehicle in other_vehicles:
             
-            
-            
 
             ################################################ 👇判断当前该周围车辆"是否需要考虑"👇 ################################################        
 
@@ -3185,28 +3198,28 @@ class QAsGenerator():
         key_object_infos = {}   # 场景中重点关注的对象的信息
 
         # Generate questions and answers for different categories
-        # 1. 周围车  生成周围车的相关信息
+        # 1. 周围车  生成周围车的相关信息  chain=4 layer=0,1,2,3,4,5,6,7
         res = self.generate_vehicle_information(other_vehicles, ego, important_objects, key_object_infos,
                                                 ego['num_lanes_same_direction'], vehicles_by_id, measurements, scenario)
         qas_conversation_vehicle, important_objects, key_object_infos = res
 
-        # 2. 自车  分析道路布局
+        # 2. 自车  分析道路布局  chain=3
         res = self.analyze_road_layout(ego, important_objects, key_object_infos, measurements, scenario)
         qas_conversation_roadlayout, important_objects, key_object_infos = res
 
-        # 3. 停止信号  处理停止标志
+        # 3. 停止信号  处理停止标志  chain=1
         res = self.process_stop_signs(stop_signs, important_objects, key_object_infos)
         qas_conversation_stopsign, important_objects, key_object_infos, ss_info, ss_object_tags = res
 
-        # 4. 交通信号灯   处理交通信号灯
+        # 4. 交通信号灯   处理交通信号灯  chain=2
         res = self.process_traffic_lights(traffic_lights, old_traffic_lights, ego, important_objects, key_object_infos)
         qas_conversation_trafficlight, important_objects, key_object_infos, tl_info, tl_object_tags = res
 
-        # 5.行人   处理行人
+        # 5.行人   处理行人  chain=5
         res = self.process_pedestrians(pedestrians, important_objects, key_object_infos)
         qas_conversation_pedestrian, important_objects, key_object_infos = res
 
-        # 6. 自车   生成自车动作
+        # 6. 自车   生成自车动作  chain=1,2,3,6
         res = self.generate_ego_vehicle_actions(ego_vehicle, pedestrians, ego, important_objects, key_object_infos,
                                                 vehicles_by_id, tl_info, ss_info, static_objects, measurements,
                                                 scenario, stop_signs, ss_object_tags, tl_object_tags)
