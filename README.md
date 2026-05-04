@@ -89,5 +89,5 @@ python a_validate/validate_graph_structure.py
 python a_validate/validate_risk_consistency.py
 
 # 第四轮分析【重点】
-
+python a_validate/validate_action_consistency.py
 ```

@@ -5,6 +5,7 @@ import glob
 from collections import Counter, defaultdict
 
 """
+第一轮验证脚本
 风险推理链 QA 元信息完整性验证脚本
 该脚本可以验证以下问题:
 1. 新增 Risk Graph QA 是否都带有 qa_meta

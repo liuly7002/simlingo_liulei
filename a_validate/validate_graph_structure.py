@@ -5,6 +5,7 @@ import glob
 from collections import Counter, defaultdict
 
 """
+第二轮验证脚本
 风险图 QA 连接关系与链路完整性验证脚本
 该脚本可以验证以下问题:
 1. layer 4~7 的 con_up / con_down 是否符合预期图结构
