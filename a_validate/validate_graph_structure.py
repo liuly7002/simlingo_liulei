@@ -4,9 +4,17 @@ import json
 import glob
 from collections import Counter, defaultdict
 
-# 修改成你的输出目录
-VQA_ROOT = "/root/simlingo/database/simlingo_v2_2026_02_28/drivelm"
+"""
+风险图 QA 连接关系与链路完整性验证脚本
+该脚本可以验证以下问题:
+1. layer 4~7 的 con_up / con_down 是否符合预期图结构
+2. 每个新增风险 QA 是否携带 qa_meta
+3. 每个新增风险 QA 是否绑定 object_tags
+4. 同一 object_id 的 layer 4、5、6 是否形成连续风险推理链
+"""
 
+# 修改1：更新VQA_ROOT路径以匹配新的数据位置
+VQA_ROOT = "/root/simlingo/database/simlingo_v2_2026_02_28/drivelm"
 vqa_files = glob.glob(os.path.join(VQA_ROOT, "**", "vqa", "*.json.gz"), recursive=True)
 
 expected_edges = {

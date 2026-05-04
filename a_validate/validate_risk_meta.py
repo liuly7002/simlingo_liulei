@@ -4,15 +4,31 @@ import json
 import glob
 from collections import Counter, defaultdict
 
+"""
+风险推理链 QA 元信息完整性验证脚本
+该脚本可以验证以下问题:
+1. 新增 Risk Graph QA 是否都带有 qa_meta
+2. qa_meta 中是否有 risk_chain_stage
+3. 不同阶段是否包含对应的必要字段
+4. risk_score / evidence_text_list / future_distance_delta 的类型是否正确
+5. 风险等级分布是否合理
+6. 反事实结果分布是否合理
+7. 未来趋势分布是否合理
+"""
+
+
+# 修改1：更新VQA_ROOT路径以匹配新的数据位置
 VQA_ROOT = "/root/simlingo/database/simlingo_v2_2026_02_28/drivelm"
 vqa_files = glob.glob(os.path.join(VQA_ROOT, "**", "vqa", "*.json.gz"), recursive=True)
 
+
 required_common_keys = [
-    "risk_level",
-    "risk_level_id",
-    "risk_score",
-    "distance",
+    "risk_level",     # 当前风险等级文本，例如 low / medium / high
+    "risk_level_id",  # 当前风险等级对应的数值 ID
+    "risk_score",     # 当前风险分数
+    "distance",       # 当前目标对象与自车的距离
 ]
+
 
 required_by_stage = {
     "risk_level_estimation": [

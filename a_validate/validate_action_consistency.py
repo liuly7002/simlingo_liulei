@@ -4,6 +4,26 @@ import json
 import glob
 from collections import Counter, defaultdict
 
+"""
+该脚本可以验证以下问题:
+1. VQA 文件是否能找到对应 measurements 文件
+2. 当前帧 expert 是否存在减速/避险迹象
+3. high risk 是否对应 expert_slowdown
+4. counterfactual_effect == risk_reduced 是否对应 expert_slowdown
+5. future_risk_trend == increasing 是否存在和 expert_slowdown 的冲突
+6. QA4 中强减速提示是否和 expert 行为一致
+7. 不同风险等级、反事实结果、未来趋势与 expert_slowdown 的统计关系
+
+备注:
+该脚本主要验证 3 类动作一致性规则:
+1. 高风险对象是否对应 expert 减速行为
+2. 反事实说"减速能降低风险",expert 是否真的有减速迹象
+3. 未来风险上升时,expert 是否有对应动作倾向
+3.1 强动作提示冲突: 反事实问答中如果明确提示了“应该减速”或者“需要减速”，但 expert 没有任何减速迹象
+3.2 弱动作提示冲突: 反事实问答中如果只是提示“准备减速”或者“可能需要减速”，但 expert 没有任何减速
+
+"""
+
 VQA_ROOT = "/root/simlingo/database/simlingo_v2_2026_02_28/drivelm"
 vqa_files = glob.glob(os.path.join(VQA_ROOT, "**", "vqa", "*.json.gz"), recursive=True)
 
@@ -133,21 +153,6 @@ for path in vqa_files:
             })
 
         # 未来风险上升但 expert 没有减速迹象
-        # if future_trend == "increasing" and not expert_slowdown:
-        #     issues.append({
-        #         "type": "future_increasing_without_expert_slowdown",
-        #         "vqa_path": path,
-        #         "measurement_path": meas_path,
-        #         "object": obj_key,
-        #         "future_delta": m4.get("future_distance_delta"),
-        #         "speed": safe_get(meas, "speed"),
-        #         "target_speed": safe_get(meas, "target_speed"),
-        #         "brake": safe_get(meas, "control_brake"),
-        #         "throttle": safe_get(meas, "throttle"),
-        #         "speed_reduced_by_obj_id": safe_get(meas, "speed_reduced_by_obj_id"),
-        #         "Q": qa4.get("Q") if qa4 else None,
-        #         "A": qa4.get("A") if qa4 else None,
-        #     })
         if future_trend == "increasing" and not expert_slowdown:
             qa4_answer = qa4.get("A", "") if qa4 else ""
 
@@ -209,13 +214,8 @@ if num_future_increasing > 0:
 
 # ================== Save selected action-consistency issues to txt ==================
 
-output_txt = "action_consistency_issues.txt"
+output_txt = f"{VQA_ROOT}/action_consistency_issues.txt"
 
-# target_types = {
-#     "future_increasing_without_expert_slowdown",
-#     "risk_reduced_counterfactual_without_expert_slowdown",
-#     "high_risk_without_expert_slowdown",
-# }
 target_types = {
     "future_increasing_strong_hint_without_expert_slowdown",
     "risk_reduced_counterfactual_without_expert_slowdown",

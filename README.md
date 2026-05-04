@@ -69,3 +69,25 @@ python dataset_generation/data_buckets/pkl2csv.py
 ```
 
 ## 三、关于 "Language" 数据的相关操作
+
+1. 生成 drivelm 类型 .json.gz 文件
+```
+cd simlingo
+conda activate simlingo
+export PYTHONPATH=$PYTHONPATH:/root/simlingo
+python dataset_generation/language_labels/drivelm/carla_vqa_generator_main.py
+```
+2. 对 .json.gz 文件内容进行分析验证
+```
+# 第一轮分析【风险推理链 QA 元信息完整性验证脚本,非重点】
+python a_validate/validate_risk_meta.py
+
+# 第二轮分析【风险图 QA 连接关系与链路完整性验证脚本,非重点】
+python a_validate/validate_graph_structure.py
+
+# 第三轮分析【重点】
+python a_validate/validate_risk_consistency.py
+
+# 第四轮分析【重点】
+
+```

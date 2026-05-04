@@ -4,6 +4,25 @@ import json
 import glob
 from collections import Counter, defaultdict
 
+"""
+风险图 QA 语义一致性验证脚本
+该脚本可以验证以下问题:
+1. low / medium / high 风险等级是否与证据数量一致
+2. high risk 是否有证据支撑
+3. low risk 是否不应出现明显 risk_reduced 的反事实结果
+4. 当前风险等级是否与未来风险趋势存在潜在冲突
+5. future_risk_trend 是否与 future_distance_delta 的符号一致
+6. 问题样本是否可以输出到 txt 供人工抽查
+
+备注:
+该脚本主要验证 5 类语义一致性规则:
+1. 低风险对象不应该有很多正向风险证据
+2. 高风险对象不应该没有任何风险证据
+3. 低风险对象不应该被“减速显著降低风险”
+4. 低风险对象不应该同时显示未来风险上升
+5. 未来风险趋势必须和距离变化方向一致
+"""
+
 VQA_ROOT = "/root/simlingo/database/simlingo_v2_2026_02_28/drivelm"
 vqa_files = glob.glob(os.path.join(VQA_ROOT, "**", "vqa", "*.json.gz"), recursive=True)
 
@@ -144,13 +163,9 @@ issue_counter = Counter(x["type"] for x in issues)
 print("\n========== Issue counter ==========")
 print(issue_counter)
 
-# print("\n========== First 30 issues ==========")
-# for x in issues[:30]:
-#     print(json.dumps(x, indent=2, ensure_ascii=False))
-
 # ================== Save selected issues to txt ==================
 
-output_txt = "risk_consistency_issues.txt"
+output_txt = f"{VQA_ROOT}/risk_consistency_issues.txt"
 
 target_types = {
     "low_risk_with_many_evidence",
