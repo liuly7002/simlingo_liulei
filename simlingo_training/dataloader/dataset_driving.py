@@ -209,7 +209,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                         commentary_file = ujson.load(f)
                         commentary_exists = True
                 except (FileNotFoundError, ujson.JSONDecodeError):  # 执行
-                    print(f"[{__file__}] commentary文件是空的")
+                    # print(f"[{__file__}] commentary文件是空的")
                     commentary_exists = False
                     commentary_file = None
 

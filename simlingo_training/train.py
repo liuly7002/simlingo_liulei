@@ -105,20 +105,20 @@ def main(cfg: TrainConfig):
             stage=2, loss_scale=cfg.fp16_loss_scale, logging_batch_size_per_gpu=cfg.data_module.batch_size
         )
 
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        save_top_k=-1,
-        monitor=None,
-        dirpath="./checkpoints",
-        filename="{epoch:03d}",
-        save_last=True,
-        every_n_epochs=cfg.val_every_n_epochs,           # 每2轮验证一次
-        # every_n_train_steps=cfg.val_check_interval,
-    )
+    # checkpoint_callback = pl.callbacks.ModelCheckpoint(
+    #     save_top_k=-1,
+    #     monitor=None,
+    #     dirpath="./checkpoints",
+    #     filename="{epoch:03d}",
+    #     save_last=True,
+    #     every_n_epochs=cfg.val_every_n_epochs,           # 每2轮验证一次
+    #     # every_n_train_steps=cfg.val_check_interval,
+    # )
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
     model_summary = ModelSummary(max_depth=3)
     callbacks=[
-        checkpoint_callback, 
+        # checkpoint_callback, 
         model_summary, 
         # ThroughputMonitor(batch_size_fn=lambda batch: batch.driving_input.camera_images.size(0)), 
         VisualiseCallback(interval=1000, val_interval=1000)
@@ -135,7 +135,7 @@ def main(cfg: TrainConfig):
             benchmark=True,
             callbacks=callbacks,
             devices=cfg.gpus,
-            # enable_checkpointing=False,
+            enable_checkpointing=False,
             gradient_clip_val=0.3,
             # gradient_clip_algorithm="value",
             # log_every_n_steps=10,
