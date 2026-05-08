@@ -58,7 +58,7 @@ def main(cfg: TrainConfig):
 
         
     # print config
-    print(OmegaConf.to_yaml(cfg))
+    # print(OmegaConf.to_yaml(cfg))
     os.environ["WANDB_DISABLE_CODE"] = "True"
     
     if cfg.overfit > 0:

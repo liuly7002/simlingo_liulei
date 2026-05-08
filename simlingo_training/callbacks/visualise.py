@@ -76,8 +76,8 @@ def once_per_step(function: Callable[[Callback, Trainer, LightningModule, Any, A
 class VisualiseCallback(Callback):
     def __init__(self, interval: int, val_interval: int = 10, predict_interval: int = 1):
         super().__init__()
-        self.interval = interval
-        self.val_interval = val_interval
+        self.interval = interval  # 用于训练阶段,每训练1000个 global step, 可视化一次训练 batch
+        self.val_interval = val_interval  # 用于验证阶段, 每隔 1000 个 global step,验证阶段进行一次可视化
         self.predict_interval = predict_interval
 
     # @once_per_step
@@ -126,19 +126,22 @@ class VisualiseCallback(Callback):
         batch: DrivingExample,
         batch_idx: int,
     ):
+        # 判断当前step是否需要可视化,只有0,1000,2000,...等step才可视化
         if trainer.global_step % self.interval != 0:
             return
 
+        # 调用模型的forward函数,获取模型预测输出的 speed_wps, route 和 language
         with torch.cuda.amp.autocast(enabled=True):
             # Forward with sampling
             speed_wps, route, language = pl_module.forward(batch, return_language=True)
 
+        # 可视化
         self._visualise_training_examples(batch, speed_wps, trainer, pl_module, 'waypoints', language_pred=language)
         self._visualise_training_examples(batch, route, trainer, pl_module, 'route', language_pred=language)
         # visualise_cameras(batch, pl_module, trainer, language, route, speed_wps, name='imgs')
     
-        print("visualised_training_example")
-        if hasattr(pl_module, "clear_cache"):
+        print("visualised_training_example") # 表示已经完成训练样本可视化
+        if hasattr(pl_module, "clear_cache"):# 如果模型有 clear_cache 方法, 就清理缓存
             print("clearing_cache")
             pl_module.clear_cache()
 
@@ -159,9 +162,12 @@ class VisualiseCallback(Callback):
             waypoint_vis, prompt_img = visualise_waypoints(batch, waypoints, language_pred=language_pred)
         elif 'route' in name:
             waypoint_vis, prompt_img = visualise_waypoints(batch, waypoints, language_pred=language_pred, route=True)
+        # 上传图像到W&B
+        # 上传的图像有两张,一张是matplotlib画出来的轨迹对比图,一张是白色背景上的文字图,包含GT language 和 Pred language
         pl_module.logger.log_image(
             f"visualise/{name}", images=[Image.fromarray(waypoint_vis), prompt_img], step=trainer.global_step
         )
+        # 关闭matplotlib的图像,释放内存
         plt.close("all")
 
 
@@ -175,12 +181,19 @@ def fig_to_np(fig):
 
 @torch.no_grad()
 def visualise_waypoints(batch: DrivingExample, waypoints, route=False, language_pred=None):
-    assert batch.driving_label is not None
+    
+    
+    ############### 检查标签存在 ###############
+    
+    assert batch.driving_label is not None  # driving_label 是当前 batch 的监督信号,标签不存在则无法可视化
     repo_root = get_original_cwd()
-    n = 11
+    
+    ############### 可视化轨迹 ###############
+    n = 11  # 可视化点数
     if route:
         n = 20
-    fig = plt.figure(figsize=(10.24, 10.24))
+    fig = plt.figure(figsize=(10.24, 10.24))  # 创建一个 10.24 × 10.24 英寸的图像
+    # 获取 GT waypoints 或 GT route
     if route:
         gt_waypoints = batch.driving_label.path[:, :n, :].cpu().numpy()
     else:
@@ -194,13 +207,15 @@ def visualise_waypoints(batch: DrivingExample, waypoints, route=False, language_
             elif 32005 in b:
                 org_wps.append(np.array(b[32005]))
 
+    # 模型输出的 waypoints 也取前 n 个点，并转成 numpy
     pred_waypoints = waypoints[:, :n].cpu().numpy()
     b = gt_waypoints.shape[0]
-    # visualise max 16 examples
+    # 最多可视化 16 个样本 例如 batch size 是 32，也只可视化前 16 个
     b = min(b, 16)
+    # 设置子图排布, 每行最多4个图,行数根据样本数量自动调整,例如 batch size 是 32, 则排成8行4列
     rows = int(np.ceil(b / 4))
     cols = min(b, 4)
-
+    # 创建文字图像,这里创建一张白底图,用来在上面写 GT language 和 Pred language
     white_pil = Image.new("RGB", (1024, 1024), "white")
     white_draw = ImageDraw.Draw(white_pil)
 
@@ -208,9 +223,11 @@ def visualise_waypoints(batch: DrivingExample, waypoints, route=False, language_
     fig.subplots_adjust(hspace=0.8)
     y_curr = 10
     for i in range(b):
+        # 写入 GT language 和 Pred language
+        # 如果标签里有语言答案，就取出来作为 GT language, 同时如果模型有预测语言输出, 就把预测语言也取出来, 然后写在白底图上
         if batch.driving_label.answer is not None:
             language = batch.driving_label.answer.language_string[i]
-
+            # 把长文本按 80 个字符换行，避免一行太长超出图像边界
             wrapped_text = textwrap.fill(language, width=80) 
             wrapped_pred_text = textwrap.fill(language_pred[i], width=80) if language_pred is not None else ""
 
@@ -222,6 +239,14 @@ def visualise_waypoints(batch: DrivingExample, waypoints, route=False, language_
             white_draw.text((10, y_curr), f'{i} Pred: {wrapped_pred_text}', fill="black", font=ImageFont.truetype(f"{repo_root}/simlingo_training/arial.ttf", 20))
             y_curr += 20*lines_wrap_pred + 20
         ax = fig.add_subplot(rows, cols, i + 1)
+        
+        
+        
+        """
+        蓝色圆点/线：模型预测
+        绿色叉号/线：真实标签
+        红色圆点/线: prompt 里给模型的原始 target 信息
+        """
         # Predicted waypoints
         ax.scatter(pred_waypoints[i, :, 1], pred_waypoints[i, :, 0], marker="o", c="b")
         ax.plot(pred_waypoints[i, :, 1], pred_waypoints[i, :, 0], c="b")

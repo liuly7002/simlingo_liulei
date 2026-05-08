@@ -72,22 +72,32 @@ python dataset_generation/data_buckets/pkl2csv.py
 
 1. 生成 drivelm 类型 .json.gz 文件
 ```
-cd simlingo
-conda activate simlingo
-export PYTHONPATH=$PYTHONPATH:/root/simlingo
+cd simlingo & conda activate simlingo & export PYTHONPATH=$PYTHONPATH:/root/simlingo
 python dataset_generation/language_labels/drivelm/carla_vqa_generator_main.py
 ```
 2. 对 .json.gz 文件内容进行分析验证
 ```
-# 第一轮分析【风险推理链 QA 元信息完整性验证脚本,非重点】
+# 第一轮分析【风险推理链 QA 元信息完整性验证脚本, 非重点】
 python a_validate/validate_risk_meta.py
 
-# 第二轮分析【风险图 QA 连接关系与链路完整性验证脚本,非重点】
+# 第二轮分析【风险图 QA 连接关系与链路完整性验证脚本, 非重点】
 python a_validate/validate_graph_structure.py
 
-# 第三轮分析【重点】
+# 第三轮分析【风险图 QA 语义一致性验证脚本, 重点】
 python a_validate/validate_risk_consistency.py
 
 # 第四轮分析【重点】
 python a_validate/validate_action_consistency.py
+```
+
+## 四、关于 "训练"
+1. 开始训练
+```
+cd simlingo & conda activate simlingo & export PYTHONPATH=$PYTHONPATH:/root/simlingo
+./train_simlingo_seed1.sh
+```
+2. 网页查看训练结果
+```
+# simlingo 根目录下执行
+wandb sync ./outputs/2026_05_04_16_53_04_simlingo_seed1/wandb/offline-run-20260504_165419-2026_05_04_16_53_04_simlingo_seed1
 ```
