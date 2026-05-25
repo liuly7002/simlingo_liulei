@@ -108,8 +108,8 @@ class COMsGenerator():
         self.data_boxes_paths = list(sorted(self.data_boxes_paths))
 
         # Load templates
-        template_file = f"data/augmented_templates/commentary.json"
-        # template_file = f"data/augmented_templates/commentary_augmented.json"
+        # template_file = f"data/augmented_templates/commentary.json"
+        template_file = f"data/augmented_templates/commentary_subsentence.json"
 
         with open(template_file, 'r') as f:
             self.templates = ujson.load(f)

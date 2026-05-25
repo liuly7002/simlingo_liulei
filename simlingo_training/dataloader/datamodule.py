@@ -343,7 +343,7 @@ class DataModule(LightningDataModule):
 
         """
         这是 PyTorch DataLoader 的 collate_fn,
-        DataLoader 每次从 dataset 里取出 batch_size 个样本后，会把这些样本组成一个列表 data,然后交给这个函数处理.
+        DataLoader 每次从 dataset 里取出 batch_size 个样本后，会把这些样本组成一个列表 data, 然后交给这个函数处理.
         data: 长度为 batch size 的列表;
         data[i]: 第 i 个样本,一般是单样本版 DrivingExample;
         """
@@ -383,21 +383,19 @@ class DataModule(LightningDataModule):
         
         
         
-        
+        ################################################### 🦺 1.图像预处理 🦺 ###################################################
+
         # 实际上当前只循环一次,indx=0,img_to_consider= 'image_ff',因为 self.IMAGES_TO_CONSIDER 里只有 'image_ff' 这一种图像. self.IMAGES_TO_CONSIDER=['image_ff']
         # 写成循环的原因仍然是:为了以后支持多路相机
         for idx, img_to_consider in enumerate(self.IMAGES_TO_CONSIDER):
             
-
-            
-            ################################################### 1.图像预处理 ###################################################
             
             # img_tmp是经过裁减之后的前视图像,就是将image_ff_org的图像的底部包含自车引擎盖的那部分裁减掉了
             img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_ff  也就是从 batch 第一个样本里取出前视图图像
             T, C, H, W = img_tmp.shape                  # img_tmp 的 shape 是 [T, C, H, W] 也就是说每个样本的这一种图像是一个有 T 帧的图像序列. 例如 T=4 就是4帧图像(但是当前只支持一帧图像). C=3 是通道数,H和W是图像尺寸.
             assert T == 1, "Only one timestep as input supported"
             
-            # 对于 batch 中每个样本：
+            # 对于当前 batch 中每个样本：
             # 如果这个样本的 image_ff 不为空，就取它
             # 如果为空，就用一个和 img_tmp 形状相同的全零图像代替
             # 作用是避免某些样本图像缺失时程序崩掉
@@ -405,9 +403,9 @@ class DataModule(LightningDataModule):
             # 把上面的列表变成 numpy 数组, 如果每个单样本图像是 [T,C,H,W]，那么 batch 后就变成[BS, T, C, H, W]
             # 转成 PyTorch float tensor  注意这里直接转成 float,说明后续视觉预处理函数是按浮点张量来处理的,而不是保留 uint8
             images_batch_tensor = torch.tensor(np.asarray([getattr(data[i], img_to_consider) if getattr(data[i], img_to_consider) is not None else np.zeros_like(img_tmp) for i in range(len(data))])).float()
-            images_batch_tensor = images_batch_tensor.view(BS*T, C, H, W)  # 把 [B,T,C,H,W] 变成 [B*T,C,H,W]
+            images_batch_tensor = images_batch_tensor.view(BS*T, C, H, W)  # 把 [BS,T,C,H,W] 变成 [BS*T,C,H,W]
             
-            images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，形状是 [C,H,W]
+            images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，每一个元素的形状是 [C,H,W], 一共有BS*T个元素.
             # print(f"images batch list 0: {images_batch_list[0]}")
             # images batch list 0: tensor([[[ 5., 20.,  7.,  ...,  0., 16.,  4.],
                                         #  [ 7.,  6.,  0.,  ...,  4., 15., 19.],
@@ -442,7 +440,7 @@ class DataModule(LightningDataModule):
                 raise ValueError(f"Image preprocessing for {self.encoder_variant} not implemented")
                 
             images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
-            image_sizes = images_processed['image_sizes']    # 记录每个 patch 的尺寸信息
+            image_sizes = images_processed['image_sizes']    # 当前帧图像的尺寸信息 形状为 [BS*T, 2]，每行是一个 [原图高度 H, 原图宽度 W]
             
             assert images_pixel.shape[0] == BS * T   # 检查预处理后第一维是否仍然和输入图像数一致,也就是确保没有多图少图
             num_patches = images_pixel.shape[1]      # 取出每张图像被切成多少个 patch
@@ -454,7 +452,7 @@ class DataModule(LightningDataModule):
 
             if img_to_consider == 'image_ff':
                 image_ff_pixel = images_pixel  # [BS, T, 2, 3, 448, 448] 这就是前视图图像的预处理结果
-                image_ff_sizes = image_sizes
+                image_ff_sizes = image_sizes   # [BS*T, 2] 
             else:
                 raise ValueError(f"Image type {img_to_consider} not supported")
 
@@ -467,7 +465,7 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 2.文本预处理 ###################################################
+        ################################################### 🦺 2.文本预处理 🦺 ###################################################
         
         
         # 把 batch 中每个样本的对话文本取出来
@@ -502,7 +500,7 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 3.占位符预处理 ###################################################
+        ################################################### 🦺 3.占位符预处理 🦺 ###################################################
 
 
         placeholder_batch_list = []
@@ -532,14 +530,14 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 4.将 placeholder_values 融合进来 ###################################################
+        ################################################### 🦺 4.将 placeholder_values 融合进来 🦺 ###################################################
 
 
         prompt_languagelabel = LanguageLabel(
             phrase_ids=conversation_dict['phrase_ids'],           # token ids，也就是 tokenizer 编码后的整数序列
             phrase_valid=conversation_dict['phrase_valid'],       # 标记哪些 token 不是padding的
             phrase_mask=conversation_dict['phrase_mask'],         # 标记哪些 token 不是padding的(同phrase_valid)
-            placeholder_values=placeholder_batch_list,            # {151662: array([[16.18833904, -1.86136625],[72.12040229, -4.63741635]])}
+            placeholder_values=placeholder_batch_list,            # {151662:[[16.18833904, -1.86136625],[72.12040229, -4.63741635]]}
             language_string=conversation_dict['language_string'], # 原始文本字符串(包括问题和答案)
             loss_masking=conversation_dict['loss_masking'],       # 当前language_string里哪些位置需要计算loss
         )
@@ -548,12 +546,12 @@ class DataModule(LightningDataModule):
             phrase_ids=question_dict['phrase_ids'],
             phrase_valid=question_dict['phrase_valid'],
             phrase_mask=question_dict['phrase_mask'],
-            placeholder_values=placeholder_batch_list,            # {151662: array([[16.18833904, -1.86136625],[72.12040229, -4.63741635]])}
+            placeholder_values=placeholder_batch_list,            # {151662: [[16.18833904, -1.86136625],[72.12040229, -4.63741635]]}
             language_string=question_dict['language_string'],     #
             loss_masking=question_dict['loss_masking'],
         )
 
-        # 从每个样本中抽出文本答案
+        # 从当前batch中的每个样本中抽出文本答案
         answer_string_list = [data[i].answer[0]['content'][0]['text'] for i in range(BS)]
         answer_label =  LanguageLabel(
             phrase_ids=None,
@@ -574,7 +572,7 @@ class DataModule(LightningDataModule):
 
 
 
-        ################################################### 5.拉取 waypoints 信息 ###################################################
+        ################################################### 🦺 5.拉取 waypoints 信息 🦺 ###################################################
         
 
         # 构造 waypoints 标签 这里的 waypoints 是未来轨迹标签，通常是一个点序列，形状是 [B, F, 2]，其中 F 是未来轨迹点的数量，每个点有 x,y 两个坐标
@@ -588,7 +586,7 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 6.额外信息(预测/评估模式才有) ###################################################
+        ################################################### 🦺 6.额外信息(预测/评估模式才有) 🦺 ###################################################
         
         
         if self.predict:  # 如果当前是预测/评估模式，那么保留一些额外信息
@@ -604,7 +602,7 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 7.最终形态 ###################################################
+        ################################################### 🦺 7.最终形态 🦺 ###################################################
 
 
         # 这是整个函数最重要的结构之一: 模型输入对象

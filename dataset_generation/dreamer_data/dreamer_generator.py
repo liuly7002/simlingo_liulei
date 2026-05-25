@@ -35,49 +35,79 @@ np.random.seed(42)
 class CarlaAlternativeCreator():
 
     # Sampling parameters
-    random_subset_count = -1 # -1 for all samples
-    sample_uniform_interval = 1
-    filter_routes_by_result = True
+    # debug的时候可以将-1改为一个较小的数,比如200,来快速生成一个小数据集进行测试和调试,正式生成数据集时再改回-1来使用全部数据
+    random_subset_count = 20    # 表示是否随机抽取一部分样本,-1表示使用全部样本,任何正整数N表示抽取的样本数量,后面初始化时会随机打乱所有 boxes/*.json.gz 文件路径，然后只取前 N 个样本。
+    sample_uniform_interval = 1 # 表示是否按照固定间隔抽样,1表示每1个样本抽取一个样本,2表示每2个样本抽取一个样本,3表示每3个样本抽取一个样本
+    filter_routes_by_result = True  # 表示是否根据 CARLA route 的评测结果过滤样本
     
     # Visualization and saving options
     save_viz = False                # Should examples be saved
-    viz_for_video = False
-    save_samples = True             # Save labels
-    overwrite = False               # Overwrite existing files
+    viz_for_video = True
+    save_samples = True            # 表示是否保存生成出来的 dreamer label, 也就是.json.gz 文件,如果为 False 则只保存可视化结果
+    overwrite = True               # 如果目标文件已经存在,则覆盖
     save_instructions = True
  
     # Dataset and path settings
-    base_folder = 'database'
-    dataset_name = 'simlingo'
-    data_directory = f'{base_folder}/{dataset_name}/data'
+    base_folder = 'database'   # 数据集根目录
+    dataset_name = 'simlingo_v2_2026_02_28'  # 数据集名称
+    data_directory = f'{base_folder}/{dataset_name}/data'  # 脚本读取原始数据的根目录
     viz_save_path = 'viz/dreamer' if not viz_for_video else 'viz/dreamer_video'
     Path(viz_save_path).mkdir(parents=True, exist_ok=True)
     save_folder_name = 'dreamer' if not viz_for_video else 'dreamer_video'
 
     # Region of interest (ROI) for image projection
-    original_image_size = [1024, 512]
-    target_image_size = [1024, 384]
-    original_fov = 110
-    MIN_X = original_image_size[0] // 2 - target_image_size[0] // 2
-    MAX_X = original_image_size[0] // 2 + target_image_size[0] // 2
+    original_image_size = [1024, 512]  # 原始图像尺寸
+    target_image_size = [1024, 384]    # 裁剪底部引擎盖部分的图像
+    original_fov = 110                 # 原始图像的水平视场角 (Field of View, FOV)，单位为度
+    MIN_X = original_image_size[0] // 2 - target_image_size[0] // 2  # 0
+    MAX_X = original_image_size[0] // 2 + target_image_size[0] // 2  # 1024 表示横向不裁剪,保留完整宽度
     MIN_Y = 0
-    MAX_Y = target_image_size[1]
-    CAMERA_MATRIX = build_projection_matrix(original_image_size[0],
-                                                    original_image_size[1],
-                                                    original_fov)
+    MAX_Y = target_image_size[1]  # 表示保留图像上半部分到中下部，去掉最底部引擎盖部分
+    # 根据原始图像宽高和相机 FOV 构造相机内参矩阵
+    CAMERA_MATRIX = build_projection_matrix(original_image_size[0],         # 1024
+                                                    original_image_size[1], # 512
+                                                    original_fov)           # 110
     # config
-    FUTURE_LEN = 10
-    carla_frame_rate = 20 # 20 frames per second get simulated
-    dataset_frame_rate = 4 # 4 frames per second get saved
+    FUTURE_LEN = 10  # 这个参数用于读取未来帧,10也就是读取当前帧之后的9个保存帧,因为数据集保存帧率是 4 Hz，也就是每 0.25 秒保存一帧，所以 9 个未来保存帧大约覆盖2.25s
+    carla_frame_rate = 20 # CARLA 仿真内部频率是 20 Hz,也就是车辆运动学模型每秒更新 20 次，每步时间间隔为： 0.05 秒
+    dataset_frame_rate = 4 # 数据集保存频率是 4 Hz,也就是每秒保存 4 帧，每帧间隔0.25s,这意味着原始数据中的 boxes、measurements 不是每个 CARLA tick 都保存，而是下采样保存
 
-    default_forecast_length = 2.5
-    num_future_frames_carla_fps = int(carla_frame_rate * default_forecast_length)
+    default_forecast_length = 2.5  # 表示默认向未来预测2.5s
+    num_future_frames_carla_fps = int(carla_frame_rate * default_forecast_length)  # 50
         
-    bicycle_model = KinematicBicycleModel(carla_frame_rate)
+    
+    ############################# 核心 #############################
+    bicycle_model = KinematicBicycleModel(carla_frame_rate)  # 运动学自行车模型
     config = GlobalConfig()
-    _turn_controller = LateralPIDController(config)
-    _longitudinal_controller = LongitudinalLinearRegressionController(config)
+    _turn_controller = LateralPIDController(config)  # 横向控制器，也就是控制方向盘 steer
+    _longitudinal_controller = LongitudinalLinearRegressionController(config)  # 纵向控制器，也就是控制油门 throttle 和刹车 brake
 
+
+
+
+
+
+    ############################# 风险图相关配置 #############################
+    # Risk map settings
+    save_risk_map = True
+    save_risk_viz = True
+    risk_map_folder_name = 'risk_map'
+    # BEV range in current ego coordinate.
+    # x: forward direction, y: lateral direction.
+    risk_x_min = -55.0     # 自车后方 10 m
+    risk_x_max = 55.0      # 自车前方 60 m
+    risk_y_min = -55.0     # 自车左侧 25 m
+    risk_y_max = 55.0      # 自车右侧 25 m
+    risk_resolution = 0.5  # 每个网格的大小为 0.5 m x 0.5 m
+    # Risk rendering parameters
+    risk_time_decay = 0.85 # 未来越远，权重越低
+    risk_sigma = 1.0       # 高斯扩散范围
+    risk_include_walkers = True  # 是否将行人也考虑进风险图
+
+
+
+    
+    
     def __init__(self):
         # all the paths to the boxes in the data
         self.data_boxes_paths = glob.glob(os.path.join(self.data_directory, 'simlingo/*/*/*/*/boxes/*.json.gz'))
@@ -93,13 +123,19 @@ class CarlaAlternativeCreator():
             self.data_boxes_paths = self.data_boxes_paths[::self.sample_uniform_interval]
 
     def process_data(self, path_id):
+
+        ###################################### 当前帧boxes/*.json.gz文件 ######################################
         path_boxes = self.data_boxes_paths[path_id]
 
+
+        ###################################### 生成Dreamer数据集的保存路径 ######################################
         path_save = path_boxes.replace('/data/', f"/{self.save_folder_name}/").replace('boxes',  self.save_folder_name)
         Path(path_save).parent.mkdir(exist_ok=True, parents=True)
         if not self.overwrite and os.access(path_save, os.F_OK):
             return
 
+
+        ###################################### 找到当前帧对应的 measurement 和 RGB 图像 ######################################
         save_list = []
         path_measurement = path_boxes.replace('boxes', 'measurements')
         path_rgb_image = path_boxes.replace('boxes', 'rgb').replace('.json.gz', '.jpg')
@@ -108,7 +144,7 @@ class CarlaAlternativeCreator():
         if not os.access(path_rgb_image, os.F_OK) or not os.access(path_boxes, os.F_OK) or not os.access(path_measurement, os.F_OK):
             return
         
-        # Read results file
+        ###################################### 根据 route 结果过滤低质量专家数据 ######################################
         if self.filter_routes_by_result:
             results_file = path_boxes.split('boxes')[0] + 'results.json.gz'
             try:
@@ -133,7 +169,7 @@ class CarlaAlternativeCreator():
                                 (route_results['scores']['score_route'] < 98.0):
                 return
             
-        # Read data and measurements files
+        ###################################### 读取当前帧 boxes 和 measurements ######################################
         with gzip.open(path_boxes, 'rb') as f:
             file_content = f.read()
             current_boxes = json.loads(file_content.decode('utf-8'))
@@ -142,15 +178,17 @@ class CarlaAlternativeCreator():
             file_content = f.read()
             current_measurements = json.loads(file_content.decode('utf-8'))
 
-        time_stamp = path_boxes.split('/')[-1].split('_')[-1].replace('.json.gz', '')
-        time_stamp_int = int(time_stamp)
-        next_10_time_stamps = [str(time_stamp_int + i).zfill(4) for i in range(1, self.FUTURE_LEN)] # 4 digits string
 
+        ###################################### 读取未来若干帧 boxes 和 measurements ######################################
+        time_stamp = path_boxes.split('/')[-1].split('_')[-1].replace('.json.gz', '')
+        time_stamp_int = int(time_stamp)  # 当前帧ID
+        next_10_time_stamps = [str(time_stamp_int + i).zfill(4) for i in range(1, self.FUTURE_LEN)] # 未来9帧ID列表
+        # 未来9帧的boxes和measurements文件路径列表
         future_boxes_paths = [os.path.join(path_boxes.replace(time_stamp, i)) for i in next_10_time_stamps]
         future_measurement_paths = [i.replace('boxes', 'measurements') for i in future_boxes_paths]
 
-        future_boxes = []
-        future_measurements = []
+        future_boxes = []         # 未来9帧的boxes数据列表
+        future_measurements = []  # 未来9帧的measurements数据列表
         changed_route = False
         for path_box, path_measure in zip(future_boxes_paths, future_measurement_paths):
             if os.path.exists(path_box) and os.path.exists(path_measure):
@@ -165,14 +203,14 @@ class CarlaAlternativeCreator():
             else:
                 return
 
-        # load data
+        ###################################### 提取当前帧 ego 基础信息 ######################################
         target_point = current_measurements['target_point']
-        target_point = [round(target_point[0], 2), round(target_point[1], 2)]
+        target_point = [round(target_point[0], 2), round(target_point[1], 2)]  # 第一个目标点
         target_point_next = current_measurements['target_point_next']
-        target_point_next = [round(target_point_next[0], 2), round(target_point_next[1], 2)]
+        target_point_next = [round(target_point_next[0], 2), round(target_point_next[1], 2)] # 第二个目标点
 
-        target_speed = current_measurements['target_speed']
-        current_speed = current_measurements['speed']
+        target_speed = current_measurements['target_speed']  # 目标速度，单位是 m/s
+        current_speed = current_measurements['speed']        # 当前速度，单位是 m/s
 
         command_map = {
             1: 'turn left at the next intersection',
@@ -183,35 +221,35 @@ class CarlaAlternativeCreator():
             6: 'lane change to the right',
         }
         command = current_measurements['command']
-        command = command_map[command]
+        command = command_map[command]                       # 第一个目标点对应的导航指令的文本描述
         command_next = current_measurements['next_command']
-        command_next = command_map[command_next]
+        command_next = command_map[command_next]             # 第二个目标点对应的导航指令的文本描述
 
-        ego_position = current_measurements['pos_global']
-        ego_yaw = current_measurements['theta']
+        ego_position = current_measurements['pos_global']    # 自车在全局坐标系中的位置
+        ego_yaw = current_measurements['theta']              # 自车的航向角
         
-        steer = current_measurements['steer']
-        throttle = current_measurements['throttle']
-        brake = current_measurements['brake']
+        steer = current_measurements['steer']                # 方向盘转角
+        throttle = current_measurements['throttle']          # 油门
+        brake = current_measurements['brake']                # 刹车
         
-        route = current_measurements['route']
-        route_global = np.asarray([t_u.conversion_2d(rout, ego_position, -ego_yaw) for rout in route])
-        route_local = np.asarray([t_u.inverse_conversion_2d(rout, ego_position, ego_yaw) for rout in route_global])
+        route = current_measurements['route']                # 自车坐标系下的参考路径点(一定为20个,每个都是[x,y]两点之间相距1m)
+        route_global = np.asarray([t_u.conversion_2d(rout, ego_position, -ego_yaw) for rout in route])  # 转换到全局坐标系
+        route_local = np.asarray([t_u.inverse_conversion_2d(rout, ego_position, ego_yaw) for rout in route_global])  # 再转换到自车坐标系
 
-        route_adjusted = np.array(current_measurements['route'])
-        route_adjusted = equal_spacing_route(route_adjusted)
+        route_adjusted = np.array(current_measurements['route'])  
+        route_adjusted = equal_spacing_route(route_adjusted)      # 把 route 调整成等间距采样点
 
         route_original = current_measurements['route_original']
-        route_original = equal_spacing_route(route_original)
+        route_original = equal_spacing_route(route_original)      # 把 route 调整成等间距采样点
 
-
+        # 当前帧所有周围车辆
         nearby_actors = [box for box in current_boxes if box['class'] == 'car'] # or box['class'] == 'walker']
         nearby_actors_by_id = {box['id']: box for box in nearby_actors}
         ids = [box['id'] for box in nearby_actors]
-
+        # 当前帧所有周围行人
         nearby_walkers = [box for box in current_boxes if box['class'] == 'walker']
         ids_walkers = [box['id'] for box in nearby_walkers]
-
+        # 判断是否有近距离行人
         walker_close = False
         for box in current_boxes:
             if box['class'] == 'walker' and box['distance'] < 10:
@@ -221,6 +259,8 @@ class CarlaAlternativeCreator():
         ids_all = ids + ids_walkers
 
 
+
+        ###################################### 获取周围车辆和行人的未来位置 ######################################
         # load data for future frames, if not available repeat the last available frame
         # this is not ideal but works for good enough
         future_nearby_actors = []
@@ -270,6 +310,9 @@ class CarlaAlternativeCreator():
             if len(tmp_walkers) > 0:
                 future_nearby_walkers.append(tmp_walkers)
 
+
+
+        ###################################### 提取自车当前和未来状态 ######################################
         ego_actor = [box for box in current_boxes if box['class'] == 'ego_car'][0]
         ego_info = [box for box in current_boxes if box['class'] == 'ego_info'][0]
 
@@ -290,6 +333,8 @@ class CarlaAlternativeCreator():
         all_ego_positions = [ego_position] + [future_measurements[i]['pos_global'] for i in range(len(next_egos))]
         all_ego_yaws = [ego_yaw] + [future_measurements[i]['theta'] for i in range(len(next_egos))]
 
+
+        ###################################### 把周围 actor 未来位置转换成当前帧自车坐标系下的 bounding boxes ######################################
         # we can either use the ground truth positions or the forecasted positions
         # ground truth is more acurate in turns but if the vehicle is out of sight in the future frames we need to use the last available one
         bbs_walkers = self.get_bbs(nearby_walkers, future_nearby_walkers_by_id, future_nearby_walkers_used_time_stamps_by_id, all_ego_positions, all_ego_yaws)
@@ -302,18 +347,70 @@ class CarlaAlternativeCreator():
         # self.viz_forecastings_new(path_rgb_image, forecasts_other_actors, bbs_other_actors)
 
 
-        
+
+
+
+
+        # ############################################################
+        # # 🌋 Risk Map Generation 🌋
+        # ############################################################
+        risk_map = None
+        risk_map_path = None
+        risk_meta = None
+        if self.save_risk_map:
+            risk_map, risk_meta = self.build_risk_map(
+                bbs_other_actors=bbs_other_actors
+            )
+            risk_map_path, risk_meta = self.save_risk_map_file(
+                path_save=path_save,
+                risk_map=risk_map,
+                risk_meta=risk_meta
+            )
+            if self.save_risk_viz:
+                self.viz_risk_map(
+                    risk_map=risk_map,
+                    risk_map_path=risk_map_path,
+                    path_rgb_image=path_rgb_image
+                )
+            # if self.save_risk_viz:
+            #     self.viz_risk_map_with_current_road(
+            #         risk_map=risk_map,
+            #         risk_map_path=risk_map_path,
+            #         current_boxes=current_boxes,
+            #     )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        ###################################### 生成专家原始未来轨迹 forecast_ego_org ######################################
         # get ego forecast for the current route
         bbs_ego = self.get_bbs([ego_actor], next_ego_by_id, {0: list(range(len(next_egos)))}, all_ego_positions, all_ego_yaws)
         forecast_ego_org, gt_speeds = self.forecast_vehicles(ego_actor, next_ego_by_id, ego_position=ego_position, ego_yaw=ego_yaw, route=route_global, use_wps_speed_controller=True, return_gt_speeds=True)
         # self.viz_forecastings_new(path_rgb_image, forecast_ego_org, bbs_ego)
 
+
+        ###################################### 初始化替代轨迹保存容器 ######################################
         forecast_ego_org_wps = [[f.location.x, f.location.y] for f in forecast_ego_org[0]]
-        forecasts_ego_adjusted = []
-        forecasts_ego_adjusted_route = []
-        forecasts_ego_adjusted_allowed = []
-        forecasts_ego_adjusted_mode = []
-        forecasts_ego_adjusted_info = []
+        forecasts_ego_adjusted = []         # 替代 ego 未来 bounding boxes
+        forecasts_ego_adjusted_route = []   # 替代 route
+        forecasts_ego_adjusted_allowed = [] # 这个替代行为是否允许
+        forecasts_ego_adjusted_mode = []    # 替代行为类型
+        forecasts_ego_adjusted_info = []    # 替代行为详细信息
         save_keys = ['class', 'name', 'color_rgb', 'type_id', 'distance', 'id', 'position']
         
         # # ############################################################
@@ -322,11 +419,14 @@ class CarlaAlternativeCreator():
         # Target speed
         # at least 40% of cases should be in a reachable speed range
         # to avoid that the optimal speed is always maximal acceleration/ deceleration
+        # 随机指定一个速度目标,有60%的概率在0-35m/s之间随机指定一个速度,有40%的概率在当前速度的60%-140%之间随机指定一个速度,这样可以保证至少40%的情况是在一个可达的速度范围内,避免最优速度总是最大加速或减速
         if random.random() < 0.6:
             random_target_speed = round(random.uniform(0, 35), 1)
         else:
             random_target_speed = round(random.uniform(ego_actor['speed']*0.6, ego_actor['speed']*1.4), 1)
+        # 然后让 ego 沿原始 route 行驶，但纵向控制目标变成 random_target_speed
         tmp_forecasts, final_speed = self.forecast_vehicles(ego_actor, next_ego_by_id, ego_position=ego_position, ego_yaw=ego_yaw, route=route_global, target_speed=random_target_speed, return_final_speed=True)
+        # 然后保存这个替代轨迹和相关信息
         forecasts_ego_adjusted.append(tmp_forecasts)
         forecasts_ego_adjusted_route.append('org')
         forecasts_ego_adjusted_allowed.append(True)
@@ -334,6 +434,7 @@ class CarlaAlternativeCreator():
         forecasts_ego_adjusted_info.append({'allowed': True, 'mode': f'target_speed', 'target_speed': random_target_speed, 'final_speed': final_speed, 'current_speed': current_speed})
 
         # Stop 
+        # 如果 target speed 不是 0，则额外生成一个 stop future, 本质是沿原 route 行驶，但目标速度为 0
         if random_target_speed > 0.01: # if random target speed is 0, we do not need to add additional stop mode
             stop_target_speed = 0
             tmp_forecasts, final_speed = self.forecast_vehicles(ego_actor, next_ego_by_id, ego_position=ego_position, ego_yaw=ego_yaw, route=route_global, target_speed=stop_target_speed, return_final_speed=True)
@@ -344,6 +445,7 @@ class CarlaAlternativeCreator():
             forecasts_ego_adjusted_info.append({'allowed': True, 'mode': f'stop', 'target_speed': stop_target_speed, 'final_speed': final_speed, 'current_speed': current_speed})
 
         # Faster, factor of original trajectory -> if stopped, this mode still stops
+        # 这里不是给一个固定目标速度，而是把专家速度曲线整体放大 1.1 到 1.5 倍
         faster_factor = random.uniform(1.1, 1.5)
         desired_speeds = faster_factor * gt_speeds
         tmp_forecasts, final_speed = self.forecast_vehicles(ego_actor, next_ego_by_id, ego_position=ego_position, ego_yaw=ego_yaw, route=route_global, speeds_to_follow=desired_speeds, return_final_speed=True)
@@ -355,6 +457,7 @@ class CarlaAlternativeCreator():
 
         # Faster compared to current speed -> if stopped, this mode does not stop -> so you could say go faster on a red light (could be slower than the expert, e.g., if expert heavily accelerates)
         # get int between 0 and 3
+        # 直接给更大的 throttle
         mode = random.randint(0, 2)
         if mode == 0:
             desired_throttle = random.uniform(0.5, 0.7)
@@ -370,6 +473,7 @@ class CarlaAlternativeCreator():
         forecasts_ego_adjusted_info.append({'allowed': True, 'mode': 'faster', 'final_speed': final_speed, 'desired_throttle': desired_throttle, 'rate': mode, 'current_speed': current_speed})
 
         # 'Slower', factor of original trajectory -> if stopped, this mode still stops, this does not mean actually driving slower than current speed, only slower than the expert would drive
+        # 把专家速度曲线缩小，生成更慢的未来轨迹
         slower_factor = random.uniform(0.3, 0.9)
         desired_speeds = slower_factor * gt_speeds
         tmp_forecasts, final_speed = self.forecast_vehicles(ego_actor, next_ego_by_id, ego_position=ego_position, ego_yaw=ego_yaw, route=route_global, speeds_to_follow=desired_speeds, return_final_speed=True)
@@ -381,6 +485,7 @@ class CarlaAlternativeCreator():
 
         # 'Slower', compared to current speed (could be faster than the expert, e.g., if expert heavily brakes)
         # get int between 0 and 3
+        # 随机刹车概率，模拟更强制的减速
         mode = random.randint(2, 2)
         if mode == 0:
             brake_probability = random.uniform(0.1, 0.2)
@@ -750,6 +855,11 @@ class CarlaAlternativeCreator():
                 'forecasts_ego_adjusted_allowed': forecasts_ego_adjusted_allowed,
                 'forecasts_ego_adjusted_mode': forecasts_ego_adjusted_mode,
                 'intersection_bb_bool': intersection_bb_bool,
+
+
+                # 新增
+                'risk_map_path': risk_map_path,
+                'risk_meta': risk_meta,
             })
 
             if self.save_instructions:
@@ -1138,6 +1248,400 @@ class CarlaAlternativeCreator():
         return all_bbs_by_id
 
 
+    ###########################################
+    ########                           ########
+    ###########################################
+    def build_risk_map(self, bbs_other_actors):
+        """
+        Build a BEV future-risk map from future bounding boxes of surrounding actors.
+
+        Coordinate convention:
+            x: forward direction in current ego frame
+            y: lateral direction in current ego frame
+
+        Output:
+            risk_map: np.ndarray, shape [H, W], value range [0, 1]
+            risk_meta: dict, metadata for later loading and visualization
+        """
+
+        x_min = self.risk_x_min
+        x_max = self.risk_x_max
+        y_min = self.risk_y_min
+        y_max = self.risk_y_max
+        resolution = self.risk_resolution
+
+        H = int(round((x_max - x_min) / resolution))
+        W = int(round((y_max - y_min) / resolution))
+
+        risk_map = np.zeros((H, W), dtype=np.float32)
+
+        # For debugging and later analysis.
+        actor_risk_records = []
+
+        if bbs_other_actors is None:
+            risk_meta = self._build_risk_meta(H, W, actor_risk_records)
+            return risk_map, risk_meta
+
+        for actor_id, bbs in bbs_other_actors.items():
+            for t, bb in enumerate(bbs):
+                x = float(bb.location.x)
+                y = float(bb.location.y)
+
+                # Ignore actors outside the ROI.
+                if x < x_min or x >= x_max or y < y_min or y >= y_max:
+                    continue
+
+                # Near future should have higher risk than far future.
+                time_weight = self.risk_time_decay ** t
+
+                # Actor size.
+                extent_x = float(bb.extent.x)
+                extent_y = float(bb.extent.y)
+
+                # Render a Gaussian risk field around the actor box.
+                self._add_actor_gaussian_risk(
+                    risk_map=risk_map,
+                    center_x=x,
+                    center_y=y,
+                    extent_x=extent_x,
+                    extent_y=extent_y,
+                    yaw_deg=float(bb.rotation.yaw),
+                    weight=time_weight,
+                    sigma=self.risk_sigma,
+                    x_min=x_min,
+                    y_min=y_min,
+                    resolution=resolution,
+                )
+
+                actor_risk_records.append({
+                    'actor_id': int(actor_id) if isinstance(actor_id, (int, np.integer)) else str(actor_id),
+                    'timestep': int(t),
+                    'x': round(x, 3),
+                    'y': round(y, 3),
+                    'extent_x': round(extent_x, 3),
+                    'extent_y': round(extent_y, 3),
+                    'yaw_deg': round(float(bb.rotation.yaw), 3),
+                    'time_weight': round(float(time_weight), 5),
+                })
+
+        # Normalize and clip.
+        risk_map = np.clip(risk_map, 0.0, 1.0)
+
+        risk_meta = self._build_risk_meta(H, W, actor_risk_records)
+        return risk_map, risk_meta
+
+    def _build_risk_meta(self, H, W, actor_risk_records):
+        return {
+            'risk_type': 'future_actor_occupancy',
+            'shape': [int(H), int(W)],
+            'x_range': [float(self.risk_x_min), float(self.risk_x_max)],
+            'y_range': [float(self.risk_y_min), float(self.risk_y_max)],
+            'resolution': float(self.risk_resolution),
+            'time_decay': float(self.risk_time_decay),
+            'sigma': float(self.risk_sigma),
+            'coordinate': 'current_ego_frame',
+            'axis_definition': {
+                'x': 'forward',
+                'y': 'lateral',
+                'risk_map_axis_0': 'x_index',
+                'risk_map_axis_1': 'y_index',
+            },
+            'num_actor_risk_records': len(actor_risk_records),
+            # Avoid saving too much metadata into json.
+            # This is enough for debugging.
+            'actor_risk_records_preview': actor_risk_records[:20],
+        }
+
+    def _add_actor_gaussian_risk(
+        self,
+        risk_map,
+        center_x,
+        center_y,
+        extent_x,
+        extent_y,
+        yaw_deg,
+        weight,
+        sigma,
+        x_min,
+        y_min,
+        resolution,
+    ):
+        """
+        Add a soft Gaussian-like risk around an actor bounding box.
+
+        This version is intentionally simple and robust:
+        - It considers the actor size.
+        - It considers actor yaw.
+        - It writes a local patch only, not the whole map.
+        """
+
+        H, W = risk_map.shape
+
+        # Local influence radius.
+        # Use actor size + 3 sigma as the affected area.
+        radius_x = extent_x + 3.0 * sigma
+        radius_y = extent_y + 3.0 * sigma
+        radius = max(radius_x, radius_y)
+
+        ix_center = int((center_x - x_min) / resolution)
+        iy_center = int((center_y - y_min) / resolution)
+
+        grid_radius = int(np.ceil(radius / resolution)) + 2
+
+        ix_min = max(0, ix_center - grid_radius)
+        ix_max = min(H - 1, ix_center + grid_radius)
+        iy_min = max(0, iy_center - grid_radius)
+        iy_max = min(W - 1, iy_center + grid_radius)
+
+        if ix_min > ix_max or iy_min > iy_max:
+            return
+
+        yaw = np.deg2rad(yaw_deg)
+        cos_yaw = np.cos(yaw)
+        sin_yaw = np.sin(yaw)
+
+        for ix in range(ix_min, ix_max + 1):
+            x = x_min + (ix + 0.5) * resolution
+
+            for iy in range(iy_min, iy_max + 1):
+                y = y_min + (iy + 0.5) * resolution
+
+                dx = x - center_x
+                dy = y - center_y
+
+                # Rotate point into actor local frame.
+                local_x = cos_yaw * dx + sin_yaw * dy
+                local_y = -sin_yaw * dx + cos_yaw * dy
+
+                # Distance to oriented bounding box.
+                # Inside box: distance is 0.
+                dist_x = max(abs(local_x) - extent_x, 0.0)
+                dist_y = max(abs(local_y) - extent_y, 0.0)
+                dist = np.sqrt(dist_x ** 2 + dist_y ** 2)
+
+                value = weight * np.exp(-(dist ** 2) / (2.0 * sigma ** 2))
+
+                if value > risk_map[ix, iy]:
+                    risk_map[ix, iy] = value
+
+    def save_risk_map_file(self, path_save, risk_map, risk_meta):
+        """
+        Save risk map as compressed npz.
+        The json.gz dreamer label only stores the path and metadata.
+        """
+
+        risk_save_path = path_save.replace(
+            f'/{self.save_folder_name}/',
+            f'/{self.risk_map_folder_name}/'
+        ).replace(
+            f'/{self.save_folder_name}/',
+            f'/{self.risk_map_folder_name}/'
+        ).replace('.json.gz', '.npz')
+
+        Path(risk_save_path).parent.mkdir(parents=True, exist_ok=True)
+
+        np.savez_compressed(
+            risk_save_path,
+            risk_map=risk_map.astype(np.float16),
+        )
+
+        risk_meta = dict(risk_meta)
+        risk_meta['risk_map_path'] = risk_save_path
+
+        return risk_save_path, risk_meta
+
+    def viz_risk_map(self, risk_map, risk_map_path, path_rgb_image=None):
+        """
+        Save risk map visualization for debugging.
+
+        Display convention:
+            vertical axis: x forward
+            horizontal axis: y lateral
+        """
+
+        if risk_map is None:
+            return
+
+        save_path = risk_map_path.replace('.npz', '.png')
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+
+        plt.figure(figsize=(6, 7))
+
+        plt.imshow(
+            risk_map,
+            origin='lower',
+            extent=[
+                self.risk_y_min,
+                self.risk_y_max,
+                self.risk_x_min,
+                self.risk_x_max,
+            ],
+            aspect='auto',
+            vmin=0.0,
+            vmax=1.0,
+        )
+
+        plt.colorbar(label='risk')
+        plt.xlabel('y lateral (m)')
+        plt.ylabel('x forward (m)')
+        plt.title('Future Actor Risk Map')
+
+        # Ego position.
+        plt.scatter([0.0], [0.0], marker='x', s=50)
+        plt.text(0.5, 0.5, 'ego', fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+
+    # def viz_risk_map_with_current_road(self,risk_map,risk_map_path,current_boxes=None,):
+    #     """
+    #     Visualize risk map with current-frame approximate road/lane structure.
+
+    #     This function does NOT use future frames.
+    #     It also does NOT use current_measurements['route'] as road geometry,
+    #     because route may represent future navigation or lane-change trajectory.
+
+    #     Coordinate:
+    #         x: ego forward
+    #         y: ego lateral
+    #     """
+
+    #     save_path = risk_map_path.replace('.npz', '_current_road.png')
+    #     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+
+    #     plt.figure(figsize=(7, 8))
+
+    #     plt.imshow(
+    #         risk_map,
+    #         origin='lower',
+    #         extent=[
+    #             self.risk_y_min,
+    #             self.risk_y_max,
+    #             self.risk_x_min,
+    #             self.risk_x_max,
+    #         ],
+    #         aspect='auto',
+    #         vmin=0.0,
+    #         vmax=1.0,
+    #     )
+
+    #     plt.colorbar(label='risk')
+    #     plt.xlabel('y lateral (m)')
+    #     plt.ylabel('x forward (m)')
+    #     plt.title('Risk Map with Current-Frame Approximate Road')
+
+    #     # Ego position
+    #     plt.scatter([0.0], [0.0], marker='x', s=60)
+    #     plt.text(0.5, 0.5, 'ego', fontsize=8)
+
+    #     if current_boxes is not None:
+    #         ego_infos = [
+    #             box for box in current_boxes
+    #             if box.get('class') == 'ego_info'
+    #         ]
+
+    #         if len(ego_infos) > 0:
+    #             ego_info = ego_infos[0]
+
+    #             ego_lane_width = float(
+    #                 ego_info.get('ego_lane', {}).get('width', 3.5)
+    #             )
+
+    #             # In this code convention:
+    #             # y < 0 is visual-left, y > 0 is visual-right.
+    #             ego_left = -ego_lane_width / 2.0
+    #             ego_right = ego_lane_width / 2.0
+
+    #             x0 = self.risk_x_min
+    #             x1 = self.risk_x_max
+
+    #             # Draw ego lane
+    #             plt.fill_betweenx(
+    #                 [x0, x1],
+    #                 ego_left,
+    #                 ego_right,
+    #                 alpha=0.18,
+    #                 label='ego lane'
+    #             )
+
+    #             plt.plot([ego_left, ego_left], [x0, x1], linewidth=1.2)
+    #             plt.plot([ego_right, ego_right], [x0, x1], linewidth=1.2)
+
+    #             # Draw left lanes
+    #             left_boundary = ego_left
+    #             for lane in ego_info.get('left_lanes', []):
+    #                 width = float(lane.get('width', 0.0))
+    #                 lane_type = lane.get('type:', 'unknown')
+
+    #                 next_boundary = left_boundary - width
+
+    #                 plt.fill_betweenx(
+    #                     [x0, x1],
+    #                     next_boundary,
+    #                     left_boundary,
+    #                     alpha=0.08,
+    #                     label=f'left {lane_type}'
+    #                 )
+
+    #                 plt.plot(
+    #                     [next_boundary, next_boundary],
+    #                     [x0, x1],
+    #                     linestyle=':',
+    #                     linewidth=0.9
+    #                 )
+
+    #                 left_boundary = next_boundary
+
+    #             # Draw right lanes
+    #             right_boundary = ego_right
+    #             for lane in ego_info.get('right_lanes', []):
+    #                 width = float(lane.get('width', 0.0))
+    #                 lane_type = lane.get('type:', 'unknown')
+
+    #                 next_boundary = right_boundary + width
+
+    #                 plt.fill_betweenx(
+    #                     [x0, x1],
+    #                     right_boundary,
+    #                     next_boundary,
+    #                     alpha=0.08,
+    #                     label=f'right {lane_type}'
+    #                 )
+
+    #                 plt.plot(
+    #                     [next_boundary, next_boundary],
+    #                     [x0, x1],
+    #                     linestyle=':',
+    #                     linewidth=0.9
+    #                 )
+
+    #                 right_boundary = next_boundary
+
+    #     plt.xlim(self.risk_y_min, self.risk_y_max)
+    #     plt.ylim(self.risk_x_min, self.risk_x_max)
+    #     plt.grid(alpha=0.25)
+    #     plt.legend(fontsize=7, loc='upper right')
+    #     plt.tight_layout()
+    #     plt.savefig(save_path, dpi=150)
+    #     plt.close()
+
+    #     return save_path
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     def forecast_vehicles(self, ego_actor, next_ego_actor_by_id, ego_position, ego_yaw, route=None, speeds_to_follow=None, desired_throttle=None, brake_probability=None, target_speed=None, return_final_speed=False, return_gt_speeds=False, use_wps_speed_controller=False):
         
         predicted_bounding_boxes = {}
@@ -1315,7 +1819,6 @@ class CarlaAlternativeCreator():
         if len(return_tuple) == 1:
             return_tuple = predicted_bounding_boxes
         return return_tuple
-      
     
     def calculate_shifted_trajectory(self, original_trajectory, lane_change_in_transition_amount_meters):
         """

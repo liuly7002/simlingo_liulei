@@ -57,6 +57,7 @@ export TEAM_CONFIG={route_file}
 export RESUME=1
 export DATAGEN=1
 export SAVE_PATH={save_pth}
+export SAVE_TF_LABELS=1
 
 echo "Start python"
 

@@ -68,7 +68,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         self.images = []                    # 保存每个样本对应的图像路径列表,注意一个样本不一定只有一张图,因为有时间历史长度 hist_len,所以可能保存多个时刻的图像路径.
         self.boxes = []                     # 和 self.images 一一对应，保存每个时刻的 box 标注路径
         self.measurements = []              # 保存 measurement 文件夹路径,注意这里存的是目录路径,不是单个 .json.gz 文件路径
-        self.sample_start = []              # 表示这个样本从哪个时间步开始,比如一个样本对应 seq=20,那么后面读取 future waypoints、future measurements 都从这个起点展开
+        self.sample_start = []              # 当前样本的帧id
         self.augment_exists = []            # 标记这个样本是否存在增强版本,当前代码里几乎是直接设成 True ,这个变量的设计初衷是为了支持 原图 rgb/ 增强图 rgb_augmented/ 两套图像版本
         self.alternative_trajectories = []  # 仅在 dreamer 数据中使用,用来保存 dreamer 备选轨迹文件路径
 
@@ -96,7 +96,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         
         
-        ################################################## ⛹️ 加载 commentary "语言"模板文件(通用模板) ⛹️ ##################################################
+        ################################################## ⛹️ 加载 commentary "语言增强"模板文件(通用模板) ⛹️ ##################################################
 
 
         # 加载模板文件,这一块是为了给后续语言任务做准备
@@ -108,7 +108,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         
         
-        ################################################## ⛹️ 加载 dreamer "语言"模板文件(非通用模板) ⛹️ ##################################################
+        ################################################## ⛹️ 加载 dreamer "语言增强"模板文件(非通用模板) ⛹️ ##################################################
 
         # 加载模板文件,这一块是为了给后续语言任务做准备
         # 如果当前是 dreamer 数据集,则额外加载 dreamer 的模板
@@ -120,7 +120,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
 
 
-        ################################################## ⛹️ 加载 lmdrive "语言"模板文件(非通用模板) ⛹️ ##################################################
+        ################################################## ⛹️ 加载 lmdrive "语言增强"模板文件(非通用模板) ⛹️ ##################################################
         
         # 加载模板文件,这一块是为了给后续语言任务做准备
         # 如果配置中开启了 use_lmdrive_commands(目前是开启的),就加载语言命令模板
@@ -768,7 +768,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         
         
-        #################################################### 二、target_options & placeholder_values ####################################################
+        #################################################### 🍅 二、target_options & placeholder_values 🍅 ####################################################
 
 
         # 是否启用目标点作为输入
@@ -784,7 +784,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
 
 
-        #################################################### 三、加入高级导航指令 ####################################################
+        #################################################### 🍅 三、加入高级导航指令 🍅 ####################################################
 
 
         if 'command' in self.route_as:  # 执行, self.route_as = target_point_command

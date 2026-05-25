@@ -21,9 +21,9 @@ def parse_arguments():
                             help='Path to the keyframes.txt')
     path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_02_28',
                             help='Data directory containing the dataset')
-    path_group.add_argument('--output-directory', type=str, default='database/simlingo/commentary',
+    path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_02_28/commentary',
                             help='Output directory for the vqa-graph')
-    path_group.add_argument('--output-examples-directory', type=str, default='database/simlingo/commentary',
+    path_group.add_argument('--output-examples-directory', type=str, default='database/simlingo_v2_2026_02_28/commentary',
                             help='Output directory for examples of the vqa-graph')
 
     # Image and camera parameters

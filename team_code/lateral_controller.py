@@ -50,21 +50,21 @@ class LateralPIDController(LateralController):
   def __init__(self, config):
     super().__init__(config)
 
-    self.lateral_pid_kp = self.config.lateral_pid_kp
-    self.lateral_pid_kd = self.config.lateral_pid_kd
-    self.lateral_pid_ki = self.config.lateral_pid_ki
+    self.lateral_pid_kp = self.config.lateral_pid_kp  # P
+    self.lateral_pid_kd = self.config.lateral_pid_kd  # D
+    self.lateral_pid_ki = self.config.lateral_pid_ki  # I
 
-    self.lateral_pid_speed_scale = self.config.lateral_pid_speed_scale
-    self.lateral_pid_speed_offset = self.config.lateral_pid_speed_offset
-    self.lateral_pid_default_lookahead = self.config.lateral_pid_default_lookahead
-    self.lateral_pid_speed_threshold = self.config.lateral_pid_speed_threshold
+    self.lateral_pid_speed_scale = self.config.lateral_pid_speed_scale   # 速度缩放系数,用于根据当前速度计算前视距离
+    self.lateral_pid_speed_offset = self.config.lateral_pid_speed_offset # 前视距离偏置
+    self.lateral_pid_default_lookahead = self.config.lateral_pid_default_lookahead  # 默认前视距离
+    self.lateral_pid_speed_threshold = self.config.lateral_pid_speed_threshold  # 速度阈值
 
-    self.lateral_pid_window_size = self.config.lateral_pid_window_size
-    self.lateral_pid_minimum_lookahead_distance = self.config.lateral_pid_minimum_lookahead_distance
-    self.lateral_pid_maximum_lookahead_distance = self.config.lateral_pid_maximum_lookahead_distance
+    self.lateral_pid_window_size = self.config.lateral_pid_window_size  # PID控制器的滑动窗口大小,用于计算误差的平均值和导数
+    self.lateral_pid_minimum_lookahead_distance = self.config.lateral_pid_minimum_lookahead_distance  # 最小前视距离
+    self.lateral_pid_maximum_lookahead_distance = self.config.lateral_pid_maximum_lookahead_distance  # 最大前视距离
 
     # The following lists are used as deques
-    self.error_history = []  # Sliding window to store past errors
+    self.error_history = []  # Sliding window to store past errors         
     self.saved_error_history = []  # Saved error history for state loading
 
   def step(self, route_points, current_speed, vehicle_position, vehicle_heading, inference_mode=False):
@@ -134,3 +134,22 @@ class LateralPIDController(LateralController):
         Loads the previously saved state of the controller by restoring the saved error history.
         """
     self.error_history = self.saved_error_history.copy()
+
+
+
+"""
+1. 输入当前速度、当前位置、当前航向、未来路线点
+2. 根据速度计算前视距离
+3. 将前视距离转换成 route_points 的索引
+4. 取出前视路径点
+5. 计算从车辆当前位置指向前视点的向量
+6. 计算目标航向角
+7. 计算目标航向和当前航向的误差
+8. 把角度误差归一化到 [-π, π]
+9. 再把弧度误差缩放成以 90° 为单位的误差
+10. 记录误差历史
+11. 用当前误差、误差变化量、历史平均误差计算 PID 输出
+12. 将转向输出限制在 [-1, 1]
+13. 返回 steering
+
+"""

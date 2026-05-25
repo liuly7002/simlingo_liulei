@@ -30,9 +30,6 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
     
     
     
-    
-    
-    
     def __getitem__(self, index):
         cv2.setNumThreads(0) # 禁用opencv多线程
 
@@ -81,9 +78,9 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
 
 
-        ########################################### 🥭 图像增强 🥭 ###########################################
+        ########################################### 🥭 是否进行数据增强 🥭 ###########################################
 
-        # 决定当前帧是否使用图像增强
+        # 决定当前帧是否使用数据增强
         if augment_exists and random.random() <= self.img_shift_augmentation_prob and self.img_shift_augmentation:
             augment_sample = True
             aug_rotation = current_measurement['augmentation_rotation']        # R矩阵
@@ -162,6 +159,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
         commentary_exists = False
         commentary = ''
+        
         if self.use_commentary:  # 执行
             commentary_file_path = measurement_file_current.replace('measurements', 'commentary').replace('data/', 'commentary/') # TODO: move to config
             # commentary_file_path = /root/simlingo/database/simlingo_v2_2026_02_28/commentary/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/commentary/0026.json.gz...
@@ -378,6 +376,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                         else:
                             print(f"WARNING: {qa_question} not in q_augment. Using default question.")
                             qa_question = qa_question_org
+                        
                         # 如果模板中有如果模板中有qa_question,那么就在模板中随机选择一个,并将"<OBJECT>"、"<LOCATION>"、<DISTANCE>"替换回去
                         if qa_answer in self.a_augment:
                             qa_answer = random.choice(self.a_augment[qa_answer]).replace('<OBJECT>', a_objects[0]).replace('<LOCATION>', a_location)
@@ -392,7 +391,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         
         
         
-        ########################################### 🥭 target point 🥭 ###########################################
+        ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
 
 
         target_options, placeholder_values = self.get_navigational_conditioning( data, current_measurement, target_point, next_target_point)
@@ -402,7 +401,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         "Target waypoint: <TARGET_POINT><TARGET_POINT>.",
         "Command: {command} in {dist_to_command} meter{next_command}.",
         "Command: {lmdrive_command}."
-        ]
+        ]   # lmdrive_command 来自"/data/augmented_templates/lmdrive.json"语言增强模板文件
         
         placeholder_values = 
         {
@@ -456,7 +455,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             self.num_sampled_per_type['qa'] += 1
         
         # 任务三: driving任务
-        else:  # 执行
+        else:
             # 标准的驾驶轨迹预测样本
             prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Predict the waypoints."
             answer = f"Waypoints:"

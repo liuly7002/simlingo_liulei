@@ -364,6 +364,8 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
 
 
     
+    ############################################## 🧽 加载 InternVL2-1B 模型自带 conversation.py 文件 🧽 ##############################################
+    
     # 一、找到 InternVL2 模型目录，目的是为了从中读取 conversation.py 文件
     #     情况1: encoder_variant 是一个本地目录，直接使用
     if os.path.isdir(encoder_variant):  #  encoder_variant=/root/InternVL2-1B
@@ -373,6 +375,7 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
         cache_dir = f"{cache_root_dir}/{encoder_variant.split('/')[1]}"              # 构造缓存路径,例如 pretrained/InternVL2-1B
         cache_dir = to_absolute_path(cache_dir)                                      # 转换为绝对路径，确保在任何工作目录下都能正确访问
         model_dir = snapshot_download(repo_id=encoder_variant, local_dir=cache_dir)  # 从 HuggingFace 下载整个模型仓库到这个目录
+    
     # 二、定位并动态导入 conversation.py
     #     不自己硬编码 chat template，而是直接调用 InternVL2 官方模型仓库里的 conversation.py
     # 这样做的好处是：
@@ -395,9 +398,9 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
     
     
     
+    ############################################## 🧽 加载 InternVL2-1B 模型自带 conversation.py 文件 🧽 ##############################################
     
-    
-    # 构造图像占位模板串 例如 <img><IMG_CONTEXT><IMG_CONTEXT>...</img> 其中 IMG_CONTEXT 根据 num_image_tokens_total 决定数量
+    # 构造图像占位模板串: "<img><IMG_CONTEXT><IMG_CONTEXT>...</img>" 其中 IMG_CONTEXT 根据 num_image_tokens_total 决定数量
     image_tokens_templates = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * num_image_tokens_total + IMG_END_TOKEN
 
 
@@ -406,7 +409,7 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
 
 
 
-    # 一、准备两个 prompt 列表  这两个列表分别保存 batch 中每个样本构造出的两种 prompt
+    # 一、准备两个 prompt 列表  这两个列表分别保存当前 batch 中每个样本构造出的两种 prompt
     prompts_conv = []     # 1. 完整对话模板（包含问题和答案）这个主要用于训练
     prompts_question = [] # 2. 只有问题的模板（答案部分是空的）这个主要用于推理，评估时也可以用来计算损失mask
     
@@ -450,11 +453,13 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
             # 取出来之后，根据角色(user/assistant)把文本内容追加到对应的模板里
             if conv_part['role'] == 'assistant':          # 如果当前轮是 assistant
                 template_conv.append_message(template_conv.roles[1], content_str)  # ！！！把内容追加到模板中 assistant 的角色位置
+            
             elif conv_part['role'] == 'user':                             # 如果当前轮是 user
                 if conv_part_idx == 0 and IMG_TOKEN not in content_str:   # 如果这是第 1 轮用户消息,且用户文本中没有显式写 <image>
                     content_str = f"{IMG_TOKEN}\n" + content_str          # 那就自动在最前面补一个<image>
                     # 为什么这样做？因为 InternVL2 的预训练就是在用户消息的开头放一个<image>占位符，来告诉模型这里有图像输入，所以在 fine-tuning 时也要保持这个格式，这样才能更好地利用预训练学到的知识
                 template_conv.append_message(template_conv.roles[0], content_str)  # ！！！把内容追加到模板中 user 的角色位置
+            
             else:   # 如果 role 不是 user 或 assistant，直接报错
                 raise ValueError(f"Role {conv_part['role']} not supported")
         
@@ -615,7 +620,7 @@ def preprocess_image_batch(
 
     # 开始处理 batch 中的每张图像
     for idx, img in enumerate(images_batch_list):
-        image_np = img.numpy().astype(np.uint8)        # 把 PyTorch tensor 变成 NumPy 数组，并强制转成 uint8
+        image_np = img.numpy().astype(np.uint8)        # 把 PyTorch float tensor 变成 NumPy 数组，并强制转成 uint8
         image_np = np.transpose(image_np, (1, 2, 0))   # 调整维度顺序，从 (C, H, W) 变成 (H, W, C)，因为 PIL 处理的图像是 (H, W, C) 格式
         image = Image.fromarray(image_np)              # 变成 PIL 图像
         
@@ -624,11 +629,11 @@ def preprocess_image_batch(
         pixel_values = [transform(image) for image in images]  # 对每个 patch 做标准变换
         pixel_values = torch.stack(pixel_values)               # 把 patch 堆叠起来, 如果一张图有 2 个 patch，那么这里得到：[2, 3, 448, 448]
         images_processed_tmp.append(pixel_values)              # 保存这一张原图的处理结果,images_processed_tmp 里每个元素都代表一张原图处理后的 patch 张量
-        images_sizes_tmp.append([image.size[1], image.size[0]])# 记录 patch 尺寸信息  最后一个 patch 的尺寸 [H, W]
+        images_sizes_tmp.append([image.size[1], image.size[0]])# 记录当前图像的尺寸信息  [原图高度 H, 原图宽度 W]
     
     images_processed = {
         'pixel_values': torch.stack(images_processed_tmp), # 如果 batch 中总共有 N=BS*T 张图，每张图被切成 2 个 patch，那么：pixel_values.shape = [N, 2, 3, 448, 448]
-        'image_sizes': torch.tensor(images_sizes_tmp)      # 形状为 [N, 2]，每行是一个 patch 的尺寸 [H, W]
+        'image_sizes': torch.tensor(images_sizes_tmp)      # 形状为 [N, 2]，每行是一个 [原图高度 H, 原图宽度 W]
         }
     return images_processed
 
