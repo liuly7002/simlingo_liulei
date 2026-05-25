@@ -57,7 +57,6 @@ export TEAM_CONFIG={route_file}
 export RESUME=1
 export DATAGEN=1
 export SAVE_PATH={save_pth}
-export SAVE_TF_LABELS=1
 
 echo "Start python"
 
@@ -81,6 +80,8 @@ trap cleanup EXIT
 
 # Without GUI
 # bash {carla_root}/CarlaUE4.sh --world-port=$FREE_WORLD_PORT -RenderOffScreen -nosound -graphicsadapter=0 -carla-streaming-port=$FREE_STREAMING_PORT &
+# CARLA_PID=$!
+
 # With GUI
 bash {carla_root}/CarlaUE4.sh --world-port=$FREE_WORLD_PORT -quality-level=Low -carla-streaming-port=$FREE_STREAMING_PORT &
 CARLA_PID=$!

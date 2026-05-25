@@ -59,7 +59,8 @@ class DataAgent(AutoPilot):
     def setup(self, path_to_conf_file, route_index=None, traffic_manager=None):
         super().setup(path_to_conf_file, route_index, traffic_manager=None)
 
-        self.SAVE_TF_LABELS = int(os.environ.get('SAVE_TF_LABELS', 0))
+        # self.SAVE_TF_LABELS = int(os.environ.get('SAVE_TF_LABELS', 0))
+        self.SAVE_TF_LABELS = 1  # 1:保存语义分割和深度图，0:不保存
 
         self.weather_tmp = None
         self.step_tmp = 0
@@ -170,59 +171,60 @@ class DataAgent(AutoPilot):
         })
 
         if self.SAVE_TF_LABELS:
-            result.append(
+            result += [
                 {
-                        'type': 'sensor.camera.semantic_segmentation',
-                        'x': self.config.camera_pos[0],
-                        'y': self.config.camera_pos[1],
-                        'z': self.config.camera_pos[2],
-                        'roll': self.config.camera_rot_0[0],
-                        'pitch': self.config.camera_rot_0[1],
-                        'yaw': self.config.camera_rot_0[2],
-                        'width': self.config.camera_width,
-                        'height': self.config.camera_height,
-                        'fov': self.config.camera_fov,
-                        'id': 'semantics'
-                }, {
-                        'type': 'sensor.camera.semantic_segmentation',
-                        'x': self.config.camera_pos[0],
-                        'y': self.config.camera_pos[1] + self.augmentation_translation,
-                        'z': self.config.camera_pos[2],
-                        'roll': self.config.camera_rot_0[0],
-                        'pitch': self.config.camera_rot_0[1],
-                        'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
-                        'width': self.config.camera_width,
-                        'height': self.config.camera_height,
-                        'fov': self.config.camera_fov,
-                        'id': 'semantics_augmented'
-                }, {
-                        'type': 'sensor.camera.depth',
-                        'x': self.config.camera_pos[0],
-                        'y': self.config.camera_pos[1],
-                        'z': self.config.camera_pos[2],
-                        'roll': self.config.camera_rot_0[0],
-                        'pitch': self.config.camera_rot_0[1],
-                        'yaw': self.config.camera_rot_0[2],
-                        'width': self.config.camera_width,
-                        'height': self.config.camera_height,
-                        'fov': self.config.camera_fov,
-                        'id': 'depth'
-                }, {
-                        'type': 'sensor.camera.depth',
-                        'x': self.config.camera_pos[0],
-                        'y': self.config.camera_pos[1] + self.augmentation_translation,
-                        'z': self.config.camera_pos[2],
-                        'roll': self.config.camera_rot_0[0],
-                        'pitch': self.config.camera_rot_0[1],
-                        'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
-                        'width': self.config.camera_width,
-                        'height': self.config.camera_height,
-                        'fov': self.config.camera_fov,
-                        'id': 'depth_augmented'
+                    'type': 'sensor.camera.semantic_segmentation',
+                    'x': self.config.camera_pos[0],
+                    'y': self.config.camera_pos[1],
+                    'z': self.config.camera_pos[2],
+                    'roll': self.config.camera_rot_0[0],
+                    'pitch': self.config.camera_rot_0[1],
+                    'yaw': self.config.camera_rot_0[2],
+                    'width': self.config.camera_width,
+                    'height': self.config.camera_height,
+                    'fov': self.config.camera_fov,
+                    'id': 'semantics'
+                },
+                {
+                    'type': 'sensor.camera.semantic_segmentation',
+                    'x': self.config.camera_pos[0],
+                    'y': self.config.camera_pos[1] + self.augmentation_translation,
+                    'z': self.config.camera_pos[2],
+                    'roll': self.config.camera_rot_0[0],
+                    'pitch': self.config.camera_rot_0[1],
+                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
+                    'width': self.config.camera_width,
+                    'height': self.config.camera_height,
+                    'fov': self.config.camera_fov,
+                    'id': 'semantics_augmented'
+                },
+                {
+                    'type': 'sensor.camera.depth',
+                    'x': self.config.camera_pos[0],
+                    'y': self.config.camera_pos[1],
+                    'z': self.config.camera_pos[2],
+                    'roll': self.config.camera_rot_0[0],
+                    'pitch': self.config.camera_rot_0[1],
+                    'yaw': self.config.camera_rot_0[2],
+                    'width': self.config.camera_width,
+                    'height': self.config.camera_height,
+                    'fov': self.config.camera_fov,
+                    'id': 'depth'
+                },
+                {
+                    'type': 'sensor.camera.depth',
+                    'x': self.config.camera_pos[0],
+                    'y': self.config.camera_pos[1] + self.augmentation_translation,
+                    'z': self.config.camera_pos[2],
+                    'roll': self.config.camera_rot_0[0],
+                    'pitch': self.config.camera_rot_0[1],
+                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
+                    'width': self.config.camera_width,
+                    'height': self.config.camera_height,
+                    'fov': self.config.camera_fov,
+                    'id': 'depth_augmented'
                 }
-            )
-
-
+            ]
 
         return result
 
