@@ -53,14 +53,14 @@ def get_entry_point():
 
 class DataAgent(AutoPilot):
     """
-                Child of the autopilot that additionally runs data collection and storage.
-                """
+    Child of the autopilot that additionally runs data collection and storage.
+    """
 
     def setup(self, path_to_conf_file, route_index=None, traffic_manager=None):
         super().setup(path_to_conf_file, route_index, traffic_manager=None)
 
         # self.SAVE_TF_LABELS = int(os.environ.get('SAVE_TF_LABELS', 0))
-        self.SAVE_TF_LABELS = 1  # 1:保存语义分割和深度图，0:不保存
+        self.SAVE_TF_LABELS = 1
 
         self.weather_tmp = None
         self.step_tmp = 0
@@ -83,7 +83,14 @@ class DataAgent(AutoPilot):
                 (self.save_path / 'bev_semantics').mkdir()
                 (self.save_path / 'bev_semantics_augmented').mkdir()
 
-        self.tmp_visu = int(os.environ.get('TMP_VISU', 0))
+                # 新增
+                (self.save_path / 'bev_static_masks').mkdir()
+                (self.save_path / 'bev_static_masks_augmented').mkdir()
+                (self.save_path / 'bev_static_debug').mkdir()
+                (self.save_path / 'bev_static_debug_augmented').mkdir()
+
+        # self.tmp_visu = int(os.environ.get('TMP_VISU', 0))
+        self.tmp_visu = 1
 
         self._active_traffic_light = None
         self.last_lidar = None
@@ -226,6 +233,7 @@ class DataAgent(AutoPilot):
                 }
             ]
 
+
         return result
 
     def tick(self, input_data):
@@ -308,6 +316,10 @@ class DataAgent(AutoPilot):
                 'depth_augmented': depth_augmented,
                 'bev_semantics': bev_semantics['bev_semantic_classes'],
                 'bev_semantics_augmented': bev_semantics_augmented['bev_semantic_classes'],
+
+                # 新增
+                'bev_static_masks': bev_semantics['bev_static_masks'],
+                'bev_static_masks_augmented': bev_semantics_augmented['bev_static_masks'],
             })
 
         return result
@@ -406,6 +418,21 @@ class DataAgent(AutoPilot):
             for vehicle in vehicles:
                 vehicle.set_light_state(carla.VehicleLightState.NONE)
 
+    def save_bev_static_debug_png(self, save_path, masks):
+        road = masks['road'].astype(bool)
+        sidewalk = masks['sidewalk'].astype(bool)
+        lane_broken = masks['lane_broken'].astype(bool)
+        lane_solid = masks['lane_solid'].astype(bool)
+
+        image = np.zeros((road.shape[0], road.shape[1], 3), dtype=np.uint8)
+
+        image[road] = (46, 52, 54)         # 道路：深灰
+        image[sidewalk] = (128, 128, 128)  # 人行道：中灰
+        image[lane_solid] = (255, 0, 255)  # 实线：品红
+        image[lane_broken] = (255, 140, 255)  # 虚线：浅品红
+
+        cv2.imwrite(str(save_path), image)
+
     def save_sensors(self, tick_data):
         frame = self.step // self.config.data_save_freq
 
@@ -416,26 +443,53 @@ class DataAgent(AutoPilot):
         if self.SAVE_TF_LABELS:
             cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
             cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
-
+            
             cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
             cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
-
+            
             cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
             cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
                                     tick_data['bev_semantics_augmented'])
 
-        # Specialized LiDAR compression format
-        header = laspy.LasHeader(point_format=self.config.point_format)
-        header.offsets = np.min(tick_data['lidar'], axis=0)
-        header.scales = np.array([self.config.point_precision, self.config.point_precision, self.config.point_precision])
+            # 新增
+            np.savez_compressed(
+                str(self.save_path / 'bev_static_masks' / (f'{frame:04}.npz')),
+                road=tick_data['bev_static_masks']['road'],
+                sidewalk=tick_data['bev_static_masks']['sidewalk'],
+                lane_all=tick_data['bev_static_masks']['lane_all'],
+                lane_broken=tick_data['bev_static_masks']['lane_broken'],
+                lane_solid=tick_data['bev_static_masks']['lane_solid'],
+            )
+            self.save_bev_static_debug_png(
+                self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
+                tick_data['bev_static_masks']
+            )
+            np.savez_compressed(
+                str(self.save_path / 'bev_static_masks_augmented' / (f'{frame:04}.npz')),
+                road=tick_data['bev_static_masks_augmented']['road'],
+                sidewalk=tick_data['bev_static_masks_augmented']['sidewalk'],
+                lane_all=tick_data['bev_static_masks_augmented']['lane_all'],
+                lane_broken=tick_data['bev_static_masks_augmented']['lane_broken'],
+                lane_solid=tick_data['bev_static_masks_augmented']['lane_solid'],
+            )
+            self.save_bev_static_debug_png(
+                self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
+                tick_data['bev_static_masks_augmented']
+            )
 
-        with laspy.open(self.save_path / 'lidar' / (f'{frame:04}.laz'), mode='w', header=header) as writer:
-            point_record = laspy.ScaleAwarePointRecord.zeros(tick_data['lidar'].shape[0], header=header)
-            point_record.x = tick_data['lidar'][:, 0]
-            point_record.y = tick_data['lidar'][:, 1]
-            point_record.z = tick_data['lidar'][:, 2]
 
-            writer.write_points(point_record)
+        # # Specialized LiDAR compression format
+        # header = laspy.LasHeader(point_format=self.config.point_format)
+        # header.offsets = np.min(tick_data['lidar'], axis=0)
+        # header.scales = np.array([self.config.point_precision, self.config.point_precision, self.config.point_precision])
+        #
+        # with laspy.open(self.save_path / 'lidar' / (f'{frame:04}.laz'), mode='w', header=header) as writer:
+        #     point_record = laspy.ScaleAwarePointRecord.zeros(tick_data['lidar'].shape[0], header=header)
+        #     point_record.x = tick_data['lidar'][:, 0]
+        #     point_record.y = tick_data['lidar'][:, 1]
+        #     point_record.z = tick_data['lidar'][:, 2]
+        #
+        #     writer.write_points(point_record)
 
         with gzip.open(self.save_path / 'boxes' / (f'{frame:04}.json.gz'), 'wt', encoding='utf-8') as f:
             json.dump(tick_data['bounding_boxes'], f, indent=4)

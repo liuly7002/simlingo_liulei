@@ -19,16 +19,16 @@ COLOR_BLACK = (0, 0, 0)
 COLOR_RED = (255, 0, 0)
 COLOR_GREEN = (0, 255, 0)
 COLOR_BLUE = (0, 0, 255)
-COLOR_CYAN = (0, 255, 255)
-COLOR_MAGENTA = (255, 0, 255)
-COLOR_MAGENTA_2 = (255, 140, 255)
+COLOR_CYAN = (0, 255, 255)          # 蓝绿
+COLOR_MAGENTA = (255, 0, 255)       # 品红
+COLOR_MAGENTA_2 = (255, 140, 255)   # 浅品红
 COLOR_YELLOW = (255, 255, 0)
 COLOR_YELLOW_2 = (160, 160, 0)
 COLOR_WHITE = (255, 255, 255)
-COLOR_GREY = (128, 128, 128)
+COLOR_GREY = (128, 128, 128)         # 中灰
 COLOR_ALUMINIUM_0 = (238, 238, 236)
 COLOR_ALUMINIUM_3 = (136, 138, 133)
-COLOR_ALUMINIUM_5 = (46, 52, 54)
+COLOR_ALUMINIUM_5 = (46, 52, 54)     # 深灰
 
 
 def tint(color, factor):
@@ -145,11 +145,14 @@ class ObsManager(ObsManagerBase):
     return image
 
   def get_observation(self, close_traffic_lights=None):
-    ev_transform = self.vehicle.get_transform()
-    ev_loc = ev_transform.location
-    ev_rot = ev_transform.rotation
-    ev_bbox = self.vehicle.bounding_box
 
+    # 获取自车状态
+    ev_transform = self.vehicle.get_transform()
+    ev_loc = ev_transform.location        # 自车carla世界坐标系下的位置(中心坐标[x,y,z])
+    ev_rot = ev_transform.rotation        # 自车carla世界坐标系下的姿态(欧拉角yaw pitch roll)
+    ev_bbox = self.vehicle.bounding_box   # 自车尺寸 一般是[l/2, w/2, h/2]
+
+    # 判断周围车辆/行人是否在感兴趣区域内
     def is_within_distance(w):
       c_distance = abs(ev_loc.x - w.location.x) < self._distance_threshold \
           and abs(ev_loc.y - w.location.y) < self._distance_threshold \
@@ -215,13 +218,14 @@ class ObsManager(ObsManagerBase):
 
     self._history_queue.append((vehicles, walkers, tl_green, tl_yellow, tl_red, stops))
 
-    m_warp = self._get_warp_transform(ev_loc, ev_rot)
+    m_warp = self._get_warp_transform(ev_loc, ev_rot)  # 仿射变换矩阵，这是核心，这个变换矩阵就使得自车中心在BEV中的位置、自车朝向图像向上
 
-    # objects with history
+    # objects with history  周围车辆、周围行人、绿灯、黄灯、红灯、停止线的 BEVmask 均为列表 均是历史的加当前的
     vehicle_masks, walker_masks, tl_green_masks, tl_yellow_masks, tl_red_masks, stop_masks \
         = self._get_history_masks(m_warp)
 
-    # road_mask, lane_mask
+    ############################### mask ###############################
+    # road_mask(道路),side_walk(人行道), lane_mask道路线(实线 虚线)
     road_mask = cv.warpAffine(self._road, m_warp, (self._width, self._width)).astype(bool)
     sidewalk_mask = cv.warpAffine(self._sidewalk, m_warp, (self._width, self._width)).astype(bool)
     lane_mask_all = cv.warpAffine(self._lane_marking_all, m_warp, (self._width, self._width)).astype(bool)
@@ -233,10 +237,10 @@ class ObsManager(ObsManagerBase):
       ev_mask = self._get_mask_from_actor_list([(ev_transform, ev_bbox.location, ev_bbox.extent)], m_warp)
 
       image = np.zeros([self._width, self._width, 3], dtype=np.uint8)
-      image[road_mask] = COLOR_ALUMINIUM_5
-      image[sidewalk_mask] = COLOR_GREY
-      image[lane_mask_all] = COLOR_MAGENTA
-      image[lane_mask_broken] = COLOR_MAGENTA_2
+      image[road_mask] = COLOR_ALUMINIUM_5  # 行车道(深灰)
+      image[sidewalk_mask] = COLOR_GREY     # 人行道(中灰)
+      image[lane_mask_all] = COLOR_MAGENTA      # 实线(品红)
+      image[lane_mask_broken] = COLOR_MAGENTA_2 # 虚线(浅品红)
 
       h_len = len(self._history_idx) - 1
       for i, mask in enumerate(stop_masks):
@@ -271,9 +275,28 @@ class ObsManager(ObsManagerBase):
     # Align with LiDAR voxelgrid
     c_all = np.rot90(c_all, k=-1)
 
-    obs_dict = {'bev_semantic_classes': c_all}
+    lane_mask_solid = lane_mask_all & (~lane_mask_broken)  # 实线
+    # obs_dict = {
+    #   'bev_semantic_classes': c_all,
+    #   'bev_static_masks': {
+    #     'road': np.rot90(road_mask.astype(np.uint8), k=-1),  # 道路可行驶区域
+    #     'sidewalk': np.rot90(sidewalk_mask.astype(np.uint8), k=-1),  # 人行道区域
+    #     'lane_all': np.rot90(lane_mask_all.astype(np.uint8), k=-1),  # 所有车道线
+    #     'lane_broken': np.rot90(lane_mask_broken.astype(np.uint8), k=-1),  # 虚线
+    #     'lane_solid': np.rot90(lane_mask_solid.astype(np.uint8), k=-1),  # 实线
+    #   }
+    # }
+    obs_dict = {
+      'bev_semantic_classes': c_all,
+      'bev_static_masks': {
+        'road': road_mask.astype(np.uint8),
+        'sidewalk': sidewalk_mask.astype(np.uint8),
+        'lane_all': lane_mask_all.astype(np.uint8),
+        'lane_broken': lane_mask_broken.astype(np.uint8),
+        'lane_solid': lane_mask_solid.astype(np.uint8),
+      }
+    }
     if self.visualize:
-      # For visualization we don't rotate as
       obs_dict['rendered'] = image
 
     return obs_dict
