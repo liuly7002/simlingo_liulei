@@ -441,15 +441,16 @@ class DataAgent(AutoPilot):
         cv2.imwrite(str(self.save_path / 'rgb_augmented' / (f'{frame:04}.jpg')), tick_data['rgb_augmented'])
 
         if self.SAVE_TF_LABELS:
-            cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
-            cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
-            
-            cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
-            cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
-            
-            cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
-            cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
-                                    tick_data['bev_semantics_augmented'])
+            if 0:
+                cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
+                cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
+
+                cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
+                cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
+
+                cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
+                cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
+                                        tick_data['bev_semantics_augmented'])
 
             # 新增
             np.savez_compressed(
@@ -460,10 +461,6 @@ class DataAgent(AutoPilot):
                 lane_broken=tick_data['bev_static_masks']['lane_broken'],
                 lane_solid=tick_data['bev_static_masks']['lane_solid'],
             )
-            self.save_bev_static_debug_png(
-                self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
-                tick_data['bev_static_masks']
-            )
             np.savez_compressed(
                 str(self.save_path / 'bev_static_masks_augmented' / (f'{frame:04}.npz')),
                 road=tick_data['bev_static_masks_augmented']['road'],
@@ -472,17 +469,21 @@ class DataAgent(AutoPilot):
                 lane_broken=tick_data['bev_static_masks_augmented']['lane_broken'],
                 lane_solid=tick_data['bev_static_masks_augmented']['lane_solid'],
             )
-            self.save_bev_static_debug_png(
-                self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
-                tick_data['bev_static_masks_augmented']
-            )
+            if 0:
+                self.save_bev_static_debug_png(
+                    self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
+                    tick_data['bev_static_masks']
+                )
+                self.save_bev_static_debug_png(
+                    self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
+                    tick_data['bev_static_masks_augmented']
+                )
 
-
+        ################  雷达相关内容 暂时注释掉 ################
         # # Specialized LiDAR compression format
         # header = laspy.LasHeader(point_format=self.config.point_format)
         # header.offsets = np.min(tick_data['lidar'], axis=0)
         # header.scales = np.array([self.config.point_precision, self.config.point_precision, self.config.point_precision])
-        #
         # with laspy.open(self.save_path / 'lidar' / (f'{frame:04}.laz'), mode='w', header=header) as writer:
         #     point_record = laspy.ScaleAwarePointRecord.zeros(tick_data['lidar'].shape[0], header=header)
         #     point_record.x = tick_data['lidar'][:, 0]
