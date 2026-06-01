@@ -441,16 +441,15 @@ class DataAgent(AutoPilot):
         cv2.imwrite(str(self.save_path / 'rgb_augmented' / (f'{frame:04}.jpg')), tick_data['rgb_augmented'])
 
         if self.SAVE_TF_LABELS:
-            if 0:
-                cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
-                cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
-
-                cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
-                cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
-
-                cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
-                cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
-                                        tick_data['bev_semantics_augmented'])
+            
+            ################  语义、深度图等相关内容 暂时注释掉 ################
+            # cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
+            # cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
+            # cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
+            # cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
+            # cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
+            # cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
+            #                         tick_data['bev_semantics_augmented'])
 
             # 新增
             np.savez_compressed(
@@ -469,15 +468,16 @@ class DataAgent(AutoPilot):
                 lane_broken=tick_data['bev_static_masks_augmented']['lane_broken'],
                 lane_solid=tick_data['bev_static_masks_augmented']['lane_solid'],
             )
-            if 0:
-                self.save_bev_static_debug_png(
-                    self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
-                    tick_data['bev_static_masks']
-                )
-                self.save_bev_static_debug_png(
-                    self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
-                    tick_data['bev_static_masks_augmented']
-                )
+            
+            ################  道路相关的mask收集debug相关内容 暂时注释掉 ################
+            self.save_bev_static_debug_png(
+                self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
+                tick_data['bev_static_masks']
+            )
+            self.save_bev_static_debug_png(
+                self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
+                tick_data['bev_static_masks_augmented']
+            )
 
         ################  雷达相关内容 暂时注释掉 ################
         # # Specialized LiDAR compression format

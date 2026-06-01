@@ -23,7 +23,8 @@ UNDO_RENAMING = False  # Use this to undo renaming
 
 if __name__ == "__main__":
 
-    data_save_root = '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo'
+    # data_save_root = '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo'
+    data_save_root = '/root/simlingo/database/simlingo_v2_2026_05_25/data/simlingo'
 
     runs = glob.glob(f'{data_save_root}/**/*Town*', recursive=True)
     num_failed = 0

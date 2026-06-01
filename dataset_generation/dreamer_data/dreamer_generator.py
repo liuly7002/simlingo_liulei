@@ -49,7 +49,7 @@ class CarlaAlternativeCreator():
  
     # Dataset and path settings
     base_folder = 'database'   # 数据集根目录
-    dataset_name = 'simlingo_v2_2026_02_28'  # 数据集名称
+    dataset_name = 'simlingo_v2_2026_05_25'  # 数据集名称
     data_directory = f'{base_folder}/{dataset_name}/data'  # 脚本读取原始数据的根目录
     viz_save_path = 'viz/dreamer' if not viz_for_video else 'viz/dreamer_video'
     Path(viz_save_path).mkdir(parents=True, exist_ok=True)
@@ -94,11 +94,16 @@ class CarlaAlternativeCreator():
     risk_map_folder_name = 'risk_map'
     # BEV range in current ego coordinate.
     # x: forward direction, y: lateral direction.
-    risk_x_min = -55.0     # 自车后方 10 m
-    risk_x_max = 55.0      # 自车前方 60 m
-    risk_y_min = -55.0     # 自车左侧 25 m
-    risk_y_max = 55.0      # 自车右侧 25 m
-    risk_resolution = 0.5  # 每个网格的大小为 0.5 m x 0.5 m
+    risk_x_min = -25.6    # 自车后方 10 m
+    risk_x_max = 25.6      # 自车前方 60 m
+    risk_y_min = -25.6     # 自车左侧 25 m
+    risk_y_max = 25.6      # 自车右侧 25 m
+    risk_resolution = 0.2  # 每个网格的大小为 0.5 m x 0.5 m
+    # Road mask settings
+    use_road_mask = False
+    road_mask_key = None
+    road_mask_folder_candidates = []
+    strict_require_road_mask = False
     # Risk rendering parameters
     risk_time_decay = 0.85 # 未来越远，权重越低
     risk_sigma = 1.0       # 高斯扩散范围
@@ -140,9 +145,36 @@ class CarlaAlternativeCreator():
         path_measurement = path_boxes.replace('boxes', 'measurements')
         path_rgb_image = path_boxes.replace('boxes', 'rgb').replace('.json.gz', '.jpg')
 
+
+
+
+
+
+
+
+        # ############################################################
+        # # 🌋 Risk Map Generation 🌋
+        # ############################################################
+        # 不再读取道路 mask，只生成动态 actor BEV
+        path_road_mask = None
+
+
+
+
+
+
+
+
+
+
+
+
+
         # Skip frames if RGB image does not exist
         if not os.access(path_rgb_image, os.F_OK) or not os.access(path_boxes, os.F_OK) or not os.access(path_measurement, os.F_OK):
             return
+
+
         
         ###################################### 根据 route 结果过滤低质量专家数据 ######################################
         if self.filter_routes_by_result:
@@ -357,31 +389,34 @@ class CarlaAlternativeCreator():
         risk_map = None
         risk_map_path = None
         risk_meta = None
+
         if self.save_risk_map:
+            # 只根据周围车辆/actor 的当前与未来位置生成动态 BEV，不加载道路 mask
             risk_map, risk_meta = self.build_risk_map(
                 bbs_other_actors=bbs_other_actors
             )
+
+            risk_meta['has_road_mask'] = False
+            risk_meta['road_mask_path'] = None
+            risk_meta['road_mask_key'] = None
+            risk_meta['road_mask_resolution'] = None
+
             risk_map_path, risk_meta = self.save_risk_map_file(
                 path_save=path_save,
                 risk_map=risk_map,
-                risk_meta=risk_meta
+                risk_meta=risk_meta,
+                road_mask=None
             )
+
             if self.save_risk_viz:
                 self.viz_risk_map(
                     risk_map=risk_map,
                     risk_map_path=risk_map_path,
-                    path_rgb_image=path_rgb_image
+                    path_rgb_image=path_rgb_image,
+                    road_mask=None,
+                    bbs_other_actors=None,
+                    route_points=route_adjusted
                 )
-            # if self.save_risk_viz:
-            #     self.viz_risk_map_with_current_road(
-            #         risk_map=risk_map,
-            #         risk_map_path=risk_map_path,
-            #         current_boxes=current_boxes,
-            #     )
-
-
-
-
 
 
 
@@ -1251,6 +1286,26 @@ class CarlaAlternativeCreator():
     ###########################################
     ########                           ########
     ###########################################
+    def ego_xy_to_mask_rc(self, x, y, H, W):
+
+        center_row = H / 2.0
+        center_col = W / 2.0
+
+        row = center_row - x / self.risk_resolution
+        col = center_col + y / self.risk_resolution
+
+        return row, col
+
+    def mask_rc_to_ego_xy(self, row, col, H, W):
+
+        center_row = H / 2.0
+        center_col = W / 2.0
+
+        x = (center_row - row) * self.risk_resolution
+        y = (col - center_col) * self.risk_resolution
+
+        return x, y
+
     def build_risk_map(self, bbs_other_actors):
         """
         Build a BEV future-risk map from future bounding boxes of surrounding actors.
@@ -1343,8 +1398,9 @@ class CarlaAlternativeCreator():
             'axis_definition': {
                 'x': 'forward',
                 'y': 'lateral',
-                'risk_map_axis_0': 'x_index',
-                'risk_map_axis_1': 'y_index',
+                'risk_map_axis_0': 'image_row',
+                'risk_map_axis_1': 'image_col',
+                'row_col_projection': 'row = H / 2 - x / resolution, col = W / 2 + y / resolution',
             },
             'num_actor_risk_records': len(actor_risk_records),
             # Avoid saving too much metadata into json.
@@ -1367,64 +1423,65 @@ class CarlaAlternativeCreator():
         resolution,
     ):
         """
-        Add a soft Gaussian-like risk around an actor bounding box.
+        Add actor risk directly onto the road-mask image grid.
 
-        This version is intentionally simple and robust:
-        - It considers the actor size.
-        - It considers actor yaw.
-        - It writes a local patch only, not the whole map.
+        risk_map is now image-like:
+            axis 0 = image row
+            axis 1 = image col
         """
 
         H, W = risk_map.shape
 
-        # Local influence radius.
-        # Use actor size + 3 sigma as the affected area.
+        center_row, center_col = self.ego_xy_to_mask_rc(
+            x=center_x,
+            y=center_y,
+            H=H,
+            W=W,
+        )
+
         radius_x = extent_x + 3.0 * sigma
         radius_y = extent_y + 3.0 * sigma
         radius = max(radius_x, radius_y)
-
-        ix_center = int((center_x - x_min) / resolution)
-        iy_center = int((center_y - y_min) / resolution)
-
         grid_radius = int(np.ceil(radius / resolution)) + 2
 
-        ix_min = max(0, ix_center - grid_radius)
-        ix_max = min(H - 1, ix_center + grid_radius)
-        iy_min = max(0, iy_center - grid_radius)
-        iy_max = min(W - 1, iy_center + grid_radius)
+        row_min = max(0, int(np.floor(center_row - grid_radius)))
+        row_max = min(H - 1, int(np.ceil(center_row + grid_radius)))
+        col_min = max(0, int(np.floor(center_col - grid_radius)))
+        col_max = min(W - 1, int(np.ceil(center_col + grid_radius)))
 
-        if ix_min > ix_max or iy_min > iy_max:
+        if row_min > row_max or col_min > col_max:
             return
 
         yaw = np.deg2rad(yaw_deg)
         cos_yaw = np.cos(yaw)
         sin_yaw = np.sin(yaw)
 
-        for ix in range(ix_min, ix_max + 1):
-            x = x_min + (ix + 0.5) * resolution
+        for row in range(row_min, row_max + 1):
+            for col in range(col_min, col_max + 1):
 
-            for iy in range(iy_min, iy_max + 1):
-                y = y_min + (iy + 0.5) * resolution
+                x, y = self.mask_rc_to_ego_xy(
+                    row=row,
+                    col=col,
+                    H=H,
+                    W=W,
+                )
 
                 dx = x - center_x
                 dy = y - center_y
 
-                # Rotate point into actor local frame.
                 local_x = cos_yaw * dx + sin_yaw * dy
                 local_y = -sin_yaw * dx + cos_yaw * dy
 
-                # Distance to oriented bounding box.
-                # Inside box: distance is 0.
                 dist_x = max(abs(local_x) - extent_x, 0.0)
                 dist_y = max(abs(local_y) - extent_y, 0.0)
                 dist = np.sqrt(dist_x ** 2 + dist_y ** 2)
 
                 value = weight * np.exp(-(dist ** 2) / (2.0 * sigma ** 2))
 
-                if value > risk_map[ix, iy]:
-                    risk_map[ix, iy] = value
+                if value > risk_map[row, col]:
+                    risk_map[row, col] = value
 
-    def save_risk_map_file(self, path_save, risk_map, risk_meta):
+    def save_risk_map_file(self, path_save, risk_map, risk_meta, road_mask=None):
         """
         Save risk map as compressed npz.
         The json.gz dreamer label only stores the path and metadata.
@@ -1433,16 +1490,20 @@ class CarlaAlternativeCreator():
         risk_save_path = path_save.replace(
             f'/{self.save_folder_name}/',
             f'/{self.risk_map_folder_name}/'
-        ).replace(
-            f'/{self.save_folder_name}/',
-            f'/{self.risk_map_folder_name}/'
         ).replace('.json.gz', '.npz')
 
         Path(risk_save_path).parent.mkdir(parents=True, exist_ok=True)
 
+        save_dict = {
+            'risk_map': risk_map.astype(np.float16),
+        }
+
+        if road_mask is not None:
+            save_dict['road_mask'] = road_mask.astype(np.uint8)
+
         np.savez_compressed(
             risk_save_path,
-            risk_map=risk_map.astype(np.float16),
+            **save_dict
         )
 
         risk_meta = dict(risk_meta)
@@ -1450,13 +1511,16 @@ class CarlaAlternativeCreator():
 
         return risk_save_path, risk_meta
 
-    def viz_risk_map(self, risk_map, risk_map_path, path_rgb_image=None):
-        """
-        Save risk map visualization for debugging.
 
-        Display convention:
-            vertical axis: x forward
-            horizontal axis: y lateral
+    def viz_risk_map(self, risk_map, risk_map_path, path_rgb_image=None, road_mask=None, bbs_other_actors=None, route_points=None):
+        """
+        Visualize:
+        - white: current-frame road mask
+        - black: non-road
+        - red x: ego center
+        - blue boxes: current-frame surrounding actors
+        - orange points: future actor centers
+        - color heatmap: future actor risk, clipped by road mask
         """
 
         if risk_map is None:
@@ -1465,177 +1529,86 @@ class CarlaAlternativeCreator():
         save_path = risk_map_path.replace('.npz', '.png')
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
 
-        plt.figure(figsize=(6, 7))
+        H, W = risk_map.shape
 
-        plt.imshow(
-            risk_map,
-            origin='lower',
-            extent=[
-                self.risk_y_min,
-                self.risk_y_max,
-                self.risk_x_min,
-                self.risk_x_max,
-            ],
-            aspect='auto',
-            vmin=0.0,
-            vmax=1.0,
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+        # 1. 不显示道路，只显示纯 BEV 背景
+        ax.imshow(
+            np.zeros_like(risk_map),
+            cmap='gray',
+            vmin=0,
+            vmax=1,
+            origin='upper',
+            interpolation='nearest'
         )
 
-        plt.colorbar(label='risk')
-        plt.xlabel('y lateral (m)')
-        plt.ylabel('x forward (m)')
-        plt.title('Future Actor Risk Map')
+        # 2. 不使用 road mask 裁剪 risk，直接显示动态 actor 风险
+        risk_for_viz = risk_map
 
-        # Ego position.
-        plt.scatter([0.0], [0.0], marker='x', s=50)
-        plt.text(0.5, 0.5, 'ego', fontsize=8)
+        risk_show = np.ma.masked_where(risk_for_viz <= 1e-4, risk_for_viz)
+
+        im = ax.imshow(
+            risk_show,
+            cmap='viridis',
+            vmin=0.0,
+            vmax=1.0,
+            origin='upper',
+            interpolation='nearest',
+            alpha=0.55
+        )
+
+        plt.colorbar(im, ax=ax, label='risk')
+
+        # 3. ego center
+        ego_row = H / 2.0
+        ego_col = W / 2.0
+        ax.scatter([ego_col], [ego_row], marker='x', s=100, c='red', linewidths=2)
+        ax.text(ego_col + 3, ego_row + 3, 'ego', fontsize=10, color='red')
+
+        # 4. draw current-frame navigation route points
+        if route_points is not None:
+            route_points = np.asarray(route_points, dtype=np.float32)
+
+            route_cols = []
+            route_rows = []
+
+            for pt in route_points:
+                x = float(pt[0])  # forward direction in ego frame
+                y = float(pt[1])  # lateral direction in ego frame
+
+                row, col = self.ego_xy_to_mask_rc(
+                    x=x,
+                    y=y,
+                    H=H,
+                    W=W
+                )
+
+                if 0 <= row < H and 0 <= col < W:
+                    route_rows.append(row)
+                    route_cols.append(col)
+
+            if len(route_cols) > 0:
+                ax.scatter(
+                    route_cols,
+                    route_rows,
+                    s=16,
+                    c='white',
+                    marker='o',
+                    alpha=1.0,
+                    edgecolors='black',
+                    linewidths=0.3,
+                    label='route'
+                )
+
+        ax.set_title('Risk')
+        ax.set_xlabel('image col')
+        ax.set_ylabel('image row')
+        ax.set_aspect('equal')
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=150)
         plt.close()
-
-    # def viz_risk_map_with_current_road(self,risk_map,risk_map_path,current_boxes=None,):
-    #     """
-    #     Visualize risk map with current-frame approximate road/lane structure.
-
-    #     This function does NOT use future frames.
-    #     It also does NOT use current_measurements['route'] as road geometry,
-    #     because route may represent future navigation or lane-change trajectory.
-
-    #     Coordinate:
-    #         x: ego forward
-    #         y: ego lateral
-    #     """
-
-    #     save_path = risk_map_path.replace('.npz', '_current_road.png')
-    #     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-
-    #     plt.figure(figsize=(7, 8))
-
-    #     plt.imshow(
-    #         risk_map,
-    #         origin='lower',
-    #         extent=[
-    #             self.risk_y_min,
-    #             self.risk_y_max,
-    #             self.risk_x_min,
-    #             self.risk_x_max,
-    #         ],
-    #         aspect='auto',
-    #         vmin=0.0,
-    #         vmax=1.0,
-    #     )
-
-    #     plt.colorbar(label='risk')
-    #     plt.xlabel('y lateral (m)')
-    #     plt.ylabel('x forward (m)')
-    #     plt.title('Risk Map with Current-Frame Approximate Road')
-
-    #     # Ego position
-    #     plt.scatter([0.0], [0.0], marker='x', s=60)
-    #     plt.text(0.5, 0.5, 'ego', fontsize=8)
-
-    #     if current_boxes is not None:
-    #         ego_infos = [
-    #             box for box in current_boxes
-    #             if box.get('class') == 'ego_info'
-    #         ]
-
-    #         if len(ego_infos) > 0:
-    #             ego_info = ego_infos[0]
-
-    #             ego_lane_width = float(
-    #                 ego_info.get('ego_lane', {}).get('width', 3.5)
-    #             )
-
-    #             # In this code convention:
-    #             # y < 0 is visual-left, y > 0 is visual-right.
-    #             ego_left = -ego_lane_width / 2.0
-    #             ego_right = ego_lane_width / 2.0
-
-    #             x0 = self.risk_x_min
-    #             x1 = self.risk_x_max
-
-    #             # Draw ego lane
-    #             plt.fill_betweenx(
-    #                 [x0, x1],
-    #                 ego_left,
-    #                 ego_right,
-    #                 alpha=0.18,
-    #                 label='ego lane'
-    #             )
-
-    #             plt.plot([ego_left, ego_left], [x0, x1], linewidth=1.2)
-    #             plt.plot([ego_right, ego_right], [x0, x1], linewidth=1.2)
-
-    #             # Draw left lanes
-    #             left_boundary = ego_left
-    #             for lane in ego_info.get('left_lanes', []):
-    #                 width = float(lane.get('width', 0.0))
-    #                 lane_type = lane.get('type:', 'unknown')
-
-    #                 next_boundary = left_boundary - width
-
-    #                 plt.fill_betweenx(
-    #                     [x0, x1],
-    #                     next_boundary,
-    #                     left_boundary,
-    #                     alpha=0.08,
-    #                     label=f'left {lane_type}'
-    #                 )
-
-    #                 plt.plot(
-    #                     [next_boundary, next_boundary],
-    #                     [x0, x1],
-    #                     linestyle=':',
-    #                     linewidth=0.9
-    #                 )
-
-    #                 left_boundary = next_boundary
-
-    #             # Draw right lanes
-    #             right_boundary = ego_right
-    #             for lane in ego_info.get('right_lanes', []):
-    #                 width = float(lane.get('width', 0.0))
-    #                 lane_type = lane.get('type:', 'unknown')
-
-    #                 next_boundary = right_boundary + width
-
-    #                 plt.fill_betweenx(
-    #                     [x0, x1],
-    #                     right_boundary,
-    #                     next_boundary,
-    #                     alpha=0.08,
-    #                     label=f'right {lane_type}'
-    #                 )
-
-    #                 plt.plot(
-    #                     [next_boundary, next_boundary],
-    #                     [x0, x1],
-    #                     linestyle=':',
-    #                     linewidth=0.9
-    #                 )
-
-    #                 right_boundary = next_boundary
-
-    #     plt.xlim(self.risk_y_min, self.risk_y_max)
-    #     plt.ylim(self.risk_x_min, self.risk_x_max)
-    #     plt.grid(alpha=0.25)
-    #     plt.legend(fontsize=7, loc='upper right')
-    #     plt.tight_layout()
-    #     plt.savefig(save_path, dpi=150)
-    #     plt.close()
-
-    #     return save_path
-
-
-
-
-
-
-
-
-
 
 
 
