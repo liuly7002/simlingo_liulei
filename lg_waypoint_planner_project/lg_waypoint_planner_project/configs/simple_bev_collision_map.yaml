@@ -1,0 +1,57 @@
+# Simple BEV collision-map generation config.
+# Edit this file directly, then run:
+#   python tools_bev/generate_costmap_from_masks.py
+
+run:
+  # Route directory or a parent data directory.
+  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/validation_1_scenario/routes_validation/random_weather_seed_2_balanced_150/Town13_Rep0_3893_route0_07_03_20_40_03
+
+  # true: recursively find route folders under input.
+  # false: treat input as one route folder.
+  recursive: false
+
+  # null: process all frames. Example: "0000" to process one frame.
+  frame: null
+
+  # Use bev_*_masks_augmented and bev_meta_augmented folders.
+  augmented: false
+
+  verbose: true
+
+bev:
+  # Fallback resolution when bev_meta does not provide meters_per_pixel or pixels_per_meter.
+  default_pixels_per_meter: 2.0
+
+  # Optional geometric inflation around dynamic actors. Keep 0.0 for the simplest BEV occupancy.
+  actor_inflate_m: 0.0
+
+  # Treat sidewalk as blocked even if it overlaps with the road mask.
+  block_sidewalk: true
+
+  # IMPORTANT: solid lane markings are NOT written into the ordinary costmap.
+  # The low-resolution mask is too coarse to behave like a physical obstacle.
+  # Instead, lane_solid is saved separately as a thin crossing detector.
+  thin_solid_lane_to_centerline: true
+
+  # If road mask is missing, assume all pixels are road-like free space except actors.
+  assume_free_when_road_missing: true
+
+output:
+  # Keep "costmap" if the waypoint planner still reads route_dir/costmap/*.npy.
+  costmap_folder: costmap
+
+  # Dedicated thin detector map containing lane_solid only. The evaluator checks
+  # whether the planned ego-center path crosses it; it is not a wide obstacle.
+  lane_constraint_folder: lane_constraints
+
+  debug_folder: costmap_debug
+
+  # The map is still binary in meaning: free_value means free, blocked_value means occupied/blocked.
+  # Using 100.0 keeps compatibility with planners whose hard-cost thresholds were set for old cost maps.
+  free_value: 0.0
+  blocked_value: 100.0
+
+  save_npy: true
+  save_npz: false
+  # true: save blocked, raw solid-line, and thinned detector debug images.
+  save_debug: false

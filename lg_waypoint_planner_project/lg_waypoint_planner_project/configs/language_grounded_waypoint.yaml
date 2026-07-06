@@ -1,0 +1,461 @@
+# Language-grounded waypoint candidate generator configuration.
+# Coordinate convention throughout the project:
+#   x: ego-forward, y: ego-right, yaw-positive: turning right.
+
+run:
+  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/validation_1_scenario/routes_validation/random_weather_seed_2_balanced_150/Town13_Rep0_3893_route0_07_03_20_40_03
+  
+  recursive: true
+  frame: null
+  verbose: true
+  raise_on_error: false
+  save_log: false
+
+paths:
+  measurements_folder: measurements
+  costmap_folder: costmap
+  lane_constraint_folder: lane_constraints
+  bev_meta_folder: bev_meta
+  bev_traffic_masks_folder: bev_traffic_masks
+  boxes_folder: boxes
+  route_key: route
+  default_pixels_per_meter: 2.0
+  output_folder: language_grounded_waypoints
+  debug_folder: language_grounded_waypoints_debug
+  log_folder: language_grounded_waypoints_logs
+
+horizon:
+  num_future_waypoints: 10
+  future_fps: 4.0
+  model_fps: 20.0
+  # Keep 1 if measurement/costmap files are already low-frequency adjacent frames.
+  # Use 5 only if the saved route files are continuous 20 FPS and each waypoint should be 0.25 s apart.
+  future_frame_stride: 1
+
+reference:
+  # Minimum route horizon. The actual horizon is enlarged per frame when the
+  # current speed and prediction duration make a farther rollout physically
+  # reachable. This prevents fast trajectories from running past a fixed 30 m
+  # route and being falsely rejected by the route-deviation check.
+  horizon_m: 30.0
+  spacing_m: 0.5
+  dynamic_horizon_enabled: true
+
+  # Cover the pure-pursuit lookahead at the farthest reachable ego position.
+  dynamic_extra_buffer_m: 2.0
+
+  # If the current saved route is shorter than the required horizon, extend it
+  # only with real route points from later measurement frames. Future local
+  # routes are transformed into the current ego frame before the non-overlapping
+  # tail is appended. No geometric extrapolation is used.
+  stitch_future_measurements: true
+  future_measurement_max_frames: 20
+  future_route_join_tolerance_m: 3.0
+  future_route_min_extension_gain_m: 0.05
+
+  # If even the available future measurements cannot provide enough real route,
+  # skip that frame rather than evaluating against a finite endpoint.
+  skip_if_insufficient_real_route: true
+
+vehicle:
+  # Half length / half width of ego footprint.
+  # Measured directly from the collected CARLA ego bounding box extent.
+  ego_half_length_m: 2.44619083404541
+  ego_half_width_m: 0.9183566570281982
+
+actors:
+  dynamic_classes: [vehicle, pedestrian]
+  max_actor_distance_m: 45.0
+  default_vehicle_half_length_m: 2.25
+  default_vehicle_half_width_m: 1.00
+  default_ped_half_length_m: 0.35
+  default_ped_half_width_m: 0.35
+
+factor:
+  # Used to answer: 当前图像中最影响驾驶的因素是什么？
+  diagnosis_horizon_m: 24.0
+  diagnosis_spacing_m: 1.0
+  blocked_cost_threshold: 80.0
+  blocked_hard_ratio: 0.08
+  actor_critical_horizon_m: 30.0   # 自车正前方30.0m
+  front_lateral_band_m: 2.2  # 自车左右2.2m范围内的actor更重要
+  side_lateral_band_m: 5.0
+  min_actor_relevance_score: 2.0
+
+behaviors:
+  # Save all intent types as candidate supervision. Inactive candidates are kept but not selectable by default.
+  save_all_intents: true   # 保留所有的驾驶意图作为候选监督
+  allow_inactive_selection: false  # 只允许激活的驾驶意图
+  allow_yield_selection: true
+  allow_emergency_selection: false
+
+  target_speed_key: target_speed
+  # Cautious and lateral candidates should be slower than normal route-following,
+  # but not so slow that the generated labels make the ego vehicle crawl.
+  cautious_speed_mps: 18.0
+  cautious_speed_ratio: 0.90
+  cautious_min_speed_mps: 7.0
+  cautious_close_distance_m: 9.0
+  cautious_close_speed_mps: 3.0
+  cautious_near_distance_m: 16.0
+  cautious_near_speed_mps: 5.5
+  nudge_speed_mps: 18.0
+  nudge_speed_ratio: 0.90
+  nudge_min_speed_mps: 7.0
+  creep_speed_mps: 1.0
+  min_rollout_speed_mps: 0.5
+
+  left_nudge_offset_m: 1.0
+  right_nudge_offset_m: 1.0
+  nudge_start_m: 2.0
+  nudge_transition_m: 8.0
+  nudge_return_start_m: 16.0
+  nudge_return_transition_m: 8.0
+
+  default_stop_distance_m: 6.0
+  emergency_stop_distance_m: 2.0
+  min_stop_distance_m: 3.0
+  stop_margin_m: 3.0
+
+
+# ---------------------------------------------------------------------------
+# Object-conditioned response generation
+# ---------------------------------------------------------------------------
+# These parameters replace one fixed cautious speed and one fixed ±1 m nudge
+# with several response strengths.  The final selector keeps the smallest
+# response that already satisfies all hard safety/feasibility constraints.
+response_generation:
+  # Longitudinal candidates interpolate from the nominal no-interference speed
+  # profile toward the slower part of the complete expert future speed profile.
+  longitudinal_response_strengths: [0.35, 0.65, 1.00]
+  fallback_cautious_speed_ratios: [0.95, 0.85, 0.70]
+
+  # Lateral offset is computed from ego/object widths and relative position.
+  # Multiple scales expose the safety boundary; the minimum-response selector
+  # should choose the first sufficient one rather than the largest detour.
+  lateral_offset_scales: [0.80, 1.00, 1.20]
+  lateral_safety_margin_m: 0.45
+  min_adaptive_nudge_offset_m: 0.45
+  max_adaptive_nudge_offset_m: 2.80
+  lateral_anticipation_m: 9.0
+  min_nudge_start_m: 1.0
+  lateral_return_margin_m: 5.0
+  lateral_speed_response_strength: 0.35
+
+  # Stop position uses both ego/object longitudinal extents.
+  longitudinal_safety_margin_m: 1.0
+
+# ---------------------------------------------------------------------------
+# Causal object discovery by scene intervention
+# ---------------------------------------------------------------------------
+causal_response:
+  enabled: true
+  # Only the most plausible nearby objects are tested to control runtime.
+  max_objects_to_test: 3       # 最多测试3个对象
+  max_object_distance_m: 35.0  # 距离小于等于35.0m
+  min_forward_x_m: -1.0        # 自车后方1.0m外的对象不测试
+
+  # Object removal also clears the corresponding local OBB from the occupancy
+  # BEV; otherwise the removed actor would remain encoded in the costmap.
+  costmap_clear_margin_m: 0.35
+  counterfactual_free_value: 0.0
+
+  # Causal score is the physical trajectory/action difference only.  Intent
+  # changes and route-follow release are recorded as structural evidence rather
+  # than being added as large constants to the magnitude score.
+  causal_longitudinal_weight: 1.0
+  causal_lateral_weight: 2.0
+  causal_max_lateral_weight: 0.5
+  causal_speed_weight: 0.2
+  min_causal_score: 0.60
+
+  # A smaller effect can still be causally necessary when removing the actor
+  # uniquely makes route-follow feasible.  This nonzero floor rejects numerical
+  # noise while preserving genuine safety-boundary interventions.
+  min_route_follow_release_effect_score: 0.03
+
+# ---------------------------------------------------------------------------
+# Physical action semantics used by language and public labels
+# ---------------------------------------------------------------------------
+action_semantics:
+  # Selected-vs-reference speed difference needed before wording the action as
+  # slower/faster than the counterfactual reference.
+  speed_reference_delta_threshold_mps: 0.03
+
+  # Absolute selected speed trend used to distinguish physical deceleration from
+  # continued acceleration whose magnitude is merely reduced by the response.
+  actual_speed_trend_threshold_mps: 0.40
+  stationary_mean_speed_mps: 0.15
+  near_stop_end_speed_mps: 0.35
+
+  # Response-magnitude bands are descriptive only; they do not change safety or
+  # candidate selection.
+  negligible_effect_distance: 0.05
+  slight_effect_distance: 0.25
+  moderate_effect_distance: 1.00
+
+# ---------------------------------------------------------------------------
+# Minimum necessary response selection
+# ---------------------------------------------------------------------------
+minimal_response:
+  # Hard constraints are checked first by evaluator.py.  Among valid candidates,
+  # choose the one closest to the object-removed reference trajectory.
+  longitudinal_weight: 1.0
+  lateral_weight: 2.0
+  max_lateral_weight: 0.5
+  speed_weight: 0.2
+
+  # Small tie-breakers only; they must not dominate response magnitude.
+  comfort_weight: 0.05
+  steer_comfort_scale: 1.0
+  steer_rate_comfort_scale: 0.1
+  progress_loss_weight: 0.05
+
+  # After the discrete candidate bank finds a safe coarse response, refine only
+  # continuous response families toward the first unsafe->safe boundary.  Every
+  # probe is re-rolled with the bicycle model and re-evaluated by all hard rules.
+  boundary_refinement_enabled: true
+  boundary_refinement_intents: [cautious_follow, left_nudge, right_nudge]
+  boundary_refinement_coarse_steps: 8
+  boundary_refinement_max_iterations: 8
+  boundary_refinement_scale_tolerance: 0.01
+  boundary_refinement_min_scale_improvement: 0.01
+
+  # The first safe boundary probe can sit directly on occupancy/collision noise.
+  # Move a small distance farther toward the already-safe discrete response,
+  # then run the full evaluator again.  The margin is width-aware, bounded, and
+  # falls back to the original safe boundary if re-validation ever fails.
+  boundary_robust_margin_enabled: true
+  boundary_robust_margin_require_converged: true
+  boundary_robust_margin_width_multiplier: 2.0
+  boundary_robust_margin_min_scale: 0.01
+  boundary_robust_margin_max_scale: 0.05
+
+bicycle:
+  wheelbase_m: 2.9
+  max_speed_mps: 22.0
+  max_steer_rad: 0.60
+  max_steer_rate_radps: 0.80
+  max_accel_mps2: 2.5
+  min_accel_mps2: -5.0
+  speed_kp: 1.2
+  lookahead_base_m: 2.0
+  lookahead_gain: 0.35
+  lookahead_min_m: 2.0
+  lookahead_max_m: 8.0
+
+# ---------------------------------------------------------------------------
+# Solid-lane hard constraints
+# ---------------------------------------------------------------------------
+lane_constraints:
+  enabled: true
+
+  # Avoid silently running the old behavior. Re-run the costmap generator so
+  # route_dir/lane_constraints/<frame>.npy exists for every processed frame.
+  require_map: true
+
+  # The dedicated map uses the same 0/100 convention as the occupancy map.
+  blocked_threshold: 80.0
+
+  # The detector checks only the planned ego CENTER path. It does not expand the
+  # lane mask by ego width and does not use the full ego OBB, because the source
+  # lane mask is low-resolution and spatially approximate.
+  center_path_sample_step_px: 0.25
+
+  # Optional short prefix to ignore when the current ego pose already lies on a
+  # noisy rasterized line. Keep 0.0 by default; increase slightly only if needed.
+  ignore_initial_travel_m: 0.0
+
+  # Diagnostic score only. Any detected center-path crossing is a hard rejection.
+  crossing_penalty: 5000.0
+
+# ---------------------------------------------------------------------------
+# Traffic-rule hard constraints
+# ---------------------------------------------------------------------------
+traffic_rules:
+  # Green/yellow state is used only for semantic supervision and transition-aware language.
+  # It does not change the existing red-light hard constraint or candidate selection.
+  traffic_light_state_enabled: true
+  traffic_light_state_threshold: 0.5
+  traffic_light_green_mask_key: tl_green
+  traffic_light_yellow_mask_key: tl_yellow
+
+  # Red-light stop lines remain separate from ordinary occupancy.
+  red_light_enabled: true
+
+  # Raw tl_red masks are loaded directly from bev_traffic_masks/*.npz and
+  # warped into the current ego frame for each future time step.
+  red_light_mask_key: tl_red
+  red_light_blocked_threshold: 0.5
+  future_missing_policy: repeat_last  # repeat_last | current | zero
+
+  # Check the ego front edge rather than only the vehicle center. This prevents
+  # the front bumper from crossing the stop line while the center remains behind it.
+  front_edge_sample_count: 3
+
+  # Search the reference route for the first relevant red stop line and build a
+  # stop candidate whose front edge remains before that line.
+  stop_line_search_horizon_m: 30.0
+  stop_line_search_spacing_m: 0.25
+  stop_margin_m: 0.50
+  minimum_rule_stop_distance_m: 0.50
+
+  # Crossing a red-light stop line is a hard rejection.
+  crossing_penalty: 5000.0
+
+  # Stop signs are handled as a separate traffic-rule constraint. The raw
+  # ``stop`` mask marks the active stop-control region while the stop has not
+  # yet been completed.
+  stop_sign_enabled: true
+  stop_sign_mask_key: stop
+  stop_sign_blocked_threshold: 0.5
+
+  # Search the route for the first active stop-control region and place the
+  # stopping candidate before it.
+  stop_sign_search_horizon_m: 30.0
+  stop_sign_search_spacing_m: 0.25
+  stop_sign_stop_margin_m: 0.50
+
+  # A stop is considered complete only after the rollout remains below this
+  # speed for at least this duration. A candidate entering the stop region
+  # earlier is rejected.
+  stop_sign_complete_speed_mps: 0.20
+  stop_sign_complete_duration_s: 0.50
+  stop_sign_completion_max_distance_m: 2.0
+
+  # Stop-sign response generation uses an explicit approach -> brake -> hold ->
+  # release state machine. Unlike a red light, the vehicle may continue after the
+  # complete stop has been satisfied.
+  stop_sign_approach_decel_mps2: 4.0
+  stop_sign_brake_buffer_m: 0.75
+  stop_sign_approach_speed_mps: 4.0
+  stop_sign_target_position_tolerance_m: 0.15
+  stop_sign_release_speed_mps: 4.0
+
+
+costmap:
+  # Costmap is intentionally kept as a simple BEV constraint.
+  disable_future_costmaps: false
+  # Each future temporal map should represent occupancy at that future time only.
+  # Using max/add with the current map leaves already-departed actors as ghost obstacles.
+  future_combine: future_only      # max | add | future_only
+  future_weight: 1.0
+  future_missing_policy: repeat_last  # repeat_last | current | zero
+  warp_border_cost: 0.0
+  temporal_index_mode: floor
+  clip_max: 0.0
+
+collision:
+  # UniAD-style geometry check: ego footprint at future waypoint vs actor footprint at the same future step.
+  enabled: true
+  reject_colliding_candidates: true
+
+scoring:
+  # The map under costmap/*.npy is a simple occupancy BEV and does NOT contain
+  # lane markings. A separate thinned lane_constraints map is used only to detect
+  # whether the planned ego-center trajectory crosses a solid boundary.
+  #   low value  -> free
+  #   high value -> blocked / occupied / non-drivable
+  # Candidate selection no longer minimizes continuous mean/max cost. It checks
+  # whether the ego footprint overlaps blocked cells, then ranks valid candidates
+  # by route consistency, smoothness, actor collision, and behavior prior.
+  score_footprint: true
+  out_of_bounds_cost: 100.0
+
+  # Values >= this threshold are treated as blocked. The simplified costmap
+  # generator saves 0.0 for free and 100.0 for blocked by default.
+  occupancy_blocked_threshold: 80.0
+  hard_cost_threshold: 80.0  # legacy alias used by coarse diagnosis/debug only
+
+  # Occupancy feasibility terms. ``max_occupancy_blocked_ratio`` rejects a
+  # candidate when too many footprint samples fall on blocked BEV cells.
+  occupancy_blocked_ratio_weight: 800.0
+  occupancy_overlap_penalty: 200.0
+  max_occupancy_blocked_ratio: 0.01
+  reject_any_occupancy_overlap: false
+
+  out_of_bounds_weight: 200.0
+  route_deviation_weight: 8.0
+  route_deviation_max_weight: 0.0
+  acc_weight: 0.2
+  steer_weight: 1.0
+  steer_rate_weight: 0.2
+  lat_acc_weight: 0.5
+  yaw_rate_weight: 0.5
+  inactive_intent_penalty: 1000.0
+  nudge_prior_cost: 1.0
+  stop_prior_cost: 5.0
+
+  # Anti-over-conservative selection terms. When there is no concrete front
+  # actor/static obstacle constraining the ego vehicle, prefer normal route
+  # following over unnecessary cautious/stop/creep behavior.
+  clear_scene_slow_intent_penalty: 500.0
+  clear_scene_lateral_intent_penalty: 80.0
+  clear_scene_route_follow_bonus: 100.0
+  progress_reward_weight: 2.0
+
+  collision_penalty: 5000.0
+
+  # In clear scenes, do not let a slower cautious candidate win over a valid
+  # route-follow candidate. This avoids systematically slow labels.
+  prefer_route_follow_when_clear: true
+  clear_scene_route_max_occupancy_blocked_ratio: 0.01
+  clear_scene_route_max_out_of_bounds_ratio: 0.10
+
+  max_out_of_bounds_ratio: 0.10
+  max_hard_ratio: 0.45  # legacy alias; not used for final occupancy rejection when max_occupancy_blocked_ratio is set
+  max_route_deviation_m: 4.0
+  max_lateral_accel_mps2: 5.0
+  max_yaw_rate_radps: 1.0
+
+output:
+  # Main json is intentionally slim and user-facing.
+  # Technical diagnostics can be saved separately when needed.
+  include_candidate_waypoints: true
+  include_reference_route: false
+  include_expert_reference_route: false
+  save_full_debug_json: false
+  full_debug_output_folder: language_grounded_waypoints_full_debug
+
+debug:
+  save_bev_debug: false
+
+  # Save lightweight reference-route stitching diagnostics into the main
+  # generated json.gz.  When false, the entire reference_route_debug block is
+  # omitted and the normal output format stays unchanged.
+  save_reference_stitch_debug: true
+
+  rgb:
+    save_rgb_debug: true
+    rgb_folder: rgb
+    rgb_debug_folder: language_grounded_waypoints_rgb_debug
+
+    # Keep RGB visualization readable by default.
+    draw_reference_route: true
+    draw_expert_waypoints: true
+    draw_all_candidates: true
+    draw_text: true
+
+    # Composite debug image layout:
+    #   left  = compact BEV panel with only ego and the most influential object
+    #   middle = front RGB image with projected waypoints
+    #   right = planned/expert speed profile
+    make_composite: true
+    left_bev_panel_width: 420
+    left_bev_forward_m: 35.0
+    left_bev_rear_m: 8.0
+    left_bev_side_m: 12.0
+    speed_panel_width: 420
+    # 0 means automatically choose the vertical range from data.
+    speed_panel_max_mps: 0.0
+
+    # Front RGB camera projection parameters. These follow the original script defaults.
+    camera_fov: 110.0
+    camera_x: -1.5
+    camera_y: 0.0
+    camera_z: 2.0
+    camera_roll_deg: 0.0
+    camera_pitch_deg: 0.0
+    camera_yaw_deg: 0.0
+    waypoint_ground_z_m: 0.0
+    min_projection_depth_m: 0.1
