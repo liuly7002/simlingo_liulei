@@ -21,7 +21,7 @@ conda activate simlingo
 
 pwd
 export PYTHONPATH="${CARLA_ROOT}/PythonAPI/carla/":${PYTHONPATH}
-export WORK_DIR=/home/kemove/ll/simlingo/
+export WORK_DIR=/home/kemove/ll/simlingo_liulei/
 export PYTHONPATH=$PYTHONPATH:${WORK_DIR}
 
 export MASTER_ADDR=localhost
