@@ -443,6 +443,40 @@ def concise_candidate_json(
     return out
 
 
+def _build_core_questions(language: Dict) -> Dict:
+    """Mirror the saved four-question language chain in a keyed structure.
+
+    ``language_annotation.qa_pairs_en`` is the single source of truth used by
+    both the saved labels and the visualization.  Building ``core_questions``
+    directly from that list prevents the two representations from drifting apart.
+    """
+    qa_pairs = language.get("qa_pairs_en", []) if isinstance(language, dict) else []
+    if not isinstance(qa_pairs, list) or len(qa_pairs) != 4:
+        raise ValueError(
+            "language_annotation.qa_pairs_en must contain exactly four question-answer pairs"
+        )
+
+    question_keys = [
+        "attention",
+        "motion_constraint",
+        "driving_response",
+        "future_motion",
+    ]
+    core_questions = {}
+    for key, pair in zip(question_keys, qa_pairs):
+        if not isinstance(pair, dict):
+            raise ValueError(f"Invalid language question entry for {key}: expected a dict")
+        question = str(pair.get("question", "")).strip()
+        answer = str(pair.get("answer", "")).strip()
+        if not question or not answer:
+            raise ValueError(f"Incomplete language question entry for {key}")
+        core_questions[key] = {
+            "question": question,
+            "answer": answer,
+        }
+    return core_questions
+
+
 def build_public_output(
     frame_name: str,
     factor: Dict,
@@ -471,24 +505,13 @@ def build_public_output(
         )
         for i, c in enumerate(scored)
     ]
+    core_questions = _build_core_questions(language)
 
     out = {
         "frame": frame_name,
         "generator": "causal_minimum_response_waypoint_generator_v3",
         "coordinate": "ego_local_x_forward_y_right_yaw_positive_right",
-        "core_questions": {
-            "most_influential_factor": concise_factor_json(factor),
-            "driving_intent": {
-                "intent_id": int(selected_info.get("intent_id", -1)),
-                "intent_name": describe_driving_intent_name(selected, factor),
-                "internal_intent_name": selected_info.get("intent_name", "unknown"),
-                "intent_en": describe_driving_intent_en(selected, factor),
-            },
-            "waypoint_shape": {
-                "en": describe_waypoint_shape_en(selected, factor),
-            },
-            "trajectory_quality": response_supervision.get("quality", {}),
-        },
+        "core_questions": core_questions,
         "language_annotation": language,
         "causal_analysis": compact_causal_analysis(causal_analysis),
         "supervision": {
