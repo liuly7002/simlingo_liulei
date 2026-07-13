@@ -16,7 +16,7 @@ fi
 
 #source ~/.bashrc
 #conda activate ~/miniconda3/envs/simlingo
-source /root/miniconda3/etc/profile.d/conda.sh
+source /home/kemove/miniconda3/etc/profile.d/conda.sh
 conda activate simlingo
 
 pwd
