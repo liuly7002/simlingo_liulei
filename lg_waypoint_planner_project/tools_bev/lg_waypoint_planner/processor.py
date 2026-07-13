@@ -1057,6 +1057,8 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             ego_center=ego_center,
             meters_per_pixel=mpp,
             actor_timelines=future_actor_timelines,
+            causal_test_actors=causal_actor_candidates,
+            language_annotation=language,
         )
         if ok:
             debug_paths["rgb_waypoints"] = str(rgb_path.relative_to(route_dir))

@@ -10,10 +10,7 @@ from .dataset import offset_frame_name
 from .geometry import yaw_from_matrix_xy
 
 
-# CARLA 0.9.15 built-in road-obstacle props that can physically constrain the
-# ego vehicle.  The normalizer below maps common exported class/blueprint names
-# onto these three stable categories.  We intentionally do not include arbitrary
-# custom categories; unmatched static props are ignored for language focus.
+
 DEFAULT_DYNAMIC_CLASSES = {"vehicle", "pedestrian"}
 DEFAULT_STATIC_OBSTACLE_CLASSES = {"traffic_cone", "traffic_warning", "barrier"}
 
@@ -35,11 +32,36 @@ def load_boxes(route_dir: Path, frame_name: str, cfg) -> List[Dict]:
 
 def _raw_class_string(box: Dict) -> str:
     values = []
-    for key in ["class", "type", "type_id", "role_name", "blueprint", "blueprint_id", "mesh_path", "id"]:
+    for key in [
+        "class", "base_type", "type", "type_id", "role_name",
+        "blueprint", "blueprint_id", "mesh_path", "id",
+    ]:
         v = box.get(key, None)
         if isinstance(v, str) and v:
             values.append(v)
     return " ".join(values).lower()
+
+
+def semantic_actor_class(box: Dict, planning_class: Optional[str] = None) -> str:
+    """Return a fine-grained road-user class for language supervision.
+
+    ``normalize_actor_class`` intentionally keeps the compact planning
+    vocabulary used by collision checking and causal reasoning.  This helper
+    preserves more specific semantics when the exporter provides them, so a
+    bicycle actor is described as a cyclist rather than a generic vehicle.
+    """
+    raw = _raw_class_string(box)
+    compact = raw.replace(".", "_").replace("-", "_").replace("/", "_").replace(" ", "_")
+
+    # Check the specific two-wheeler classes before the generic ``vehicle``
+    # token because CARLA blueprint IDs start with ``vehicle.``.
+    if any(k in compact for k in ["bicycle", "bike", "diamondback", "crossbike", "omafiets"]):
+        return "cyclist"
+    if any(k in compact for k in ["motorcycle", "motorbike", "motorcyclist"]):
+        return "motorcyclist"
+
+    cls = str(planning_class or normalize_actor_class(box))
+    return cls
 
 
 def normalize_actor_class(box: Dict) -> str:
@@ -258,6 +280,31 @@ def _read_half_extents(box: Dict, cls: str, cfg) -> tuple:
     return _cfg_float(cfg, "default_vehicle_half_length_m", 2.25), _cfg_float(cfg, "default_vehicle_half_width_m", 1.00)
 
 
+def _read_half_height(box: Dict, cls: str, cfg) -> float:
+    """Read the vertical half extent for RGB 3D-box visualization.
+
+    CARLA ``extent`` values are half sizes, while ``dimensions`` / ``size``
+    values are commonly full sizes.  The field is retained in the normalized
+    actor record so the front-view debug image can draw a genuine 3D cuboid
+    instead of a 2D footprint.
+    """
+    if isinstance(box.get("extent"), (list, tuple)) and len(box["extent"]) >= 3:
+        return max(abs(float(box["extent"][2])), 0.1)
+    for key in ["dimensions", "size"]:
+        if isinstance(box.get(key), (list, tuple)) and len(box[key]) >= 3:
+            return max(abs(float(box[key][2])) * 0.5, 0.1)
+
+    if cls == "pedestrian":
+        return _cfg_float(cfg, "default_ped_half_height_m", 0.90)
+    if cls == "traffic_cone":
+        return _cfg_float(cfg, "default_cone_half_height_m", 0.50)
+    if cls == "traffic_warning":
+        return _cfg_float(cfg, "default_warning_half_height_m", 0.75)
+    if cls == "barrier":
+        return _cfg_float(cfg, "default_barrier_half_height_m", 0.60)
+    return _cfg_float(cfg, "default_vehicle_half_height_m", 0.80)
+
+
 def relative_position_sector(x: float, y: float) -> str:
     if x >= 0.0:
         if abs(y) <= 2.2:
@@ -283,17 +330,21 @@ def actor_record_from_box(
         rel = ego0_inv @ mat
         center = rel[:3, 3]
         xy = np.asarray([center[0], center[1]], dtype=np.float32)
+        center_z = float(center[2])
         yaw = yaw_from_matrix_xy(rel)
     else:
         rel = _relative_matrix_from_local_box(box, source_ego_matrix, ego0_inv)
         if rel is not None:
             center = rel[:3, 3]
             xy = np.asarray([center[0], center[1]], dtype=np.float32)
+            center_z = float(center[2])
             yaw = yaw_from_matrix_xy(rel)
         else:
-            xy = _read_xy_from_position(box)
-            if xy is None:
+            position = _read_position_xyz(box)
+            if position is None:
                 return None
+            xy = position[:2].astype(np.float32)
+            center_z = float(position[2])
             yaw = _read_yaw(box)
 
     # ``distance`` in a saved future box is measured in that future ego frame.
@@ -301,6 +352,7 @@ def actor_record_from_box(
     # distance must be recomputed from the transformed coordinates.
     dist = float(np.linalg.norm(xy))
     half_l, half_w = _read_half_extents(box, cls, cfg)
+    half_h = _read_half_height(box, cls, cfg)
     actor_id = box.get("id", box.get("track_id", None))
     try:
         actor_id = int(actor_id) if actor_id is not None else None
@@ -310,14 +362,17 @@ def actor_record_from_box(
     return {
         "id": actor_id,
         "class": cls,
+        "semantic_class": semantic_actor_class(box, planning_class=cls),
         "raw_class": str(box.get("class", "")),
         "x_m": float(xy[0]),
         "y_m": float(xy[1]),
+        "z_m": float(center_z),
         "yaw_rad": float(yaw),
         "distance_m": float(dist),
         "speed_mps": float(_read_speed(box)),
         "half_length_m": float(half_l),
         "half_width_m": float(half_w),
+        "half_height_m": float(half_h),
         "relative_position": relative_position_sector(float(xy[0]), float(xy[1])),
     }
 

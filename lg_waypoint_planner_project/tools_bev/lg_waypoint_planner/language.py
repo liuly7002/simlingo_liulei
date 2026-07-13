@@ -7,10 +7,11 @@ sentences. It intentionally avoids engineering terms such as BEV, costmap,
 footprint, hard ratio, collision checker, waypoint, trajectory, candidate,
 score, or expert fallback in user-facing annotations.
 
-The generated language answers three questions:
-1. What should the vehicle pay attention to now?
-2. How should the vehicle drive now?
-3. How will the vehicle roughly move next?
+The generated language answers four questions:
+1. What deserves attention right now?
+2. What constrains the motion ahead?
+3. What is the appropriate driving response now?
+4. How will the ego vehicle move next?
 """
 
 from typing import Dict, List
@@ -336,15 +337,18 @@ def _trajectory_features(selected: Dict) -> Dict:
 
 
 def _actor_name_en(actor: Dict) -> str:
-    cls = str(actor.get("class", actor.get("raw_class", "actor")))
+    planning_cls = str(actor.get("class", actor.get("raw_class", "actor")))
+    semantic_cls = str(actor.get("semantic_class", planning_cls))
     cls_map = {
         "vehicle": "vehicle",
+        "cyclist": "cyclist",
+        "motorcyclist": "motorcyclist",
         "pedestrian": "pedestrian",
         "traffic_cone": "traffic cone",
         "traffic_warning": "warning sign",
         "barrier": "barrier",
     }
-    cls = cls_map.get(cls, "road object")
+    cls = cls_map.get(semantic_cls, cls_map.get(planning_cls, "road object"))
 
     pos = str(actor.get("relative_position", "front"))
     pos_map = {
@@ -360,6 +364,14 @@ def _actor_name_en(actor: Dict) -> str:
         cls = "oncoming vehicle"
     elif cls == "vehicle" and heading_relation == "crossing":
         cls = "crossing vehicle"
+    elif cls == "cyclist" and heading_relation == "oncoming":
+        cls = "oncoming cyclist"
+    elif cls == "cyclist" and heading_relation == "crossing":
+        cls = "crossing cyclist"
+    elif cls == "motorcyclist" and heading_relation == "oncoming":
+        cls = "oncoming motorcyclist"
+    elif cls == "motorcyclist" and heading_relation == "crossing":
+        cls = "crossing motorcyclist"
 
     return f"the {cls} {pos_map.get(pos, pos)}"
 
@@ -439,54 +451,12 @@ def _coexisting_actor_attention_en(factor: Dict) -> str:
     return ""
 
 
-def describe_factor_en(factor: Dict) -> str:
+def describe_attention_en(factor: Dict) -> str:
+    """Describe the salient object or traffic-control element that deserves attention."""
     actor = factor.get("critical_actor") or {}
     secondary_actor = factor.get("secondary_attention_actor") or {}
     ftype = str(factor.get("type", ""))
-
-    # The traffic light is the semantic cause; the stop line only specifies the
-    # geometric boundary that must not be crossed while the light is red.
-    if ftype == "red_light_stop_line" or factor.get("language_focus") == "red_light_stop_line":
-        d = _round_or_none((factor.get("red_light_rule") or {}).get("stop_line_distance_m"), 1)
-        if d is not None:
-            text = f"The traffic light ahead is red, so the vehicle must remain behind the stop line about {d:.1f} m ahead."
-        else:
-            text = "The traffic light ahead is red, so the vehicle must remain behind the stop line."
-        extra = _coexisting_actor_attention_en(factor)
-        return f"{text} {extra}".strip()
-
-    if ftype == "green_light_release" or factor.get("language_focus") == "green_light_release":
-        text = "The traffic light ahead has changed from red to green, so the previous red-light stopping requirement is no longer active."
-        extra = _coexisting_actor_attention_en(factor)
-        return f"{text} {extra}".strip()
-
-    if ftype == "green_light_after_yellow" or factor.get("language_focus") == "green_light_after_yellow":
-        text = "The traffic light ahead has changed from yellow to green, so the vehicle may continue through the intersection if the path remains clear."
-        extra = _coexisting_actor_attention_en(factor)
-        return f"{text} {extra}".strip()
-
-    if ftype == "yellow_light_caution" or factor.get("language_focus") == "yellow_light_caution":
-        text = "The traffic light ahead is yellow, so the vehicle should be prepared for the signal to change."
-        extra = _coexisting_actor_attention_en(factor)
-        return f"{text} {extra}".strip()
-
-    if ftype == "stop_sign_control" or factor.get("language_focus") in ["stop_sign_control", "stop_sign_upcoming"]:
-        d = _round_or_none((factor.get("stop_sign_rule") or {}).get("stop_region_distance_m"), 1)
-        upcoming_only = bool(factor.get("upcoming_traffic_rule", False))
-        if upcoming_only:
-            if d is not None:
-                text = (
-                    f"A stop sign is ahead, with the stop region about {d:.1f} m away. "
-                    "The vehicle may continue for now but should prepare to stop before reaching it."
-                )
-            else:
-                text = "A stop sign is ahead, so the vehicle may continue for now while preparing to stop before reaching it."
-        elif d is not None:
-            text = f"The stop sign ahead requires a complete stop before the stop region about {d:.1f} m ahead."
-        else:
-            text = "The stop sign ahead requires a complete stop before proceeding."
-        extra = _coexisting_actor_attention_en(factor)
-        return f"{text} {extra}".strip()
+    language_focus = str(factor.get("language_focus", ""))
 
     if actor.get("exists", False):
         d = _round_or_none(actor.get("distance_m"), 1)
@@ -496,25 +466,85 @@ def describe_factor_en(factor: Dict) -> str:
             return f"The main thing to watch is {name}, about {d:.1f} m away. {influence}"
         return f"The main thing to watch is {name}. {influence}"
 
+    if ftype == "red_light_stop_line" or language_focus == "red_light_stop_line":
+        return "The traffic light ahead deserves attention because it is red."
+    if ftype == "green_light_release" or language_focus == "green_light_release":
+        return "The traffic light ahead deserves attention because it has just changed from red to green."
+    if ftype == "green_light_after_yellow" or language_focus == "green_light_after_yellow":
+        return "The traffic light ahead deserves attention because it has changed from yellow to green."
+    if ftype == "yellow_light_caution" or language_focus == "yellow_light_caution":
+        return "The traffic light ahead deserves attention because it is yellow."
+    if ftype == "stop_sign_control" or language_focus in ["stop_sign_control", "stop_sign_upcoming"]:
+        return "The stop sign ahead deserves attention."
+
     secondary = _secondary_actor_attention_en(secondary_actor)
-    if ftype == "limited_forward_space" or factor.get("language_focus") == "limited_free_space":
-        text = "The main thing to watch is the limited space ahead."
-        return f"{text} {secondary}".strip()
+    if secondary:
+        return secondary
+    return "No single road user requires dominant attention right now."
+
+
+def describe_motion_constraint_en(factor: Dict) -> str:
+    """Describe the scene-level condition that constrains or permits motion."""
+    actor = factor.get("critical_actor") or {}
+    ftype = str(factor.get("type", ""))
+    language_focus = str(factor.get("language_focus", ""))
+
+    if ftype == "red_light_stop_line" or language_focus == "red_light_stop_line":
+        d = _round_or_none((factor.get("red_light_rule") or {}).get("stop_line_distance_m"), 1)
+        if d is not None:
+            return f"The red signal requires the ego vehicle to remain behind the stop line about {d:.1f} m ahead."
+        return "The red signal requires the ego vehicle to remain behind the stop line."
+
+    if ftype == "green_light_release" or language_focus == "green_light_release":
+        return "The previous red-light stopping constraint is no longer active, provided the way ahead remains clear."
+
+    if ftype == "green_light_after_yellow" or language_focus == "green_light_after_yellow":
+        return "The signal no longer restricts forward motion, provided the way through the intersection remains clear."
+
+    if ftype == "yellow_light_caution" or language_focus == "yellow_light_caution":
+        return "The changing signal limits the available margin for continuing through the intersection."
+
+    if ftype == "stop_sign_control" or language_focus in ["stop_sign_control", "stop_sign_upcoming"]:
+        d = _round_or_none((factor.get("stop_sign_rule") or {}).get("stop_region_distance_m"), 1)
+        upcoming_only = bool(factor.get("upcoming_traffic_rule", False))
+        if upcoming_only:
+            if d is not None:
+                return f"A mandatory stopping region lies about {d:.1f} m ahead, so the remaining forward margin is limited."
+            return "A mandatory stopping region lies ahead, so the remaining forward margin is limited."
+        if d is not None:
+            return f"The stop sign requires a complete stop before the stop region about {d:.1f} m ahead."
+        return "The stop sign requires a complete stop before proceeding."
+
+    if ftype == "limited_forward_space" or language_focus == "limited_free_space":
+        return "The available space ahead is limited."
+
     if ftype == "conservative_speed_profile_without_direct_actor":
-        text = "No object clearly blocks the ego vehicle, but the situation ahead calls for a more cautious speed."
-        return f"{text} {secondary}".strip()
-    if ftype == "route_shape_or_clearance_preference":
-        text = "No single object directly determines the ego vehicle's action."
-        return f"{text} {secondary}".strip()
+        return "The situation ahead calls for a more cautious speed even though no object clearly blocks the way."
+
     if ftype == "conservative_stop_without_identified_actor":
-        text = "No single dominant object is identified, but the ego vehicle needs more margin."
-        return f"{text} {secondary}".strip()
+        return "The situation ahead leaves limited margin for continued motion."
 
-    # Route following with a non-causal nearby actor: the clear corridor is the
-    # primary factor, while the actor is only an additional monitoring target.
-    text = "The path ahead remains clear enough to continue."
-    return f"{text} {secondary}".strip()
+    if actor.get("exists", False):
+        name = _actor_name_en(actor)
+        subject = name[:1].upper() + name[1:] if name else "The nearby actor"
+        rel = str(actor.get("relative_position", actor.get("position", ""))).lower()
+        if "front" in rel or "ahead" in rel:
+            return f"{subject} reduces the available forward margin."
+        if any(k in rel for k in ["left", "right", "side", "cross"]):
+            return f"{subject} limits the available maneuvering margin."
+        return f"{subject} reduces the available motion margin."
 
+    if ftype == "route_shape_or_clearance_preference":
+        return "The path ahead remains clear enough to continue."
+
+    return "The path ahead remains clear enough to continue."
+
+
+def describe_factor_en(factor: Dict) -> str:
+    """Backward-compatible fused factor description used by summary generation."""
+    attention = describe_attention_en(factor)
+    constraint = describe_motion_constraint_en(factor)
+    return f"{attention} {constraint}".strip()
 
 def _intent_from_shape_en(features: Dict) -> str:
     lateral = features.get("relative_lateral_direction", features.get("lateral_direction", "center"))
@@ -768,37 +798,37 @@ def describe_waypoint_shape_en(selected: Dict, factor: Dict = None) -> str:
         released = bool(rollout.get("stop_then_go_release_started", False))
         if released:
             if route_maneuver == "left_turn":
-                return "The vehicle will come to a complete stop, wait briefly, and then continue along the left-curving route."
+                return "The ego vehicle will come to a complete stop, wait briefly, and then continue along the left-curving route."
             if route_maneuver == "right_turn":
-                return "The vehicle will come to a complete stop, wait briefly, and then continue along the right-curving route."
-            return "The vehicle will come to a complete stop, wait briefly, and then continue forward."
+                return "The ego vehicle will come to a complete stop, wait briefly, and then continue along the right-curving route."
+            return "The ego vehicle will come to a complete stop, wait briefly, and then continue forward."
         if completed:
-            return "The vehicle will come to a complete stop and wait briefly before proceeding."
-        return "The vehicle will slow down toward a complete stop at the stop sign."
+            return "The ego vehicle will come to a complete stop and wait briefly before proceeding."
+        return "The ego vehicle will slow down toward a complete stop at the stop sign."
 
     if speed == "stationary":
-        return "The vehicle will remain stopped."
+        return "The ego vehicle will remain stopped."
 
     if speed == "near_stop":
         if lateral == "left":
-            return "The vehicle will move slightly left relative to the route and gradually come to a stop."
+            return "The ego vehicle will move slightly left relative to the route and gradually come to a stop."
         if lateral == "right":
-            return "The vehicle will move slightly right relative to the route and gradually come to a stop."
+            return "The ego vehicle will move slightly right relative to the route and gradually come to a stop."
         if route_maneuver == "left_turn":
-            return "The vehicle will follow a left-curving path and gradually come to a stop."
+            return "The ego vehicle will follow a left-curving path and gradually come to a stop."
         if route_maneuver == "right_turn":
-            return "The vehicle will follow a right-curving path and gradually come to a stop."
-        return "The vehicle will move a little forward and gradually come to a stop."
+            return "The ego vehicle will follow a right-curving path and gradually come to a stop."
+        return "The ego vehicle will move a little forward and gradually come to a stop."
 
     if lateral == "left":
-        return f"The vehicle will make a slight adjustment to the left relative to the route, {speed_phrase}."
+        return f"The ego vehicle will make a slight adjustment to the left relative to the route, {speed_phrase}."
     if lateral == "right":
-        return f"The vehicle will make a slight adjustment to the right relative to the route, {speed_phrase}."
+        return f"The ego vehicle will make a slight adjustment to the right relative to the route, {speed_phrase}."
     if route_maneuver == "left_turn":
-        return f"The vehicle will follow a left-curving path, {speed_phrase}."
+        return f"The ego vehicle will follow a left-curving path, {speed_phrase}."
     if route_maneuver == "right_turn":
-        return f"The vehicle will follow a right-curving path, {speed_phrase}."
-    return f"The vehicle will mostly go straight, {speed_phrase}."
+        return f"The ego vehicle will follow a right-curving path, {speed_phrase}."
+    return f"The ego vehicle will mostly go straight, {speed_phrase}."
 
 
 def _strip_en_period(text: str) -> str:
@@ -808,21 +838,27 @@ def _strip_en_period(text: str) -> str:
 def build_language_annotation(frame_name: str, factor: Dict, selected: Dict, candidates: List[Dict], response_supervision: Dict = None) -> Dict:
     intent_en = describe_driving_intent_en(selected, factor)
     shape_en = describe_waypoint_shape_en(selected, factor)
-    factor_en = describe_factor_en(factor)
+    attention_en = describe_attention_en(factor)
+    constraint_en = describe_motion_constraint_en(factor)
     features = _trajectory_features(selected)
 
-    # Keep the fused annotation causal and compact.  When the vehicle is already
-    # stationary, the intent sentence fully describes the motion; repeating
-    # "the vehicle will remain stopped" in the same summary adds no information.
-    summary_parts = [factor_en, f"The vehicle should {intent_en}."]
+    response_en = _strip_en_period(intent_en)
+    if response_en:
+        response_en = response_en[0].upper() + response_en[1:] + "."
+
+    # Follow the full reasoning chain: salient attention -> motion constraint ->
+    # driving response -> future motion.  Avoid repeating the stationary motion
+    # sentence in the fused summary when the response already fully describes it.
+    summary_parts = [attention_en, constraint_en, response_en]
     if features.get("speed_pattern") != "stationary":
         summary_parts.append(shape_en)
     summary_en = " ".join(part.strip() for part in summary_parts if str(part).strip())
 
     qa_en = [
-        {"question": "What should the vehicle pay attention to now?", "answer": factor_en},
-        {"question": "How should the vehicle drive now?", "answer": f"The vehicle should {intent_en}."},
-        {"question": "How will the vehicle roughly move next?", "answer": shape_en},
+        {"question": "What deserves attention right now?", "answer": attention_en},
+        {"question": "What constrains the motion ahead?", "answer": constraint_en},
+        {"question": "What is the appropriate driving response now?", "answer": response_en},
+        {"question": "How will the ego vehicle move next?", "answer": shape_en},
     ]
 
     return {

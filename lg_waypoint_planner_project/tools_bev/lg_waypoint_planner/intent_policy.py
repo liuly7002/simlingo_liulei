@@ -55,8 +55,8 @@ def infer_intents(factor: Dict, cfg) -> List[Dict]:
                 "priority": int(priority),
             })
 
-    # route_follow is always saved as the nominal behavior; scoring may reject it.
-    add("route_follow", True, "nominal reference behavior", 0)  # 无论什么场景，route_follow都是默认的行为，因为必须始终知道，正常驾驶还能不能走，否则就无法判断actor是否真正组织了正常驾驶
+     # 无论什么场景，route_follow都是默认的行为
+    add("route_follow", True, "nominal reference behavior", 0) 
 
     # 红灯：交通灯是动作约束的主因，停止线只是约束位置。
     # 当前帧已经是红灯时，最终动作语义应明确为停车等待，不允许
