@@ -18,17 +18,17 @@ def parse_arguments():
     #                         help='Base folder for dataset')
     path_group.add_argument('--path-keyframes', type=str, default='path/to/keyframes.txt',
                             help='Path to the keyframes.txt')
-    path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_02_28',
+    path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_07_03_19_20_14',
                             help='Data directory containing the dataset')  # 数据集根目录
-    path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_02_28/drivelm',
+    path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_07_03_19_20_14/drivelm',
                             help='Output directory for the vqa-graph')     # VQA graph 保存位置
-    path_group.add_argument('--output-graph-examples-directory', type=str, default='database/simlingo_v2_2026_02_28/drivelm',
+    path_group.add_argument('--output-graph-examples-directory', type=str, default='database/simlingo_v2_2026_07_03_19_20_14/drivelm',
                             help='Output directory for examples of the vqa-graph')
 
     # Image and camera parameters
     img_group = parser.add_argument_group('Image and Camera Parameters')
     img_group.add_argument('--target-image-size', nargs=2, type=int, default=[1024, 384],
-                           help='Target image size [width, height]')     # 目标图像尺寸
+                           help='Target image size [width, height]')     # 目标图像尺寸 高度方向删除引擎盖
     img_group.add_argument('--original-image-size', nargs=2, type=int, default=[1024, 512],
                            help='Original image size [width, height]')   # 原始图像尺寸
     img_group.add_argument('--original-fov', type=float, default=110,

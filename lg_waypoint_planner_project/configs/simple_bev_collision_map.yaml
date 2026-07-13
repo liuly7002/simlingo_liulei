@@ -1,14 +1,11 @@
 # Simple BEV collision-map generation config.
-# Edit this file directly, then run:
-#   python tools_bev/generate_costmap_from_masks.py
 
 run:
   # Route directory or a parent data directory.
-  # input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/validation_1_scenario/routes_validation/random_weather_seed_2_balanced_150/Town13_Rep0_3893_route0_07_03_20_40_03
-  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_611_route0_07_03_19_23_20
+  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo
   # true: recursively find route folders under input.
   # false: treat input as one route folder.
-  recursive: false
+  recursive: true
 
   # null: process all frames. Example: "0000" to process one frame.
   frame: null

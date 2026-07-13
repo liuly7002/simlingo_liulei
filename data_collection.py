@@ -199,8 +199,8 @@ if __name__ == "__main__":
     repetitions = 1               # 重复收集的结束
     repetition_start = 0          # 重复收集的开始
 
-    code_root   = r"/home/liulei/ll/simlingo"                         # 项目根目录
-    carla_root  = "/home/liulei/ll/simlingo/software/carla0915"       # Carla根位置
+    code_root   = r"/home/kemove/ll/simlingo"                         # 项目根目录
+    carla_root  = "/home/kemove/ll/simlingo/carla0915"                # Carla根位置
     root_folder = r"database/"                                        # 这是数据集存放的根目录
 
     date = datetime.today().strftime("%Y_%m_%d")                      # 时间格式:年_月_日

@@ -510,8 +510,8 @@ class DataModule(LightningDataModule):
 
 def main():
 
-    data_path = '/root/simlingo/database/simlingo_v2_2026_05_25'  # 数据集目录
-    save_path = f'/root/simlingo/database/simlingo_v2_2026_05_25/bucketsv2_simlingo'     # 存储桶结果目录
+    data_path = '/home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14'  # 数据集目录
+    save_path = f'/home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/bucketsv2_simlingo'     # 存储桶结果目录
 
     Path(save_path).mkdir(parents=True, exist_ok=True)
 

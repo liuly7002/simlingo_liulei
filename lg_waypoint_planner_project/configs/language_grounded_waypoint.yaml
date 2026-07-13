@@ -3,11 +3,12 @@
 #   x: ego-forward, y: ego-right, yaw-positive: turning right.
 
 run:
-  # input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/validation_1_scenario/routes_validation/random_weather_seed_2_balanced_150/Town13_Rep0_3893_route0_07_03_20_40_03
-  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_611_route0_07_03_19_23_20
-
-
+  # Route directory or a parent data directory.
+  input: /home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo
+  # true: recursively find route folders under input.
+  # false: treat input as one route folder.
   recursive: true
+
   frame: null
   verbose: true
   raise_on_error: false
@@ -15,8 +16,8 @@ run:
 
 paths:
   measurements_folder: measurements
-  costmap_folder: costmap
-  lane_constraint_folder: lane_constraints
+  costmap_folder: costmap    # from generate_costmap_from_masks.py
+  lane_constraint_folder: lane_constraints    # from generate_costmap_from_masks.py
   bev_meta_folder: bev_meta
   bev_traffic_masks_folder: bev_traffic_masks
   boxes_folder: boxes
@@ -30,8 +31,6 @@ horizon:
   num_future_waypoints: 10
   future_fps: 4.0
   model_fps: 20.0
-  # Keep 1 if measurement/costmap files are already low-frequency adjacent frames.
-  # Use 5 only if the saved route files are continuous 20 FPS and each waypoint should be 0.25 s apart.
   future_frame_stride: 1
 
 reference:
@@ -87,7 +86,7 @@ factor:
 behaviors:
   # Save all intent types as candidate supervision. Inactive candidates are kept but not selectable by default.
   save_all_intents: true   # 保留所有的驾驶意图作为候选监督
-  allow_inactive_selection: false  # 只允许激活的驾驶意图
+  allow_inactive_selection: false  # false:只允许激活的驾驶意图
   allow_yield_selection: true
   allow_emergency_selection: false
 
