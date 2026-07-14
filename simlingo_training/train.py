@@ -15,6 +15,10 @@ from transformers import AutoProcessor
 from simlingo_training.utils.logging_project import setup_logging, sync_wandb
 from simlingo_training.config import TrainConfig
 from simlingo_training.callbacks.visualise import VisualiseCallback
+from simlingo_training.callbacks.local_validation import (
+    LocalValidationMetricsCallback,
+    install_validation_output_capture,
+)
 
 
 @hydra.main(config_path="config", config_name="config", version_base="1.1")
@@ -49,6 +53,11 @@ def main(cfg: TrainConfig):
         cache_dir=cache_dir,
         _recursive_=False,
     )
+
+    # Optional local validation capture. The wrapper reuses the original
+    # teacher-forced validation forward pass and does not run the model twice.
+    if bool(cfg.validation_logging.enabled):
+        install_validation_output_capture(model)
 
     if cfg.checkpoint is not None:
         if os.path.isdir(cfg.checkpoint):
@@ -100,6 +109,13 @@ def main(cfg: TrainConfig):
         model_summary,
         VisualiseCallback(interval=1000, val_interval=1000),
     ]
+
+    if bool(cfg.validation_logging.enabled):
+        validation_logging_cfg = OmegaConf.to_container(
+            cfg.validation_logging,
+            resolve=True,
+        )
+        callbacks.append(LocalValidationMetricsCallback(**validation_logging_cfg))
 
     # Optional checkpointing. With the switch disabled, this reproduces the
     # current repository behavior exactly. Enable it for closed-loop evaluation.

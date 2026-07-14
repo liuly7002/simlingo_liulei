@@ -520,11 +520,11 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         ################################################## 🇨🇳 Print for debug 🇨🇳##################################################
 
-        print(f'[{self.split} samples]: Loading {len(self.images)} images from {self.data_path} for bucket {self.bucket_name}')
-        print('Total amount of routes:', total_routes)
-        print('Crashed routes:', crashed_routes)
-        print('Perfect routes:', perfect_routes)
-        print('Fail reasons:', fail_reasons)
+        # print(f'[{self.split} samples]: Loading {len(self.images)} images from {self.data_path} for bucket {self.bucket_name}')
+        # print('Total amount of routes:', total_routes)
+        # print('Crashed routes:', crashed_routes)
+        # print('Perfect routes:', perfect_routes)
+        # print('Fail reasons:', fail_reasons)
 
 
 
@@ -714,8 +714,12 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
             images_i = cv2.imread(images_path, cv2.IMREAD_COLOR)
             images_i = cv2.cvtColor(images_i, cv2.COLOR_BGR2RGB)
 
-            if self.img_augmentation: # and random.random() <= self.img_augmentation_prob:
-                images_i = self.tfs(image=images_i)  # 对图像进行随机增强
+            # if self.img_augmentation: # and random.random() <= self.img_augmentation_prob:
+            #     images_i = self.tfs(image=images_i)  # 对图像进行随机增强
+            # 图像随机增强仅用于训练集。
+            # 验证阶段保持输入图像固定，避免验证指标随随机增强波动。
+            if self.split == "train" and self.img_augmentation:
+                images_i = self.tfs(image=images_i)
             
             image_org = images_i.copy()
             if self.cut_bottom_quarter or self.img_shift_augmentation:
@@ -933,8 +937,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         options,
         name: str = "img",
         prompt=None,
-        answer=None,
-    ) -> np.ndarray:
+        answer=None,) -> np.ndarray:
         
         fov = 110
 

@@ -80,16 +80,32 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
         ########################################### 🥭 是否进行数据增强 🥭 ###########################################
 
-        # 决定当前帧是否使用数据增强
-        if augment_exists and random.random() <= self.img_shift_augmentation_prob and self.img_shift_augmentation:
+        # # 决定当前帧是否使用数据增强
+        # if augment_exists and random.random() <= self.img_shift_augmentation_prob and self.img_shift_augmentation:
+        #     augment_sample = True
+        #     aug_rotation = current_measurement['augmentation_rotation']        # R矩阵
+        #     aug_translation = current_measurement['augmentation_translation']  # T矩阵
+        # else:
+        #     augment_sample = False
+        #     aug_rotation = 0.0
+        #     aug_translation = 0.0
+        
+        # 仅训练集启用几何增强。
+        # 验证集必须始终使用原始图像、waypoints、route 和 target point，
+        # 从而保证不同 epoch 的验证结果严格可比。
+        if (
+            self.split == "train"
+            and augment_exists
+            and self.img_shift_augmentation
+            and random.random() <= self.img_shift_augmentation_prob
+        ):
             augment_sample = True
-            aug_rotation = current_measurement['augmentation_rotation']        # R矩阵
-            aug_translation = current_measurement['augmentation_translation']  # T矩阵
+            aug_rotation = current_measurement["augmentation_rotation"]
+            aug_translation = current_measurement["augmentation_translation"]
         else:
             augment_sample = False
             aug_rotation = 0.0
             aug_translation = 0.0
-
 
         
         

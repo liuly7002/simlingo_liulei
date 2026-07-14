@@ -58,6 +58,23 @@ seed: 9876
 name: simlingo_lg_full_seed_9876
 resume: false
 
+# Local validation records are saved under the current Hydra run directory.
+# Set enabled=false to restore SimLingo's original validation output behavior.
+validation_logging:
+  enabled: true
+  output_dir: ./validation_logs
+  separate_by_source: true
+  save_csv: true
+  save_epoch_json: true
+  save_per_sample_jsonl: false
+  save_visualizations: true
+  visualization_samples_per_source: 4
+  log_per_horizon_error: true
+  waypoint_interval_s: 0.25
+  stop_speed_threshold_mps: 0.5
+  skip_sanity_check: true
+  print_epoch_summary: true
+
 # Required for later closed-loop evaluation. Set false to reproduce the current
 # repository behavior that does not save model files.
 enable_checkpointing: false

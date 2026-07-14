@@ -202,6 +202,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             valid_paths.append(str(label_path))
 
         indices = np.asarray(valid_indices, dtype=np.int64)
+        original_sample_count = len(self.images)
+
         for attribute in (
             "images",
             "boxes",
@@ -210,7 +212,27 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             "augment_exists",
         ):
             values = getattr(self, attribute)
-            setattr(self, attribute, values[indices])
+
+            if len(values) != original_sample_count:
+                raise RuntimeError(
+                    f"LG index container length mismatch: {attribute} has "
+                    f"{len(values)} entries, expected {original_sample_count}"
+                )
+
+            # BaseDataset converts images, boxes, measurements, and sample_start
+            # to NumPy arrays, but currently leaves augment_exists as a Python
+            # list. NumPy advanced indexing works only for the former, so handle
+            # both container types explicitly.
+            if isinstance(values, np.ndarray):
+                filtered_values = values[indices]
+            else:
+                filtered_values = [values[int(index)] for index in valid_indices]
+
+            # Keep a uniform indexable representation after LG filtering.
+            if attribute == "augment_exists":
+                filtered_values = np.asarray(filtered_values, dtype=np.bool_)
+
+            setattr(self, attribute, filtered_values)
 
         self.lg_label_paths = np.asarray(valid_paths, dtype=np.string_)
 

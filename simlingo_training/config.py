@@ -59,9 +59,9 @@ class DatasetBaseConfig:
     use_town13: bool = False
 
     skip_first_n_frames: int = 10
-    pred_len: int = 11 # including the current time step
-    hist_len: int = 1 # including the current time step
-    hist_len_commentary: int = 5 # including the current time step
+    pred_len: int = 11  # including the current time step
+    hist_len: int = 1  # including the current time step
+    hist_len_commentary: int = 5  # including the current time step
 
     img_augmentation: bool = True
     img_augmentation_prob: float = 0.5
@@ -72,7 +72,7 @@ class DatasetBaseConfig:
 
     num_route_points: int = 20
 
-    route_as: str = 'target_point_command' # target_point_command, target_point, command
+    route_as: str = 'target_point_command'  # target_point_command, target_point, command
     use_lmdrive_commands: bool = True
 
 
@@ -125,14 +125,18 @@ class DreamerDatasetConfig:
 @dataclass
 class QADatasetConfig:
     _target_: str = "simlingo_training.dataloader.dataset_eval_qa_comm.Data_Eval"
+
+
 @dataclass
 class InstEvalDatasetConfig:
     _target_: str = "simlingo_training.dataloader.dataset_eval_dreamer.Eval_Dreamer"
 
+
 @dataclass
 class DrivingDataModuleConfig:
     base_dataset: DatasetBaseConfig
-    driving_dataset:Optional[DrivingDatasetConfig] = field(default_factory=DrivingDatasetConfig)
+
+    driving_dataset: Optional[DrivingDatasetConfig] = field(default_factory=DrivingDatasetConfig)
     dreamer_dataset: Optional[DreamerDatasetConfig] = field(default_factory=DreamerDatasetConfig)
     qa_dataset: Optional[QADatasetConfig] = field(default_factory=QADatasetConfig)
     insteval_dataset: Optional[InstEvalDatasetConfig] = field(default_factory=InstEvalDatasetConfig)
@@ -148,9 +152,36 @@ class DrivingDataModuleConfig:
 
 
 @dataclass
+class ValidationLoggingConfig:
+    # Master switch. False preserves SimLingo's original validation behavior.
+    enabled: bool = False
+
+    # Saved relative to the Hydra run directory, e.g. outputs/<run>/validation_logs.
+    output_dir: str = "./validation_logs"
+
+    # Metric and file switches.
+    separate_by_source: bool = True
+    save_csv: bool = True
+    save_epoch_json: bool = True
+    save_per_sample_jsonl: bool = False
+    save_visualizations: bool = True
+    visualization_samples_per_source: int = 4
+
+    # Geometric validation settings. LG and SimLingo use one waypoint every 0.25 s.
+    log_per_horizon_error: bool = True
+    waypoint_interval_s: float = 0.25
+    stop_speed_threshold_mps: float = 0.5
+
+    # Avoid writing the short Lightning sanity-validation pass.
+    skip_sanity_check: bool = True
+    print_epoch_summary: bool = True
+
+
+@dataclass
 class TrainConfig:
     model: DrivingModelConfig
     data_module: Any
+    validation_logging: ValidationLoggingConfig = field(default_factory=ValidationLoggingConfig)
 
     seed: int = 42
     gpus: int = 8

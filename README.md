@@ -70,7 +70,7 @@ python dataset_generation/data_buckets/pkl2csv.py
 
 1. 生成 drivelm 类型 .json.gz 文件
 ```
-cd simlingo & conda activate simlingo & export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo
+cd simlingo & conda activate simlingo & export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
 
 python dataset_generation/language_labels/drivelm/carla_vqa_generator_main.py
 
@@ -120,11 +120,11 @@ python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_plan
 ## 四、关于 "训练"
 1. 开始训练
 ```
-cd simlingo & conda activate simlingo & export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo
+cd simlingo_liulei
 ./train_simlingo_seed1.sh
 ```
 2. 网页查看训练结果
 ```
-# simlingo 根目录下执行
+# simlingo_liulei 根目录下执行
 wandb sync ./outputs/2026_05_04_16_53_04_simlingo_seed1/wandb/offline-run-20260504_165419-2026_05_04_16_53_04_simlingo_seed1
 ```
