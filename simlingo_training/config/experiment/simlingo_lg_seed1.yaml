@@ -1,0 +1,73 @@
+# @package _global_
+defaults:
+  - /data_module: carla_bucket_v12_lg
+  - /model/vision_model: vlm
+  - /data_module/base_dataset: dataset
+
+model:
+  lr: 3e-5
+  predict_route_as_wps: true
+  speed_wps_mode: 2d
+  language_model:
+    variant: '/home/kemove/ll/InternVL2-1B'
+    lora: true
+    lora_alpha: 64
+    lora_r: 32
+    lora_dropout: 0.1
+  vision_model:
+    variant: '/home/kemove/ll/InternVL2-1B'
+
+data_module:
+  batch_size: 6
+  num_workers: 8
+
+  base_dataset:
+    # Use the dataset on which language_grounded_waypoints has been generated.
+    data_path: database/simlingo_v2_2026_07_03_19_20_14
+    bucket_path: database/simlingo_v2_2026_07_03_19_20_14/bucketsv2_simlingo
+    pred_len: 11
+    cut_bottom_quarter: true
+
+    # These remain active for the ordinary driving source. Data_LG constructs
+    # its own language and locally disables DriveLM/commentary loading.
+    use_commentary: true
+    use_qa: true
+    qa_augmentation: true
+
+    img_shift_augmentation: true
+    img_shift_augmentation_prob: 0.5
+    hist_len: 1
+    route_as: target_point_command
+    use_lmdrive_commands: true
+    use_old_towns: true
+    use_town13: true
+    use_safety_flag: false
+
+  # LG switches can also be overridden here from the command line, e.g.:
+  # data_module.dreamer_dataset.lg_use_language=false
+  dreamer_dataset:
+    lg_use_language: true
+    lg_use_waypoints: true
+    lg_language_mode: four_questions
+
+max_epochs: 15
+val_every_n_epochs: 2
+
+gpus: 1
+seed: 9876
+name: simlingo_lg_full_seed_9876
+resume: false
+
+# Required for later closed-loop evaluation. Set false to reproduce the current
+# repository behavior that does not save model files.
+enable_checkpointing: false
+checkpoint_dir: ./checkpoints
+checkpoint_filename: '{epoch:03d}'
+checkpoint_monitor: val/loss
+checkpoint_mode: min
+checkpoint_save_top_k: 1
+checkpoint_save_last: true
+
+hydra:
+  run:
+    dir: outputs/${wandb_name}_${name}

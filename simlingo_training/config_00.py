@@ -4,7 +4,6 @@ import time
 
 from hydra.core.config_store import ConfigStore
 
-
 @dataclass
 class VLMEncoderConfig:
     variant: str = 'OpenGVLab/InternVL2-1B'
@@ -27,8 +26,8 @@ class LanguageModelConfig:
 
 @dataclass
 class DrivingModelConfig:
-    vision_model: Any
-    language_model: Any
+    vision_model: Any       # 没有默认值
+    language_model: Any     # 没有默认值
 
     lr: float = 5e-2
 
@@ -62,95 +61,63 @@ class DatasetBaseConfig:
     pred_len: int = 11 # including the current time step
     hist_len: int = 1 # including the current time step
     hist_len_commentary: int = 5 # including the current time step
-
+    
     img_augmentation: bool = True
     img_augmentation_prob: float = 0.5
     img_shift_augmentation: bool = True
     img_shift_augmentation_prob: float = 0.5
-
+    
     use_safety_flag: bool = False
-
+    
     num_route_points: int = 20
 
     route_as: str = 'target_point_command' # target_point_command, target_point, command
     use_lmdrive_commands: bool = True
 
-
 @dataclass
 class DrivingDatasetConfig:
+    # base: DatasetBaseConfig = field(default_factory=DatasetBaseConfig)
     _target_: str = "simlingo_training.dataloader.dataset_driving.Data_Driving"
-
-
+    
 @dataclass
 class DreamerDatasetConfig:
+    # base: DatasetBaseConfig = field(default_factory=DatasetBaseConfig)
     _target_: str = "simlingo_training.dataloader.dataset_dreamer.Data_Dreamer"
-
-    # ------------------------------------------------------------------
-    # Optional LG supervision adapter.
-    # These switches are ignored by the original Data_Dreamer class. They
-    # become active only when _target_ is changed to dataset_lg.Data_LG.
-    # ------------------------------------------------------------------
-    use_lg_supervision: bool = False
-    lg_label_folder: str = "language_grounded_waypoints"
-
-    # Main ablation switches.
-    # True/True  : complete LG method (four-question language + LG waypoints)
-    # False/True : LG-WP Only
-    # True/False : LG language + original expert waypoints
-    lg_use_language: bool = True
-    lg_use_waypoints: bool = True
-
-    # Language format: four_questions, random_question, or none.
-    lg_language_mode: str = "four_questions"
-    lg_question_keys: Tuple[str, str, str, str] = (
-        "attention",
-        "motion_constraint",
-        "driving_response",
-        "future_motion",
-    )
-    lg_include_navigation_conditioning: bool = True
-
-    # Label validation and filtering.
-    lg_require_risk_label_valid: bool = True
-    lg_require_four_questions: bool = True
-    lg_skip_expert_fallback: bool = True
-    lg_max_abs_waypoint_m: float = 100.0
-    lg_print_filter_summary: bool = True
-
-    # Match Data_Dreamer's official training/validation town split. This is
-    # applied only inside Data_LG and does not alter the normal driving source.
-    lg_match_dreamer_split: bool = True
-
-
+    
 @dataclass
 class QADatasetConfig:
+    # base: DatasetBaseConfig = field(default_factory=DatasetBaseConfig)
     _target_: str = "simlingo_training.dataloader.dataset_eval_qa_comm.Data_Eval"
+    
 @dataclass
 class InstEvalDatasetConfig:
+    # base: DatasetBaseConfig = field(default_factory=DatasetBaseConfig)
     _target_: str = "simlingo_training.dataloader.dataset_eval_dreamer.Eval_Dreamer"
 
 @dataclass
 class DrivingDataModuleConfig:
-    base_dataset: DatasetBaseConfig
-    driving_dataset:Optional[DrivingDatasetConfig] = field(default_factory=DrivingDatasetConfig)
+    
+    base_dataset: DatasetBaseConfig  # 没有默认值
+    
+    driving_dataset:Optional[ DrivingDatasetConfig] = field(default_factory=DrivingDatasetConfig)
     dreamer_dataset: Optional[DreamerDatasetConfig] = field(default_factory=DreamerDatasetConfig)
     qa_dataset: Optional[QADatasetConfig] = field(default_factory=QADatasetConfig)
     insteval_dataset: Optional[InstEvalDatasetConfig] = field(default_factory=InstEvalDatasetConfig)
 
     batch_size: int = 16
     num_workers: int = 10
-
+    
     train_partitions: Optional[Dict[str, float]] = None
     train_partitions_dreamer: Optional[Dict[str, float]] = None
     use_global_img: bool = False
-
+    
     _target_: str = "simlingo_training.dataloader.datamodule.DataModule"
 
 
 @dataclass
 class TrainConfig:
-    model: DrivingModelConfig
-    data_module: Any
+    model: DrivingModelConfig    # 没有默认值
+    data_module: Any             # 没有默认值
 
     seed: int = 42
     gpus: int = 8
@@ -160,33 +127,26 @@ class TrainConfig:
 
     debug: bool = False
     overfit: int = 0
-    fp16_loss_scale: float = 32.0  # 0.0 means dynamic loss scaling, only used with deepspeed
+    fp16_loss_scale: float = 32.0 # 0.0 means dynamic loss scaling, only used with deepspeed
 
     enable_wandb: bool = True
     wandb_project: Optional[str] = "simlingo"
     if debug:
-        wandb_name: Optional[str] = "debug"
+        wandb_name: Optional[str] = f"debug"
         gpus: int = 1
     else:
+        # wandb_name: Optional[str] = f"debug"
         name: Optional[str] = 'test'
         wandb_name: Optional[str] = f"{time.strftime('%Y_%m_%d_%H_%M_%S')}"
-
+    
+    # max_steps: int = 100_000
     max_epochs: int = 20
     precision: str = "16-mixed"
-    strategy: str = "deepspeed_stage_2"  # deepspeed_stage_2, ddp
+    strategy: str = "deepspeed_stage_2" # deepspeed_stage_2 ddp
+    # val_check_interval: int = 5000
     val_every_n_epochs: int = 1
 
     checkpoint: Optional[str] = None
-
-    # Checkpointing remains disabled by default, matching the current repository.
-    # Enable it from an experiment YAML when a model is needed for evaluation.
-    enable_checkpointing: bool = False
-    checkpoint_dir: str = "./checkpoints"
-    checkpoint_filename: str = "{epoch:03d}"
-    checkpoint_monitor: Optional[str] = "val/loss"
-    checkpoint_mode: str = "min"
-    checkpoint_save_top_k: int = 1
-    checkpoint_save_last: bool = True
 
 
 def register_configs():

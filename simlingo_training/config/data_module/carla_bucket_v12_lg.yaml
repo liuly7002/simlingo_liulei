@@ -1,0 +1,52 @@
+defaults:
+  - driving
+
+# Keep the ordinary SimLingo driving source and bucket proportions unchanged.
+train_partitions:
+  all: 0.082
+  acceleration_negative_5: 0.03
+  acceleration_negative_1: 0.03
+  acceleration_positive_1: 0.03
+  acceleration_positive_5: 0.03
+  lateral_control_1_2: 0.12
+  lateral_control_higher_5: 0.12
+  start_from_stop: 0.07
+  vehicle_front: 0.04
+  vehicle_side: 0.08
+  leading_object_vehicle: 0.09
+  leading_object_traffic.stop: 0.07
+  changed_route: 0.08
+
+# Reuse the original auxiliary/Dreamer sampling slot. DataModule therefore
+# retains its original 50% driving + 50% auxiliary sampling behavior.
+train_partitions_dreamer:
+  all: 1.0
+
+dreamer_dataset:
+  _target_: simlingo_training.dataloader.dataset_lg.Data_LG
+
+  # Master switch. Data_LG refuses to run when this is false, which prevents an
+  # LG experiment from silently using the wrong supervision source.
+  use_lg_supervision: true
+  lg_label_folder: language_grounded_waypoints
+
+  # Main experiment / ablation switches:
+  # true / true   -> LG-Full
+  # false / true  -> LG-WP Only
+  # true / false  -> LG language + expert waypoints
+  lg_use_language: true
+  lg_use_waypoints: true
+
+  # four_questions, random_question, or none
+  lg_language_mode: four_questions
+  lg_include_navigation_conditioning: true
+
+  # Strict filtering keeps the comparison focused on valid generated labels.
+  lg_require_risk_label_valid: true
+  lg_require_four_questions: true
+  lg_skip_expert_fallback: true
+  lg_max_abs_waypoint_m: 100.0
+  lg_print_filter_summary: true
+
+  # Match the original Dreamer source's official town split.
+  lg_match_dreamer_split: true
