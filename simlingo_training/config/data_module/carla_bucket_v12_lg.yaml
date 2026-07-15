@@ -1,6 +1,11 @@
 defaults:
   - driving
 
+# Use SimLingo's original Data_Driving implementation for training, while
+# replacing only validation prompts with a deterministic waypoint task.
+driving_dataset:
+  _target_: simlingo_training.dataloader.dataset_driving_fixed_val.Data_Driving_FixedVal
+
 # Keep the ordinary SimLingo driving source and bucket proportions unchanged.
 train_partitions:
   all: 0.082
@@ -22,7 +27,7 @@ train_partitions:
 train_partitions_dreamer:
   all: 1.0
 
-dreamer_dataset:
+dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是把simlingo原来的Dreamer辅助数据槽更换成了我们的数据槽
   _target_: simlingo_training.dataloader.dataset_lg.Data_LG
 
   # Master switch. Data_LG refuses to run when this is false, which prevents an

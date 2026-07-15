@@ -272,7 +272,14 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             raise ValueError("LG label does not contain the required four questions")
 
         if mode == "random_question":
-            selected = random.choice(questions)
+            # Training keeps random question sampling. Validation always uses
+            # the first configured question so that the same sample receives
+            # exactly the same language input at every validation epoch.
+            selected = (
+                random.choice(questions)
+                if self.split == "train"
+                else questions[0]
+            )
             prompt = f"{prefix} Q: {selected['question']} Then predict the waypoints."
             answer = f"A: {selected['answer']} Waypoints:"
             return prompt, answer
@@ -375,7 +382,14 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             bool(getattr(self, "lg_include_navigation_conditioning", True))
             and len(target_options) > 0
         ):
-            prefix = f"{prefix} {random.choice(target_options)}"
+            # Preserve SimLingo's random navigation wording during training,
+            # but keep validation prompts deterministic across epochs.
+            navigation_text = (
+                random.choice(target_options)
+                if self.split == "train"
+                else target_options[0]
+            )
+            prefix = f"{prefix} {navigation_text}"
 
         prompt, answer = self._build_language_text(payload, prefix)
         prompt = prompt.replace("..", ".").replace("  ", " ").strip()

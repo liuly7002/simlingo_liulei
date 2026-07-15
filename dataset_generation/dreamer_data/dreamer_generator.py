@@ -36,20 +36,20 @@ class CarlaAlternativeCreator():
 
     # Sampling parameters
     # debug的时候可以将-1改为一个较小的数,比如200,来快速生成一个小数据集进行测试和调试,正式生成数据集时再改回-1来使用全部数据
-    random_subset_count = 20    # 表示是否随机抽取一部分样本,-1表示使用全部样本,任何正整数N表示抽取的样本数量,后面初始化时会随机打乱所有 boxes/*.json.gz 文件路径，然后只取前 N 个样本。
+    random_subset_count = -1   # 表示是否随机抽取一部分样本,-1表示使用全部样本,任何正整数N表示抽取的样本数量,后面初始化时会随机打乱所有 boxes/*.json.gz 文件路径，然后只取前 N 个样本。
     sample_uniform_interval = 1 # 表示是否按照固定间隔抽样,1表示每1个样本抽取一个样本,2表示每2个样本抽取一个样本,3表示每3个样本抽取一个样本
     filter_routes_by_result = True  # 表示是否根据 CARLA route 的评测结果过滤样本
     
     # Visualization and saving options
     save_viz = False                # Should examples be saved
-    viz_for_video = True
+    viz_for_video = False          
     save_samples = True            # 表示是否保存生成出来的 dreamer label, 也就是.json.gz 文件,如果为 False 则只保存可视化结果
     overwrite = True               # 如果目标文件已经存在,则覆盖
     save_instructions = True
  
     # Dataset and path settings
     base_folder = 'database'   # 数据集根目录
-    dataset_name = 'simlingo_v2_2026_05_25'  # 数据集名称
+    dataset_name = 'simlingo_v2_2026_07_03_19_20_14'  # 数据集名称
     data_directory = f'{base_folder}/{dataset_name}/data'  # 脚本读取原始数据的根目录
     viz_save_path = 'viz/dreamer' if not viz_for_video else 'viz/dreamer_video'
     Path(viz_save_path).mkdir(parents=True, exist_ok=True)
@@ -89,8 +89,8 @@ class CarlaAlternativeCreator():
 
     ############################# 风险图相关配置 #############################
     # Risk map settings
-    save_risk_map = True
-    save_risk_viz = True
+    save_risk_map = False
+    save_risk_viz = False
     risk_map_folder_name = 'risk_map'
     # BEV range in current ego coordinate.
     # x: forward direction, y: lateral direction.

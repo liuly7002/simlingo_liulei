@@ -106,6 +106,10 @@ python dataset_generation/language_labels/commentary/carla_commentary_generator_
 4. 生成 Dreamer 类型 .json.gz 文件
 ```
 python dataset_generation/dreamer_data/dreamer_generator.py
+
+# 备注：需要修改的内容有：
+    base_folder = 'database'   # 数据集根目录
+    dataset_name = 'simlingo_v2_2026_07_03_19_20_14'  # 数据集名称
 ```
 
 5. 生成创新点一类型 .json.gz 文件【本文第一创新点】

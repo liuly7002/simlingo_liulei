@@ -145,7 +145,7 @@ class DataModule(LightningDataModule):
 
 
 
-                # 6. 设定driving 和 dreamer 两大类数据源的总权重
+                # 6. 设定 driving_data(QA & Driving & Commentary) 和 dreamer_data(Dreamer) 两大类数据源的总权重
                 weights_driving = 0.5
                 weights_dreamer = 1 - weights_driving
                 for udd_i, (used_driving_dataset, used_train_partitions) in enumerate(zip(used_driving_datasets, used_train_partitions)):
@@ -640,6 +640,11 @@ class DataModule(LightningDataModule):
         pass
 
 
+
+
+
+
+
 @hydra.main(config_path=f"../config", config_name="config", version_base="1.1")
 def test(cfg):
     
@@ -721,6 +726,5 @@ def test(cfg):
         print(f"Max y diff: {max_y_diff}, Min y diff: {min_y_diff}")
         plt.clf()
             
-
 if __name__ == "__main__":
     test()

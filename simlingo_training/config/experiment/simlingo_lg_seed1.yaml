@@ -22,7 +22,6 @@ data_module:
   num_workers: 8
 
   base_dataset:
-    # Use the dataset on which language_grounded_waypoints has been generated.
     data_path: database/simlingo_v2_2026_07_03_19_20_14
     bucket_path: database/simlingo_v2_2026_07_03_19_20_14/bucketsv2_simlingo
     pred_len: 11

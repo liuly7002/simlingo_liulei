@@ -438,7 +438,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         answer = ''
         prompt_random = random.random()
 
-        # 任务一(对应第一类语言监督): commentary 任务 (触发条件:1.配置打开 2.当前样本确实有commentary 3.随机数落在commentary概率区间)
+        # 任务一(对应第一类语言监督): commentary 任务 (触发条件:1.配置打开 2.当前样本确实有commentary 3.随机数落在commentary概率区间,目前概率是1/3)
         if self.use_commentary and commentary_exists and prompt_random < self.prompt_probabilities['commentary']:
             # 子模式A: 20% 让模型“根据 commentary 预测轨迹”
             # 意思是把 commentary 当作语言条件输入,模型要生成轨迹
@@ -462,7 +462,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                 answer = f"{commentary} Waypoints:"
             self.num_sampled_per_type['commentary'] += 1
         
-        # 任务二(对应第二类语言监督): QA任务 DriveLM 风格
+        # 任务二(对应第二类语言监督): QA任务 DriveLM 风格 (触发条件:1.配置打开 2.当前样本确实有qa 3.随机数落在qa概率区间,目前概率是1/3-2/3)
         elif self.use_qa and qa_exists and prompt_random < (self.prompt_probabilities['qa'] + self.prompt_probabilities['commentary']):
             # 标准 VQA 风格
             # 也就是说此时样本不是预测轨迹，而是回答场景问答

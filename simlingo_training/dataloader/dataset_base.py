@@ -29,7 +29,7 @@ from simlingo_training.utils.projection import get_camera_intrinsics, project_po
 
 VIZ_DATA = False
 
-class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
+class BaseDataset(Dataset):
     """
     Base class for the dataset.
     """
@@ -50,7 +50,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
 
         ################################################## 🏀 生成图像增强器 🏀 ##################################################
-        self.tfs = image_augmenter(prob=self.img_augmentation_prob)
+        self.tfs = image_augmenter(prob=self.img_augmentation_prob)  # 高斯模糊、噪声等图像增强方式
 
 
 
@@ -89,7 +89,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         ################################################## 🏀 初始化项目路径 🏀 ##################################################
 
-        # 获取程序启动前的原始项目根目录,这里是/root/simlingo
+        # 获取程序启动前的原始项目根目录,这里是/home/kemove/ll/simlingo_liulei
         repo_path = get_original_cwd()
         
         
@@ -101,6 +101,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         # 加载模板文件,这一块是为了给后续语言任务做准备
         # commentary 模板 无论dreamer与否,这个都会加载,说明commentary模板是通用的
+        # 模板位置：/home/kemove/ll/simlingo_liulei/data/augmented_templates/commentary_augmented.json
         template_file = f"{repo_path}/data/augmented_templates/commentary_augmented.json"
         with open(template_file, 'r') as f:
             self.templates_commentary = ujson.load(f)
@@ -112,6 +113,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         # 加载模板文件,这一块是为了给后续语言任务做准备
         # 如果当前是 dreamer 数据集,则额外加载 dreamer 的模板
+        # 模板位置：/home/kemove/ll/simlingo_liulei/data/augmented_templates/dreamer.json
         if dreamer:
             template_file = f"{repo_path}/data/augmented_templates/dreamer.json"
             with open(template_file, 'r') as f:
@@ -124,6 +126,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         # 加载模板文件,这一块是为了给后续语言任务做准备
         # 如果配置中开启了 use_lmdrive_commands(目前是开启的),就加载语言命令模板
+        # 模板位置：/home/kemove/ll/simlingo_liulei/data/augmented_templates/lmdrive.json
         if self.use_lmdrive_commands:  # 执行
             command_templates_file = f"{repo_path}/data/augmented_templates/lmdrive.json"
             with open(command_templates_file, 'r') as f:
@@ -180,7 +183,7 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         
 
-        ################################################## 🏀 非 dreamer 情况下 构建 prompt 类型采样配置 🏀 ##################################################
+        ################################################## 🏀 非 dreamer 情况下(即driving模式下) 构建 prompt 类型采样配置 🏀 ##################################################
 
         # 非 dreamer 情况下，构建 prompt 类型采样配置,这里是在为多任务 prompt 采样做准备
         if not dreamer:
@@ -194,10 +197,10 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
             # 构造概率 prompt_probabilities
             # 初始化的权重都为1.0 prompt_probabilities = {'driving': 1.0, 'qa': 1.0, 'commentary': 1.0}
-            prompt_probabilities = {'driving': 1.0 }
-            if self.use_qa:  # 目前是开启
+            prompt_probabilities = {'driving': 1.0 }   # 这里默认driving类型的语言模板是必须存在的
+            if self.use_qa:  # 执行
                 prompt_probabilities['qa'] = 1.0
-            if self.use_commentary:  # 目前是开启
+            if self.use_commentary:  # 执行
                 prompt_probabilities['commentary'] = 1.0
             
             # divide by the sum to get the probabilities
@@ -285,9 +288,9 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         # 在数据根目录下，把所有 route 目录都找出来, 这就是每一条 route 的原始数据池
         route_dirs = glob.glob(f"{repo_path}/" + self.data_path + '/data/simlingo/*/*/*/Town*')
         # route_dirs = [
-        #               '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43', 
-        #               '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43',
-        #               '/home/liulei/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28'
+        #               '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43', 
+        #               '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43',
+        #               '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28'
         #               ]
 
         
@@ -295,15 +298,15 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         
         
         
-        
+        ################################################## 🏀 对 old towns 进行处理 🏀 ##################################################
         # lb1_split 代表 old towns 数据
         # use_old_towns=False：排除 old towns
         # use_only_old_towns=True：只用 old towns
         # 或者当前 bucket_name 就是 "old_towns"，也只保留 old towns
-        if not self.use_old_towns:
+        if not self.use_old_towns:  # 不执行
             route_dirs = [route_dir for route_dir in route_dirs if 'lb1_split' not in route_dir]
             print(f'Found {len(route_dirs)} routes in {repo_path + self.data_path} after filtering out old towns')
-        elif self.use_only_old_towns or self.bucket_name == "old_towns":
+        elif self.use_only_old_towns or self.bucket_name == "old_towns":  # 不执行
             route_dirs = [route_dir for route_dir in route_dirs if 'lb1_split' in route_dir]
             print(f'Found {len(route_dirs)} routes in {repo_path + self.data_path} after filtering out non old towns')
         
@@ -353,12 +356,13 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         for sub_root in tqdm(route_dirs, file=sys.stdout):
 
             start_route+=1
-            route_dir = sub_root
+            route_dir = sub_root  # 当前 route 的根目录 '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43'
 
-            # 如果是 dreamer 数据集，就要求 route 对应的 dreamer 目录必须存在，否则整条 route 不要
+            # 如果是 dreamer 模式下，就要求 route 对应的 dreamer 目录必须存在，否则整条 route 不要
             if dreamer:
                 dreamer_dir = route_dir.replace('data/', f'{self.dreamer_folder}/')
                 if not os.path.exists(dreamer_dir):
+                    print(f"!!! dreamer_dir {dreamer_dir} does not exist, skipping route")
                     continue
 
             ############################### 🍑 按 route 做结果文件质量过滤 🍑 ###############################
@@ -526,15 +530,10 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
         # print('Perfect routes:', perfect_routes)
         # print('Fail reasons:', fail_reasons)
 
-
-
-
-
     def __len__(self):
         """Returns the length of the dataset. """
         return self.images.shape[0]
     
-
     def load_current_and_future_measurements(self, measurements, sample_start):
         
         loaded_measurements = []
@@ -569,14 +568,6 @@ class BaseDataset(Dataset):  # pylint: disable=locally-disabled, invalid-name
 
         measurement_file_current = str(measurements[0], encoding='utf-8') + (f'/{(sample_start + start-1):04}.json.gz')
         return loaded_measurements, current_measurement, measurement_file_current
-
-
-
-
-
-
-
-
 
     def load_waypoints(self, data, loaded_measurements, aug_translation=0.0, aug_rotation=0.0):
 

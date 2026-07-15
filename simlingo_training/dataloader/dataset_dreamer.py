@@ -31,8 +31,16 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
     def __getitem__(self, index):
         """Returns the item at index idx. """
         # Disable threading because the data loader will already split in threads.
-        cv2.setNumThreads(0)
+        cv2.setNumThreads(0)   # 禁用OpenCV多线程，避免与PyTorch的多线程冲突
 
+
+
+
+
+
+
+
+        ########################################### 🥭 初始化(父类初始化得到) 🥭 ###########################################
         data = {}
         images = self.images[index]
         measurements = self.measurements[index]
@@ -40,23 +48,23 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         augment_exists = self.augment_exists[index]
         alternative_trajectories = self.alternative_trajectories[index]
 
-        ######################################################
-        ######## load current and future measurements ########
-        ######################################################
-        loaded_measurements, current_measurement, measurement_file_current = self.load_current_and_future_measurements(
-            measurements,
-            sample_start
-            )
-        
+        ########################################### 🥭 measurements 🥭 ###########################################
+
+        loaded_measurements, current_measurement, measurement_file_current = self.load_current_and_future_measurements(measurements, sample_start)
         data['measurement_path'] = measurement_file_current
+
+
 
         if self.use_safety_flag:
             if random.random() < 0.5:
                 activate_safety = True
             else:
                 activate_safety = False
-        else:
+        else:  # 执行
             activate_safety = None
+
+
+        ########################################### 🥭 是否进行数据增强 🥭 ###########################################
         # if we want to use the alternative trajectories, we cant take the augmented images, since alternatives are calculated for the original view only
         # if activate_safety is not None and activate_safety == False or activate_safety is None:
         augment_sample = False
@@ -64,20 +72,49 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         aug_translation = 0.0
 
 
-        ######################################################
-        ################## load waypoints ####################
-        ######################################################
+
+
+
+        ########################################### 🥭 waypoints 🥭 ###########################################
         data = self.load_waypoints(data, loaded_measurements, aug_translation, aug_rotation)
        
+
+
+
+
+
+        ########################################### 🥭 当前帧的车速 🥭 ###########################################
         speed_rounded = round(current_measurement['speed'], 1)
         data['speed'] = current_measurement['speed']
 
+
+
+
+
+
+
+        ########################################### 🥭 route 🥭###########################################
         data = self.load_route(data, current_measurement, aug_translation, aug_rotation)
 
+
+
+
+
+
+
+        ########################################### 🥭 target point 🥭 ###########################################
         target_point = np.array(current_measurement['target_point'])
         target_point = self.augment_target_point(target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+        
+        ########################################### 🥭 next target point 🥭 ###########################################
         next_target_point = np.array(current_measurement['target_point_next'])
         next_target_point = self.augment_target_point(next_target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+
+
+
+
+
+
 
         ######################################################
         ################## get alternatives ##################
@@ -119,11 +156,37 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                 augment_sample = False
         
 
-        ######################################################
-        ######## load navigational_conditioning ########
-        ######################################################
+
+
+
+
+
+
+
+        ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
+
         target_options, placeholder_values = self.get_navigational_conditioning( data, current_measurement, target_point, next_target_point)
-            
+        """
+        target_options = 
+        [
+        "Target waypoint: <TARGET_POINT><TARGET_POINT>.",
+        "Command: {command} in {dist_to_command} meter {next_command}.",
+        "Command: {lmdrive_command}."
+        ]   # lmdrive_command 来自"/data/augmented_templates/lmdrive.json"语言增强模板文件
+        
+        placeholder_values = 
+        {
+        '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]]
+        }
+        """
+
+
+
+
+
+
+
+
         answer = ''
 
         if random.random() < 0.8:
@@ -145,9 +208,17 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
         prompt = prompt.replace('..', '.').replace('  ', ' ').replace('!.', '!').replace('?.', '?')
                 
-        ######################################################
-        ######## load current and past images ########
-        ######################################################
+
+
+
+
+
+
+
+
+
+
+        ############################################# 🥭 前视图像 🥭 #############################################
         data = self.load_images(data, images, augment_sample=augment_sample)
         
         # overwrite action when safety flag is active and action is not allowed
