@@ -1,10 +1,3 @@
-"""LG supervision adapter for SimLingo training.
-
-This module intentionally reuses SimLingo's existing ``dreamer_dataset`` slot.
-The normal driving dataset, Dreamer dataset, DataModule, model, and losses are
-not changed. Select this dataset through Hydra only for LG experiments.
-"""
-
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -141,30 +134,67 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         )
         return waypoints
 
+    def _extract_lg_path(self, payload: Dict) -> np.ndarray:
+        reference = payload.get("reference", {})
+        path = np.asarray(
+            reference.get("selected_reference_route", []),
+            dtype=np.float32,
+        )
+
+        if path.ndim != 2 or path.shape[1] != 2 or len(path) < 2:
+            return path
+
+        # 与SimLingo原始path保持一致：
+        # 从自车原点开始，按1 m间隔重采样为20个几何路径点。
+        path = self.equal_spacing_route(path)
+
+        return np.asarray(path, dtype=np.float32)
+
     def _validate_payload(self, payload: Dict) -> Tuple[bool, str]:
+        """
+        检查机制
+        """
+        # 获取.json标签文件中的 "supervision" 键
         supervision = payload.get("supervision", {})
         if not isinstance(supervision, dict):
             return False, "missing_supervision"
 
+        # 过滤机制
         if bool(getattr(self, "lg_require_risk_label_valid", True)):
             if not bool(supervision.get("risk_label_valid", False)):
                 return False, "risk_label_invalid"
 
+        # 过滤机制
         if bool(getattr(self, "lg_skip_expert_fallback", True)):
             internal_name = str(supervision.get("selected_internal_intent_name", ""))
             if internal_name in {"expert_fallback", "stationary_hold_fallback"}:
                 return False, f"fallback:{internal_name}"
 
+        # 过滤机制
         if bool(getattr(self, "lg_use_waypoints", True)):
+            # 规划出来的waypoints
             waypoints = self._extract_lg_waypoints(payload)
-            expected_count = int(self.pred_len) - 1
+            expected_count = int(self.pred_len) - 1  # 10个waypoints
+
             if waypoints.shape != (expected_count, 2):
                 return False, f"waypoint_shape:{tuple(waypoints.shape)}"
             if not np.isfinite(waypoints).all():
                 return False, "waypoint_non_finite"
+
+            # 过滤机制 100m
             max_abs = float(getattr(self, "lg_max_abs_waypoint_m", 100.0))
             if np.max(np.abs(waypoints), initial=0.0) > max_abs:
                 return False, "waypoint_out_of_range"
+
+            # 选择的path
+            path = self._extract_lg_path(payload)
+
+            if path.shape != (20, 2):
+                return False, f"path_shape:{tuple(path.shape)}"
+            if not np.isfinite(path).all():
+                return False, "path_non_finite"
+            if np.max(np.abs(path), initial=0.0) > max_abs:
+                return False, "path_out_of_range"
 
         language_mode = str(getattr(self, "lg_language_mode", "four_questions")).lower()
         require_questions = bool(getattr(self, "lg_require_four_questions", True))
@@ -259,8 +289,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
     def _build_language_text(
         self,
         payload: Dict,
-        prefix: str,
-    ) -> Tuple[str, str]:
+        prefix: str,) -> Tuple[str, str]:
+
         use_language = bool(getattr(self, "lg_use_language", True))
         mode = str(getattr(self, "lg_language_mode", "four_questions")).lower()
 
@@ -303,19 +333,55 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         answer = f"{answer_text} Waypoints:"
         return prompt, answer
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     def __getitem__(self, index):
-        cv2.setNumThreads(0)
+        cv2.setNumThreads(0)  # 禁用OpenCV多线程
 
+
+        ########################################### 🥭 初始化(父类初始化得到) 🥭 ###########################################
         data = {}
-        images = self.images[index]
-        measurements = self.measurements[index]
-        sample_start = self.sample_start[index]
-        lg_path = Path(self._decode_path(self.lg_label_paths[index]))
+        images = self.images[index]              # 图像路径
+        measurements = self.measurements[index]  # measurements路径
+        sample_start = self.sample_start[index]  # 当前样本的帧id
+        lg_path = Path(self._decode_path(self.lg_label_paths[index]))  # lg标签路径
+        # images: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/rgb/0026.jpg'], 
+        # measurements: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/measurements'], 
+        # sample_start: 26, 
 
-        loaded_measurements, current_measurement, measurement_file_current = (
-            self.load_current_and_future_measurements(measurements, sample_start)
-        )
+
+
+
+
+        ########################################### 🥭 measurements 🥭 ###########################################
+
+        loaded_measurements, current_measurement, measurement_file_current = (self.load_current_and_future_measurements(measurements, sample_start))
         data["measurement_path"] = measurement_file_current
+
+
+
+
+
+
+
+        ########################################### 🥭 是否进行数据增强 🥭 ###########################################
 
         # LG labels are generated in the original ego frame. Therefore geometric
         # image-shift augmentation is deliberately disabled for LG samples.
@@ -323,59 +389,98 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         aug_translation = 0.0
         augment_sample = False
 
-        data = self.load_waypoints(
-            data,
-            loaded_measurements,
-            aug_translation,
-            aug_rotation,
-        )
+
+
+
+
+
+
+        ########################################### 🥭 waypoints 🥭 ###########################################
+
+        data = self.load_waypoints(data, loaded_measurements, aug_translation, aug_rotation,)
+        # data['waypoints']            : 自车坐标系下自车未来10帧(不包括当前帧)自车的位置 [x,y](无增强)
+        # data['waypoints_org']        : 自车坐标系下自车未来10帧(不包括当前帧)自车的位置 [x,y]（无增强）
+        # data['waypoints_1d']         : 自车坐标系下 10 帧距离 [x,0] (x是自车当前帧与第1、2、、、11帧之间的欧式距离)(没有增强)
+        # data['ego_waypoints']        : 11 个 4×4 矩阵（无增强）包括当前帧及未来 10 帧
+        # data['ego_waypoints_org']    : 11 个 4×4 矩阵（无增强）包括当前帧及未来 10 帧
+
+
+
+
+
+
+
+        ########################################### 🥭 当前帧的车速 🥭 ###########################################
+
         data["speed"] = current_measurement["speed"]
         speed_rounded = round(current_measurement["speed"], 1)
 
-        data = self.load_route(
-            data,
-            current_measurement,
-            aug_translation,
-            aug_rotation,
-        )
+
+
+
+
+
+
+
+
+        ########################################### 🥭 route 🥭###########################################
+
+        data = self.load_route(data, current_measurement, aug_translation, aug_rotation,)
+
+
+
+
+
+
+
+
+        ########################################### 🥭 target point 🥭 ###########################################
 
         target_point = np.asarray(current_measurement["target_point"], dtype=np.float32)
-        target_point = self.augment_target_point(
-            target_point,
-            y_augmentation=aug_translation,
-            yaw_augmentation=aug_rotation,
-        )
-        next_target_point = np.asarray(
-            current_measurement["target_point_next"],
-            dtype=np.float32,
-        )
-        next_target_point = self.augment_target_point(
-            next_target_point,
-            y_augmentation=aug_translation,
-            yaw_augmentation=aug_rotation,
-        )
+        target_point = self.augment_target_point(target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation,)
+        
+        
+        
+        ########################################### 🥭 next target point 🥭 ###########################################
 
-        target_options, placeholder_values = self.get_navigational_conditioning(
-            data,
-            current_measurement,
-            target_point,
-            next_target_point,
-        )
+        next_target_point = np.asarray(current_measurement["target_point_next"], dtype=np.float32,)
+        next_target_point = self.augment_target_point(next_target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation,)
 
+
+
+
+
+
+
+        ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
+
+        target_options, placeholder_values = self.get_navigational_conditioning(data, current_measurement, target_point, next_target_point,)
+
+
+
+
+
+
+
+        ########################################### 🥭 生成 waypoints & waypoints_1d & path 🥭 ###########################################
+
+        # 加载.json.gz文件
         payload = self._load_gzip_json(lg_path)
+        # 检查
         valid, reason = self._validate_payload(payload)
         if not valid:
             raise ValueError(f"Invalid LG label at {lg_path}: {reason}")
 
         if bool(getattr(self, "lg_use_waypoints", True)):
+            # LG时间轨迹与LG选中候选的几何路径配套使用。
             waypoints = self._extract_lg_waypoints(payload)
+            path = self._extract_lg_path(payload)
         else:
+            # 不使用LG轨迹时，waypoints和path同时回退到专家监督。
             waypoints = np.asarray(data["waypoints_org"], dtype=np.float32)
-        waypoints_1d = self._compute_waypoints_1d(waypoints)
+            path = np.asarray(data["route_adjusted_org"], dtype=np.float32)
 
-        # Keep SimLingo's original route target for the main comparison. Only the
-        # language and waypoint supervision source changes.
-        path = np.asarray(data["route_adjusted_org"], dtype=np.float32)
+        waypoints_1d = self._compute_waypoints_1d(waypoints)
 
         prefix = f"Current speed: {speed_rounded} m/s."
         if (
@@ -395,8 +500,23 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         prompt = prompt.replace("..", ".").replace("  ", " ").strip()
         answer = answer.replace("..", ".").replace("  ", " ").strip()
 
+
+
+
+
+
+        ############################################# 🥭 前视图像 🥭 #############################################
+
         data = self.load_images(data, images, augment_sample=augment_sample)
 
+
+
+
+
+
+        ############################################# 🥭 构造对话格式 🥭 #############################################
+
+        # 1. 只包含答案的版本  这是仅包含 assistant 输出的部分，通常用于监督目标
         conversation_answer = [
             {
                 "role": "assistant",
@@ -417,34 +537,31 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             },
         ]
 
+
+
+
+
+
+        # 最终返回结果
         data_new = DatasetOutput(
-            conversation=conversation_all,
-            answer=conversation_answer,
-            image_ff=data["rgb"],
-            image_ff_org_size=data["rgb_org_size"],
+            conversation=conversation_all,          # 完整 user-assistant 对话，给模型做输入格式组织用。
+            answer=conversation_answer,             # 只包含监督答案，通常给 loss 计算用。
+            image_ff=data["rgb"],                   # front-forward image，当前样本前视图。
+            image_ff_org_size=data["rgb_org_size"], # 原图尺寸。后处理或可视化时可能要用。
             waypoints=waypoints,
             waypoints_1d=waypoints_1d,
             path=path,
-            target_points=data["target_points"],
-            speed=data["speed"],
-            placeholder_values=placeholder_values,
-            measurement_path=data["measurement_path"],
+            target_points=data["target_points"],    # 导航目标点
+            speed=data["speed"],                    # 当前速度
+            placeholder_values=placeholder_values,  # 导航模板相关占位值
+            measurement_path=data["measurement_path"],  # 当前样本来源，方便 debug
             # Keep the original dataset identifier so downstream SimLingo code
             # follows exactly the same path as Dreamer auxiliary samples.
             dataset="driving",
         )
 
         if VIZ_DATA:
-            self.visualise_cameras(
-                data_new,
-                None,
-                path,
-                waypoints,
-                options=None,
-                name="lg_",
-                prompt=prompt,
-                answer=answer,
-            )
+            self.visualise_cameras(data_new, None, path, waypoints, options=None, name="lg_", prompt=prompt, answer=answer,)
 
         return data_new
 

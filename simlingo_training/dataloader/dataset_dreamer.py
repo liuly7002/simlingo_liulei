@@ -133,15 +133,15 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         chosen_option = random.choice(options)
 
         # replace 'org' with the original route
-        if chosen_option['route'] == 'org':
-            chosen_option['route'] = data['route_adjusted_org']
+        if chosen_option['route'] == 'org': 
+            chosen_option['route'] = data['route_adjusted_org']   # 这表示使用数据集原始的规划路径
         else:
-            chosen_option['route'] = np.array(chosen_option['route'])
+            chosen_option['route'] = np.array(chosen_option['route'])  # 表示使用规划出来的路径
         
         if chosen_option['waypoints'] == 'org':
-            chosen_option['waypoints'] = data['waypoints_org']
+            chosen_option['waypoints'] = data['waypoints_org']    # 表示使用数据集原始的waypoints
         else:
-            chosen_option['waypoints'] = np.array(chosen_option['waypoints'])
+            chosen_option['waypoints'] = np.array(chosen_option['waypoints'])  # 表示使用规划出来的waypoints
         
         chosen_option['dreamer_instruction'] = random.choice(chosen_option['dreamer_instruction'])
 
@@ -232,6 +232,16 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             else:
                 prompt = f"<INSTRUCTION_FOLLOWING> {prompt}"
 
+
+
+
+
+
+
+
+        ############################################# 🥭 构造对话格式 🥭 #############################################
+
+        # 1. 只包含答案的版本  这是仅包含 assistant 输出的部分，通常用于监督目标
         conversation_answer = [
             {
             "role": "assistant",
@@ -240,6 +250,8 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
                 ],
             },
         ]
+        # 2. 完整对话版本
+        # 这是标准的多模态对话格式：user 发出文字 prompt，并附一张图片  assistant 输出文字答案
         conversation_all = [
             {
             "role": "user",
@@ -256,21 +268,33 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             }
         ]
         
+
+
+
+        ############################################# 🥭 前视图像 🥭 #############################################
+
+        # 这里虽然只用了一张前视图，但仍然包成 list，说明整个系统接口可能支持多图输入。
         images = [data['rgb']]
 
+
+
+
+
+
+        # 最终的返回结果
         data_new = DatasetOutput(
-            conversation = conversation_all,
-            answer = conversation_answer,
-            image_ff = data['rgb'],
-            image_ff_org_size=data['rgb_org_size'],
+            conversation = conversation_all,             # 完整 user-assistant 对话，给模型做输入格式组织用。
+            answer = conversation_answer,                # 只包含监督答案，通常给 loss 计算用。
+            image_ff = data['rgb'],                      # front-forward image，当前样本前视图。
+            image_ff_org_size=data['rgb_org_size'],      # 原图尺寸。后处理或可视化时可能要用。
             waypoints = waypoints,
             waypoints_1d = waypoints_1d,
             path = path,
-            target_points = data['target_points'],
-            speed = data['speed'],
-            placeholder_values = placeholder_values,
-            measurement_path = data['measurement_path'],
-            dataset = 'driving',
+            target_points = data['target_points'],       # 导航目标点
+            speed = data['speed'],                       # 当前速度
+            placeholder_values = placeholder_values,     # 导航模板相关占位值
+            measurement_path = data['measurement_path'], # 当前样本来源，方便 debug
+            dataset = 'driving',                         # 显式标记这个样本来自 driving dataset
         )
         
         if VIZ_DATA:

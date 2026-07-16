@@ -59,7 +59,6 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         
         ########################################### 🥭 measurements 🥭 ###########################################
         
-        
         # loaded_measurements: 当前帧及未来11帧的 .json 内容 总共12帧
         # current_measurement: 当前帧的 .json.gz 内容
         # measurement_file_current: 当前 measurement .json.gz 文件路径
@@ -141,6 +140,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
 
         ########################################### 🥭 route 🥭###########################################
+        
         data = self.load_route(data, current_measurement, aug_translation, aug_rotation)
 
 
@@ -414,8 +414,8 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         """
         target_options = 
         [
-        "Target waypoint: <TARGET_POINT><TARGET_POINT>.",
-        "Command: {command} in {dist_to_command} meter{next_command}.",
+        "Target waypoint: <TARGET_POINT><TARGET_POINT>.",    # 这就是网络框架中的输入 TP
+        "Command: {command} in {dist_to_command} meter{next_command}.",  # 这就是网络框架中的输入 HLC
         "Command: {lmdrive_command}."
         ]   # lmdrive_command 来自"/data/augmented_templates/lmdrive.json"语言增强模板文件
         
