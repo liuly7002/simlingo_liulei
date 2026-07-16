@@ -32,8 +32,8 @@ dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是
 
   # Master switch. Data_LG refuses to run when this is false, which prevents an
   # LG experiment from silently using the wrong supervision source.
-  use_lg_supervision: true
-  lg_label_folder: language_grounded_waypoints
+  use_lg_supervision: true   # 是否启用lg监督
+  lg_label_folder: language_grounded_waypoints  # lg标签文件夹名称
 
   # Main experiment / ablation switches:
   # true / true   -> LG-Full
@@ -47,11 +47,11 @@ dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是
   lg_include_navigation_conditioning: true
 
   # Strict filtering keeps the comparison focused on valid generated labels.
-  lg_require_risk_label_valid: true
+  lg_require_risk_label_valid: true  # 滤除没有通过安全性和可行性检查的lg waypoints轨迹
   lg_require_four_questions: true
   lg_skip_expert_fallback: true
   lg_max_abs_waypoint_m: 100.0
   lg_print_filter_summary: true
 
   # Match the original Dreamer source's official town split.
-  lg_match_dreamer_split: true
+  lg_match_dreamer_split: true  # 是否使用与Dreamer相同的数据划分,若为相同划分则能够进行公平比较

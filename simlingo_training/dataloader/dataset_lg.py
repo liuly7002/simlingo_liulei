@@ -20,6 +20,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
     """Load four-question LG language and selected LG waypoint supervision."""
 
     def __init__(self, **cfg):
+        
+        # 检查是否启用了lg监督,如果没有启用LG监督,立即抛出 ValueError,停止创建数据集。
         if not bool(cfg.get("use_lg_supervision", False)):
             raise ValueError(
                 "Data_LG was selected but use_lg_supervision is False. "
@@ -27,21 +29,36 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
                 "or switch back to the original Data_Dreamer target."
             )
 
-        # Data_LG performs its own language construction, so DriveLM QA and
-        # commentary initialization are unnecessary for this auxiliary source.
-        # These overrides are local to Data_LG and do not affect Data_Driving.
-        base_cfg = dict(cfg)
-        base_cfg["use_qa"] = False
-        base_cfg["use_commentary"] = False
 
-        # Data_Dreamer always uses the official routes_training/routes_validation
-        # split. Reproduce that split for a fair Dreamer-vs-LG comparison.
+
+        # 复制配置，这样可以避免对传入的cfg修改
+        base_cfg = dict(cfg)
+
+
+
+        # Data_LG只负责LG语言和LG轨迹监督，不在这个辅助数据源内部混入原始VQA与Commentary任务
+        base_cfg["use_qa"] = False   # 主要是在调用父类初始化的时候传进父类
+        base_cfg["use_commentary"] = False  # 主要是在调用父类初始化的时候传进父类
+
+        
+        
+        # lg_match_dreamer_split=True表示默认与Dreamer保持相同的数据划分，不额外使用Town13
         if bool(base_cfg.get("lg_match_dreamer_split", True)):
             base_cfg["use_town13"] = False
 
+
+
+        # 调用父类初始化,dreamer=False告诉父类当前不是原始Dreamer数据集
         super().__init__(dreamer=False, **base_cfg)
 
+
+
+        # lg标签文件夹名称:language_grounded_waypoints
         self.lg_label_folder = str(getattr(self, "lg_label_folder", "language_grounded_waypoints"))
+        
+        
+        
+        # 四个lg问题的键名字
         self.lg_question_keys = tuple(
             getattr(
                 self,
@@ -49,6 +66,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
                 ("attention", "motion_constraint", "driving_response", "future_motion"),
             )
         )
+
+        # 根据lg文件重新过滤样本
         self._filter_samples_with_valid_lg_labels()
 
     # ---------------------------------------------------------------------
@@ -63,21 +82,35 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         return str(value)
 
     def _measurement_dir_for_index(self, index: int) -> Path:
-        measurement_entry = self.measurements[index]
+        
+        # 当前样本对应的measurements目录 "/root/.../Town12_xxx/measurements"
+        measurement_entry = self.measurements[index]  
+        
+        # 判断是不是数组
         if isinstance(measurement_entry, np.ndarray):
             measurement_entry = measurement_entry.reshape(-1)[0]
+        # 判断是不是list或者tuple
         elif isinstance(measurement_entry, (list, tuple)):
             measurement_entry = measurement_entry[0]
+
         return Path(self._decode_path(measurement_entry))
 
     def _current_frame_for_index(self, index: int) -> int:
         return int(self.sample_start[index]) + int(self.hist_len) - 1
 
     def _lg_path_for_index(self, index: int) -> Path:
+
+        # 当前帧对应的measurements目录: /root/.../Town12_xxx/measurements
         measurement_dir = self._measurement_dir_for_index(index)
-        route_dir = measurement_dir.parent
-        frame_id = self._current_frame_for_index(index)
-        return route_dir / self.lg_label_folder / f"{frame_id:04d}.json.gz"
+
+        # 取上级目录:/root/.../Town12_xxx/
+        route_dir = measurement_dir.parent  # Path.parent 表示取当前路径的上一级目录
+
+        # 当前样本真正对应的帧id
+        frame_id = self._current_frame_for_index(index)  
+
+        # 拼接lg文件路径.json.gz: /root/.../Town12_xxx/language_grounded_waypoints/0026.json
+        return route_dir / self.lg_label_folder / f"{frame_id:04d}.json.gz"  
 
     @staticmethod
     def _load_gzip_json(path: Path) -> Dict:
@@ -135,7 +168,13 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         return waypoints
 
     def _extract_lg_path(self, payload: Dict) -> np.ndarray:
+
         reference = payload.get("reference", {})
+
+        # 健壮
+        if not isinstance(reference, dict):
+            return np.empty((0, 2), dtype=np.float32)
+
         path = np.asarray(
             reference.get("selected_reference_route", []),
             dtype=np.float32,
@@ -145,7 +184,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             return path
 
         # 与SimLingo原始path保持一致：
-        # 从自车原点开始，按1 m间隔重采样为20个几何路径点。
+        # 从自车原点开始，按 1m 间隔重采样为20个几何路径点。
         path = self.equal_spacing_route(path)
 
         return np.asarray(path, dtype=np.float32)
@@ -159,29 +198,33 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         if not isinstance(supervision, dict):
             return False, "missing_supervision"
 
-        # 过滤机制
+        # 过滤机制(risk_label_valid是否为true)这是一个重点,因为我们认定标签不合法时不能使用
         if bool(getattr(self, "lg_require_risk_label_valid", True)):
             if not bool(supervision.get("risk_label_valid", False)):
                 return False, "risk_label_invalid"
 
-        # 过滤机制
+        # 过滤机制(是否属于不允许的fallback)
         if bool(getattr(self, "lg_skip_expert_fallback", True)):
             internal_name = str(supervision.get("selected_internal_intent_name", ""))
             if internal_name in {"expert_fallback", "stationary_hold_fallback"}:
                 return False, f"fallback:{internal_name}"
 
-        # 过滤机制
+        # 过滤机制(lg waypoints是否为[10,2]  lg path是否为[20,2] path和waypoints是否有NaN或Inf 坐标是否超过100 四个语言问题是否完整)
         if bool(getattr(self, "lg_use_waypoints", True)):
+            
             # 规划出来的waypoints
             waypoints = self._extract_lg_waypoints(payload)
             expected_count = int(self.pred_len) - 1  # 10个waypoints
 
+            # 过滤机制(lg waypoints形状是否为10,2)
             if waypoints.shape != (expected_count, 2):
                 return False, f"waypoint_shape:{tuple(waypoints.shape)}"
+            
+            # 过滤机制(lg waypoints是否有NaN或Inf)
             if not np.isfinite(waypoints).all():
                 return False, "waypoint_non_finite"
 
-            # 过滤机制 100m
+            # 过滤机制 (坐标是否超过100m)
             max_abs = float(getattr(self, "lg_max_abs_waypoint_m", 100.0))
             if np.max(np.abs(waypoints), initial=0.0) > max_abs:
                 return False, "waypoint_out_of_range"
@@ -189,10 +232,15 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             # 选择的path
             path = self._extract_lg_path(payload)
 
+            # 过滤机制(path waypoints是否为[10,2])
             if path.shape != (20, 2):
                 return False, f"path_shape:{tuple(path.shape)}"
+            
+            # 过滤机制(path 是否有NaN或Inf)
             if not np.isfinite(path).all():
                 return False, "path_non_finite"
+            
+            # 过滤机制(坐标是否超过100m)
             if np.max(np.abs(path), initial=0.0) > max_abs:
                 return False, "path_out_of_range"
 
@@ -207,19 +255,34 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         return True, "ok"
 
     def _filter_samples_with_valid_lg_labels(self) -> None:
-        valid_indices: List[int] = []
-        valid_paths: List[str] = []
-        reasons = Counter()
+        """
+        在 BaseDataset 已经建立的全部样本索引中，
+        只保留“存在对应LG文件,
+        并且LG文件通过合法性检查”的样本,
+        同时保证图像、measurement、帧号等索引仍然严格一一对应
+        """
 
+
+        valid_indices: List[int] = []  # 保存通过检查的原始样本索引
+        valid_paths: List[str] = []    # 保存每个有效样本对应的lg标签文件路径
+        reasons = Counter()            # 计数器,用于统计各类样本被过滤掉的原因
+
+        # 遍历父类建立的全部基础样本
         for index in range(len(self.images)):
+
+            # 根据当前索引,生成该样本对应的lg的.json.gz路径
+            # label_path=/root/.../Town12_xxx/language_grounded_waypoints/0026.json
             label_path = self._lg_path_for_index(index)
+
+
+            # 检查标签文件是否存在
             if not label_path.is_file():
                 reasons["missing_label"] += 1
                 continue
 
             try:
-                payload = self._load_gzip_json(label_path)
-                valid, reason = self._validate_payload(payload)
+                payload = self._load_gzip_json(label_path)  # 解析,payload是完整的lg标签
+                valid, reason = self._validate_payload(payload)  # 这里有一个重点,就是不合法的标签我们不使用
             except (OSError, EOFError, ValueError, ujson.JSONDecodeError) as exc:
                 reasons[f"read_error:{type(exc).__name__}"] += 1
                 continue
@@ -228,12 +291,16 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
                 reasons[reason] += 1
                 continue
 
+            # 记录合法样本 保存当前基础样本的原始索引
             valid_indices.append(index)
+            # 记录合法样本 保存当前lg标签文件路径
             valid_paths.append(str(label_path))
 
-        indices = np.asarray(valid_indices, dtype=np.int64)
-        original_sample_count = len(self.images)
+        indices = np.asarray(valid_indices, dtype=np.int64)  # 转换为numpy数组
+        original_sample_count = len(self.images)  # 过滤前的样本总数
 
+
+        # 依次过滤五个基础索引容器
         for attribute in (
             "images",
             "boxes",
@@ -241,14 +308,19 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             "sample_start",
             "augment_exists",
         ):
+
+            # 动态取得当前属性容器
             values = getattr(self, attribute)
 
+            # 检查所有容器的长度是否一致
             if len(values) != original_sample_count:
                 raise RuntimeError(
                     f"LG index container length mismatch: {attribute} has "
                     f"{len(values)} entries, expected {original_sample_count}"
                 )
 
+
+            # 取有效样本
             # BaseDataset converts images, boxes, measurements, and sample_start
             # to NumPy arrays, but currently leaves augment_exists as a Python
             # list. NumPy advanced indexing works only for the former, so handle
@@ -262,8 +334,10 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             if attribute == "augment_exists":
                 filtered_values = np.asarray(filtered_values, dtype=np.bool_)
 
+            # 根据属性名将过滤后的容器覆盖回当前数据集对象
             setattr(self, attribute, filtered_values)
 
+        # 保存过滤后的lg文件路径
         self.lg_label_paths = np.asarray(valid_paths, dtype=np.string_)
 
         if bool(getattr(self, "lg_print_filter_summary", True)):
@@ -356,9 +430,12 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         cv2.setNumThreads(0)  # 禁用OpenCV多线程
 
 
+
+
+
         ########################################### 🥭 初始化(父类初始化得到) 🥭 ###########################################
-        data = {}
-        images = self.images[index]              # 图像路径
+        data = {}   # 字典
+        images = self.images[index]              # 当前帧的图像路径.jpg
         measurements = self.measurements[index]  # measurements路径
         sample_start = self.sample_start[index]  # 当前样本的帧id
         lg_path = Path(self._decode_path(self.lg_label_paths[index]))  # lg标签路径
@@ -455,7 +532,19 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
 
         target_options, placeholder_values = self.get_navigational_conditioning(data, current_measurement, target_point, next_target_point,)
-
+        """
+        target_options = 
+        [
+        "Target waypoint: <TARGET_POINT><TARGET_POINT>.",    # 这就是网络框架中的输入 TP
+        "Command: {command} in {dist_to_command} meter{next_command}.",  # 这就是网络框架中的输入 HLC
+        "Command: {lmdrive_command}."
+        ]   # lmdrive_command 来自"/data/augmented_templates/lmdrive.json"语言增强模板文件
+        
+        placeholder_values = 
+        {
+        '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]]
+        }
+        """
 
 
 
@@ -465,8 +554,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         ########################################### 🥭 生成 waypoints & waypoints_1d & path 🥭 ###########################################
 
         # 加载.json.gz文件
-        payload = self._load_gzip_json(lg_path)
-        # 检查
+        payload = self._load_gzip_json(lg_path)  # 解析,payload是当前帧的lg标签
+        # 合法性检查
         valid, reason = self._validate_payload(payload)
         if not valid:
             raise ValueError(f"Invalid LG label at {lg_path}: {reason}")
@@ -482,6 +571,12 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
 
         waypoints_1d = self._compute_waypoints_1d(waypoints)
 
+
+
+
+
+
+
         prefix = f"Current speed: {speed_rounded} m/s."
         if (
             bool(getattr(self, "lg_include_navigation_conditioning", True))
@@ -491,8 +586,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             # but keep validation prompts deterministic across epochs.
             navigation_text = (
                 random.choice(target_options)
-                if self.split == "train"
-                else target_options[0]
+                if self.split == "train"  # 训练期间随机选择
+                else target_options[0]    # 验证期间选择固定的导航提示内容
             )
             prefix = f"{prefix} {navigation_text}"
 
