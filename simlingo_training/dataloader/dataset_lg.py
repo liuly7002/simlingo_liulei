@@ -372,10 +372,23 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         # 语言组织模式
         mode = str(getattr(self, "lg_language_mode", "four_questions")).lower()
 
-        
+
+
+
+
+        ########################################### 🥭 1. 没有问题+答案 🥭 ###########################################
+
         # 不使用语言的情况
         if not use_language or mode == "none":
             return f"{prefix} Predict the waypoints.", "Waypoints:"
+        """
+        Prompt =
+        Current speed: 5.3 m/s. Command: follow the road.
+        Predict the waypoints.
+
+        Answer = 
+        Waypoints:
+        """
 
         
         # 提取4个问题和4个答案
@@ -406,6 +419,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         # ]
 
 
+        ########################################### 🥭 2. 随机选择问题+答案 🥭 ###########################################
 
         # 如果配置是lg_language_mode: random_question,那么每个训练样本只使用四问中的一个问题，而不是全部四个问题
         if mode == "random_question":
@@ -421,12 +435,15 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             # 构造单问题的prompt和answer
             prompt = f"{prefix} Q: {selected['question']} Then predict the waypoints."
             answer = f"A: {selected['answer']} Waypoints:"
-            # Current speed: 5.3 m/s. Command: follow the road.
-            # Q: What constrains the motion ahead?
-            # Then predict the waypoints.
-
-            # A: The pedestrian ahead constrains the forward motion. Waypoints:
-
+            """
+            prompt =
+            Current speed: 5.3 m/s. Command: follow the road.
+            Q: What constrains the motion ahead?
+            Then predict the waypoints.
+            
+            answer = 
+            A: The pedestrian ahead constrains the forward motion. Waypoints:
+            """
             return prompt, answer
 
         if mode != "four_questions":
@@ -435,6 +452,9 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
                 "random_question, or none"
             )
 
+
+
+        ########################################### 🥭 3. 完整4个问题+4个答案 🥭 ###########################################
 
         # 构造4问题文本
         # 步骤一：遍历四个问题，并从1开始编号
@@ -678,7 +698,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             prefix = f"{prefix} {navigation_text}"
 
         prompt, answer = self._build_language_text(payload, prefix)
-        
+
         prompt = prompt.replace("..", ".").replace("  ", " ").strip()
         answer = answer.replace("..", ".").replace("  ", " ").strip()
 
