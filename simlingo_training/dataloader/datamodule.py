@@ -145,7 +145,7 @@ class DataModule(LightningDataModule):
 
 
 
-                # 6. 设定 driving_data(QA & Driving & Commentary) 和 dreamer_data(Dreamer) 两大类数据源的总权重
+                # 6. 设定 driving_data(VQA & Driving & Commentary) 和 dreamer_data(Dreamer) 两大类数据源的总权重
                 weights_driving = 0.5
                 weights_dreamer = 1 - weights_driving
                 for udd_i, (used_driving_dataset, used_train_partitions) in enumerate(zip(used_driving_datasets, used_train_partitions)):
@@ -243,9 +243,22 @@ class DataModule(LightningDataModule):
                 # - sample_weights
                 # - datasets
 
-                self.train_dataset = torch.utils.data.ConcatDataset([datasets[bucket] for bucket in bucket_list])
-                weights_train = [[sample_weights[i]] * datasets[bucket].__len__() for i, bucket in enumerate(bucket_list)]
+                # self.train_dataset = torch.utils.data.ConcatDataset([datasets[bucket] for bucket in bucket_list])
+                # weights_train = [[sample_weights[i]] * datasets[bucket].__len__() for i, bucket in enumerate(bucket_list)]
+                # weights_train = list(itertools.chain.from_iterable(weights_train))
+                self.train_dataset = torch.utils.data.ConcatDataset(
+                    [datasets[bucket] for bucket in bucket_list]
+                )
+                # sample_weights[i] 表示整个 bucket 期望占据的采样概率。
+                # WeightedRandomSampler 接收的是逐样本权重，因此需要将
+                # bucket 的总权重平均分配给该 bucket 内的所有样本。
+                weights_train = [
+                    [sample_weights[i] / datasets[bucket].__len__()]
+                    * datasets[bucket].__len__()
+                    for i, bucket in enumerate(bucket_list)
+                ]
                 weights_train = list(itertools.chain.from_iterable(weights_train))
+
                 num_samples_all = [datasets[bucket].__len__() // sample_weights[i] for i, bucket in enumerate(bucket_list)]
                 num_samples = int(min(num_samples_all))# * num_datasets
                 print(f"Num samples: {num_samples}")

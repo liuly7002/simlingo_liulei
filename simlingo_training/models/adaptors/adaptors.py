@@ -223,8 +223,14 @@ class DrivingAdaptor(nn.Module):
         else:
             label_route = None
 
-        if self.speed_wps_mode == '2d':  # 执行
-            label_speed_wps = label.waypoints[:, : self.future_waypoints + 1]  # 取前21个点(0-20) 可能是标签中包含当前点+未来20个点
+        # if self.speed_wps_mode == '2d':  # 执行
+        #     label_speed_wps = label.waypoints[:, : self.future_waypoints + 1]  # 取前21个点(0-20) 可能是标签中包含当前点+未来20个点
+        # elif self.speed_wps_mode == '1d':
+        #     label_speed_wps = label.waypoints_1d
+        # else:
+        #     label_speed_wps = None
+        if self.speed_wps_mode == '2d':
+            label_speed_wps = label.waypoints[:, : self.future_speed_waypoints]
         elif self.speed_wps_mode == '1d':
             label_speed_wps = label.waypoints_1d
         else:
