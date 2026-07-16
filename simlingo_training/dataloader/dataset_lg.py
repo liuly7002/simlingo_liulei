@@ -360,32 +360,73 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
         cumulative = np.cumsum(segment_lengths)
         return np.stack([cumulative, np.zeros_like(cumulative)], axis=1).astype(np.float32)
 
-    def _build_language_text(
-        self,
-        payload: Dict,
-        prefix: str,) -> Tuple[str, str]:
+    def _build_language_text(self, payload: Dict, prefix: str,) -> Tuple[str, str]:
+        """
+        根据LG语言配置，从当前LG标签中读取四个问题和答案，并组合成最终送给模型的 prompt 和监督模型输出的 answer
+        """
 
+        # 是否使用lg语言
         use_language = bool(getattr(self, "lg_use_language", True))
+        
+        
+        # 语言组织模式
         mode = str(getattr(self, "lg_language_mode", "four_questions")).lower()
 
+        
+        # 不使用语言的情况
         if not use_language or mode == "none":
             return f"{prefix} Predict the waypoints.", "Waypoints:"
 
+        
+        # 提取4个问题和4个答案
         questions = self._extract_questions(payload)
         if len(questions) != len(self.lg_question_keys):
             raise ValueError("LG label does not contain the required four questions")
+        # questions = [
+        #     {
+        #         "key": "attention",
+        #         "question": "What is the main factor to focus on now?",
+        #         "answer": "A pedestrian ahead is the main factor to focus on."
+        #     },
+        #     {
+        #         "key": "motion_constraint",
+        #         "question": "What constrains the motion ahead?",
+        #         "answer": "The pedestrian constrains the forward space."
+        #     },
+        #     {
+        #         "key": "driving_response",
+        #         "question": "What motion should be planned next?",
+        #         "answer": "Slow down early and wait if needed."
+        #     },
+        #     {
+        #         "key": "future_motion",
+        #         "question": "...",
+        #         "answer": "..."
+        #     }
+        # ]
 
+
+
+        # 如果配置是lg_language_mode: random_question,那么每个训练样本只使用四问中的一个问题，而不是全部四个问题
         if mode == "random_question":
             # Training keeps random question sampling. Validation always uses
             # the first configured question so that the same sample receives
             # exactly the same language input at every validation epoch.
             selected = (
                 random.choice(questions)
-                if self.split == "train"
-                else questions[0]
+                if self.split == "train"  # 训练阶段随机选择问题
+                else questions[0]  # 验证阶段不能随机选择，否则同一个模型在不同epoch验证时，输入问题可能不同，使验证损失和结果产生随机波动
             )
+
+            # 构造单问题的prompt和answer
             prompt = f"{prefix} Q: {selected['question']} Then predict the waypoints."
             answer = f"A: {selected['answer']} Waypoints:"
+            # Current speed: 5.3 m/s. Command: follow the road.
+            # Q: What constrains the motion ahead?
+            # Then predict the waypoints.
+
+            # A: The pedestrian ahead constrains the forward motion. Waypoints:
+
             return prompt, answer
 
         if mode != "four_questions":
@@ -394,17 +435,61 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
                 "random_question, or none"
             )
 
+
+        # 构造4问题文本
+        # 步骤一：遍历四个问题，并从1开始编号
         question_text = " ".join(
             f"Q{idx}: {item['question']}" for idx, item in enumerate(questions, start=1)
         )
+        # question_text = 
+        # Q1: What is the main factor to focus on now? Q2: What constrains the motion ahead? Q3: What motion should be planned next? Q4: What will the future motion look like?
+
+
+        # 构造4答案文本
+        # 步骤二：遍历四个答案,并从1开始编号
         answer_text = " ".join(
             f"A{idx}: {item['answer']}" for idx, item in enumerate(questions, start=1)
         )
+        # answer_text = A1: A pedestrian ahead is the main factor. A2: The forward space is constrained by the pedestrian. A3: Slow down early and wait if needed. A4: The trajectory should remain centered and decelerate toward a stop.
+
+
+        
         prompt = (
             f"{prefix} Answer the four driving questions in order and then "
             f"predict the waypoints. {question_text}"
         )
+        """
+        prompt = 
+
+        Current speed: 5.3 m/s.
+        Command: follow the road.
+        Answer the four driving questions in order and then predict the waypoints.
+        Q1: What is the main factor to focus on now?
+        Q2: What constrains the motion ahead?
+        Q3: What motion should be planned next?
+        Q4: What will the future motion look like?
+
+        这里明确要求是按顺序,也就是必须按照Q1、Q2、Q3、Q4顺序回答,避免模型随意打乱答案
+        """
+
         answer = f"{answer_text} Waypoints:"
+        """
+        answer = 
+        A1: A pedestrian ahead is the main factor.
+        A2: The pedestrian constrains the forward space.
+        A3: Slow down early and wait if needed.
+        A4: The future trajectory decelerates toward a stop.
+        Waypoints:
+
+        这形成了一个固定的输出顺序:
+            语言推理答案
+            → Waypoints标记
+            → 轨迹token监督
+        这也是LG语言与动作监督建立联系的主要位置。
+        """
+
+
+
         return prompt, answer
 
 
@@ -576,6 +661,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
 
 
 
+        ########################################### 🥭 生成 prompt & answer 🥭 ###########################################
 
         prefix = f"Current speed: {speed_rounded} m/s."
         if (
@@ -592,6 +678,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
             prefix = f"{prefix} {navigation_text}"
 
         prompt, answer = self._build_language_text(payload, prefix)
+        
         prompt = prompt.replace("..", ".").replace("  ", " ").strip()
         answer = answer.replace("..", ".").replace("  ", " ").strip()
 

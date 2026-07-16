@@ -43,7 +43,7 @@ dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是
   lg_use_waypoints: true
 
   # four_questions, random_question, or none
-  lg_language_mode: four_questions
+  lg_language_mode: four_questions  # 语言组织模式
   lg_include_navigation_conditioning: true
 
   # Strict filtering keeps the comparison focused on valid generated labels.
