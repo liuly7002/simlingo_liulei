@@ -191,7 +191,7 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
 
     def _validate_payload(self, payload: Dict) -> Tuple[bool, str]:
         """
-        检查机制
+        过滤机制
         """
         # 获取.json标签文件中的 "supervision" 键
         supervision = payload.get("supervision", {})
@@ -563,10 +563,8 @@ class Data_LG(BaseDataset):  # pylint: disable=locally-disabled, invalid-name
 
 
 
-        ########################################### 🥭 是否进行数据增强 🥭 ###########################################
+        ########################################### 🥭 是否进行几何增强 🥭 ###########################################
 
-        # LG labels are generated in the original ego frame. Therefore geometric
-        # image-shift augmentation is deliberately disabled for LG samples.
         aug_rotation = 0.0
         aug_translation = 0.0
         augment_sample = False

@@ -77,7 +77,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
 
 
 
-        ########################################### 🥭 是否进行数据增强 🥭 ###########################################
+        ########################################### 🥭 是否进行几何增强 🥭 ###########################################
 
         # # 决定当前帧是否使用数据增强
         # if augment_exists and random.random() <= self.img_shift_augmentation_prob and self.img_shift_augmentation:
@@ -93,7 +93,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         # 验证集必须始终使用原始图像、waypoints、route 和 target point，
         # 从而保证不同 epoch 的验证结果严格可比。
         if (
-            self.split == "train"
+            self.split == "train"  # 增加新标志:仅训练期间使用几何增强
             and augment_exists
             and self.img_shift_augmentation
             and random.random() <= self.img_shift_augmentation_prob

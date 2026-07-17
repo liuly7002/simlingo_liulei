@@ -26,14 +26,11 @@ def encode_uint8(strings: List[str], common_length: int) -> torch.Tensor:
 
 
 class DataModule(LightningDataModule):
-    def __init__(
-        self,
-        base_dataset,
-        processor,
-        predict=False,
-        **cfg,
-    ):
+
+    def __init__(self,base_dataset,processor,predict=False,**cfg,):
+
         super().__init__()
+
         for key, value in cfg.items():
             setattr(self, key, value)
             
@@ -49,6 +46,10 @@ class DataModule(LightningDataModule):
 
         self.NUM_IMAGE_PATCHES = 2             # 一张原始输入图像会被拆成2个patch
         self.IMAGES_TO_CONSIDER = ['image_ff'] # front-forward image, other images are not supported
+
+
+
+        ######################################## 🥬 图像占位 🥬 ########################################
         # taken from:
         # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/train/constants.py#L7
         # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/model/internvl_chat/modeling_internvl_chat.py#L294
@@ -56,6 +57,12 @@ class DataModule(LightningDataModule):
         self.IMG_END_TOKEN='</img>'
         self.IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'  # 图像token占位符
         # <img><IMG_CONTEXT><IMG_CONTEXT>...</img>
+
+
+
+
+
+        ######################################## 🥬 图像 tokens 🥬 ########################################
 
         self.num_image_tokens_per_patch = get_num_image_tokens_per_patch(self.encoder_variant)  # self.encoder_variant=OpenGVLab/InternVL2-1B
         self.num_image_tokens_total = self.num_image_tokens_per_patch * self.NUM_IMAGE_PATCHES
@@ -71,15 +78,22 @@ class DataModule(LightningDataModule):
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
         self.tokenizer.padding_side = "left"  # padding 加在左边，而不是右边。
 
-    def setup(self, stage=None):  # stage表示当前运行阶段 Lightning 会传入不同的值：fit-训练 validate-验证 test-测试 predict-推理
+    def setup(self, stage=None):  
+        # setup() 是 PyTorch Lightning 在训练、验证或预测前调用的数据准备函数
+        # stage表示当前运行阶段 Lightning 会传入不同的值：fit-训练 validate-验证 test-测试 predict-推理
+        # 但是当前函数内部并没有真正使用 stage，而是通过 self.predict 判断当前要构建训练、验证数据，而不是预测数据
+        """
+        根据配置创建普通 driving 数据集和 LG 数据集，构造训练采样器，并创建对应的验证集
+        """
 
         if not self.predict:           # 如果不是预测模式: 构造train/val/test数据集
+            
             # 1. 初始化容器
             self.val_datasets = []     # 用来存多个验证集 因为后面每个"数据源"都会生成一个 val dataset,最后再拼起来.
             sum_sample_weights = 1.0   # 临时变量,用来做权重归一化时的分母
             bucket_list = []           # 存所有bucket的名字 例如['all', 'turn_left', 'all_dreamer', 'curve_dreamer']
             sample_weights = []        # 和 bucket_list 一一对应，保存每个 bucket 的采样权重
-            num_datasets = 0           # 统计当前用了几个"数据源"
+            num_datasets = 0           # 统计当前用了几个"数据源" 但当前代码并没有真正使用这个变量
             datasets = {}              # 字典 保存真正实例化出来的 bucket dataset
             # datasets['all'] = 某个dataset对象
             # datasets['turn_left'] = 某个dataset对象

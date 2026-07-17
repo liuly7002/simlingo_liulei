@@ -266,29 +266,29 @@ if __name__ == "__main__":
             print(f"[Debug] Slurm logs dir = {logs_dir}")
             print(f"[Debug] Success.")
 
-            print("\n[Debug] Bash file ...")
-            print(f"[Debug] Make bash for {route}\n"
-                   "        # 项目地址\n"
-                  f"        code_root = {code_root}\n"
-                   "        # 数据采集路线的数量\n"
-                  f"        routefile_number = {routefile_number}\n"
-                   "        # 代理\n"
-                  f"        agent = {agent}\n"
-                   "        # 当前数据采集路线\n"
-                  f"        route = {route}\n"
-                   "        # 路线运行结果文件\n"
-                  f"        ckpt_endpoint = {ckpt_endpoint}\n"
-                   "        # 采集数据的存放目录！！！\n"
-                  f"        save_path = {save_path}\n"
-                   "        # 计数器\n"
-                  f"        seed_counter = {seed_counter}\n"
-                   "        # carla目录位置\n"
-                  f"        carla_root = {carla_root}\n"
-                   "        # 当前路线来自哪个城镇\n"
-                  f"        town = {town}\n"
-                   "        # 当前重复采集次数/需要重复采集总次数\n"
-                  f"        repetition = {repetition+1} / {repetitions}"
-                  )
+            # print("\n[Debug] Bash file ...")
+            # print(f"[Debug] Make bash for {route}\n"
+            #        "        # 项目地址\n"
+            #       f"        code_root = {code_root}\n"
+            #        "        # 数据采集路线的数量\n"
+            #       f"        routefile_number = {routefile_number}\n"
+            #        "        # 代理\n"
+            #       f"        agent = {agent}\n"
+            #        "        # 当前数据采集路线\n"
+            #       f"        route = {route}\n"
+            #        "        # 路线运行结果文件\n"
+            #       f"        ckpt_endpoint = {ckpt_endpoint}\n"
+            #        "        # 采集数据的存放目录！！！\n"
+            #       f"        save_path = {save_path}\n"
+            #        "        # 计数器\n"
+            #       f"        seed_counter = {seed_counter}\n"
+            #        "        # carla目录位置\n"
+            #       f"        carla_root = {carla_root}\n"
+            #        "        # 当前路线来自哪个城镇\n"
+            #       f"        town = {town}\n"
+            #        "        # 当前重复采集次数/需要重复采集总次数\n"
+            #       f"        repetition = {repetition+1} / {repetitions}"
+            #       )
             start_sh = make_bash(
                 code_root, routefile_number, agent, route,
                 ckpt_endpoint, save_path, seed_counter, carla_root, town, repetition

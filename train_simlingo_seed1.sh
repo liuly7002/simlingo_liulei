@@ -31,7 +31,8 @@ export NCCL_DEBUG=INFO
 export OMP_NUM_THREADS=64 # Limits pytorch to spawn at most num cpus cores threads
 export OPENBLAS_NUM_THREADS=1  # Shuts off numpy multithreading, to avoid threads spawning other threads.
 
-
+# simlingo本身训练
 # WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_seed1 data_module.batch_size=1 gpus=1 name=simlingo_seed1
 
+# lg替换dreamer之后的训练
 WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_lg_seed1 data_module.batch_size=1 gpus=1 name=simlingo_lg_seed1
