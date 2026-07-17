@@ -1,7 +1,3 @@
-"""
-Child of the autopilot that additionally runs data collection and storage.
-"""
-
 import cv2
 import carla
 import random
@@ -25,13 +21,13 @@ from agents.tools.misc import (is_within_distance, get_trafficlight_trigger_loca
 
 from agents.navigation.local_planner import LocalPlanner
 
-
 # from: https://medium.com/codex/rgb-to-color-names-in-python-the-robust-way-ec4a9d97a01f
 from scipy.spatial import KDTree
-from webcolors import (
-    CSS2_HEX_TO_NAMES,
-    hex_to_rgb,
-)
+from webcolors import ( CSS2_HEX_TO_NAMES, hex_to_rgb,)
+
+
+
+
 def convert_rgb_to_names(rgb_tuple):
     
     # a dictionary of all the hex and their respective names in css3
@@ -62,6 +58,18 @@ class DataAgent(AutoPilot):
         # self.SAVE_TF_LABELS = int(os.environ.get('SAVE_TF_LABELS', 0))
         self.SAVE_TF_LABELS = 1
 
+
+
+        # 是否保存顶部鸟瞰 RGB 图像
+        self.SAVE_TOP_RGB = 1
+        # 顶部相机参数
+        self.top_camera_z = float(os.environ.get('TOP_CAMERA_Z', 40.0))
+        self.top_camera_width = int(os.environ.get('TOP_CAMERA_WIDTH', 512))
+        self.top_camera_height = int(os.environ.get('TOP_CAMERA_HEIGHT', 512))
+        self.top_camera_fov = float(os.environ.get('TOP_CAMERA_FOV', 90.0))
+
+
+
         self.weather_tmp = None
         self.step_tmp = 0
 
@@ -71,26 +79,40 @@ class DataAgent(AutoPilot):
         self.cutin_vehicle_starting_position = None
 
         if self.save_path is not None and self.datagen:
-            (self.save_path / 'lidar').mkdir()
-            (self.save_path / 'rgb').mkdir()
-            (self.save_path / 'rgb_augmented').mkdir()
-            (self.save_path / 'boxes').mkdir()
+            # (self.save_path / 'lidar').mkdir(parents=True, exist_ok=True)
+            (self.save_path / 'rgb').mkdir(parents=True, exist_ok=True)
+            (self.save_path / 'rgb_augmented').mkdir(parents=True, exist_ok=True)
+            (self.save_path / 'boxes').mkdir(parents=True, exist_ok=True)
+
+            if self.SAVE_TOP_RGB:
+                (self.save_path / 'top_rgb').mkdir(parents=True, exist_ok=True)
+            
             if self.SAVE_TF_LABELS:
-                (self.save_path / 'semantics').mkdir()
-                (self.save_path / 'semantics_augmented').mkdir()
-                (self.save_path / 'depth').mkdir()
-                (self.save_path / 'depth_augmented').mkdir()
-                (self.save_path / 'bev_semantics').mkdir()
-                (self.save_path / 'bev_semantics_augmented').mkdir()
+
+                # (self.save_path / 'semantics').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'semantics_augmented').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'depth').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'depth_augmented').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'bev_semantics').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'bev_semantics_augmented').mkdir(parents=True, exist_ok=True)
 
                 # 新增
-                (self.save_path / 'bev_static_masks').mkdir()
-                (self.save_path / 'bev_static_masks_augmented').mkdir()
-                (self.save_path / 'bev_static_debug').mkdir()
-                (self.save_path / 'bev_static_debug_augmented').mkdir()
+                (self.save_path / 'bev_static_masks').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_static_masks_augmented').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_static_debug').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_static_debug_augmented').mkdir(parents=True, exist_ok=True)
+                # 新增
+                (self.save_path / 'bev_dynamic_masks').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_dynamic_masks_augmented').mkdir(parents=True, exist_ok=True)
+                # 新增
+                (self.save_path / 'bev_traffic_masks').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_traffic_masks_augmented').mkdir(parents=True, exist_ok=True)
+                # 新增
+                (self.save_path / 'bev_meta').mkdir(parents=True, exist_ok=True)
+                (self.save_path / 'bev_meta_augmented').mkdir(parents=True, exist_ok=True)
 
-        # self.tmp_visu = int(os.environ.get('TMP_VISU', 0))
-        self.tmp_visu = 1
+        self.tmp_visu = int(os.environ.get('TMP_VISU', 0))
+        # self.tmp_visu = 1
 
         self._active_traffic_light = None
         self.last_lidar = None
@@ -102,19 +124,20 @@ class DataAgent(AutoPilot):
         #     self.shuffle_weather()
 
         obs_config = {
-                'width_in_pixels': self.config.lidar_resolution_width,
-                'pixels_ev_to_bottom': self.config.lidar_resolution_height / 2.0,
-                'pixels_per_meter': self.config.pixels_per_meter_collection,
+                'width_in_pixels': self.config.lidar_resolution_width,            # 默认256
+                'pixels_ev_to_bottom': self.config.lidar_resolution_height / 2.0, # 默认256/2
+                'pixels_per_meter': self.config.pixels_per_meter_collection,      # 2, 每米2个像素
                 'history_idx': [-1],
                 'scale_bbox': True,
                 'scale_mask_col': 1.0,
-                'map_folder': 'maps_2ppm_cv'
+                'map_folder': 'maps_2ppm_cv'  # 已经渲染好的高精地图文件夹路径，里面的地图是按照每米2像素渲染的，适配当前的像素密度配置
         }
 
         self.stop_sign_criteria = RunStopSign(self._world)
         self.ss_bev_manager = ObsManager(obs_config, self.config)
         self.ss_bev_manager.attach_ego_vehicle(self._vehicle, criteria_stop=self.stop_sign_criteria)
 
+        # BEV核心函数
         self.ss_bev_manager_augmented = ObsManager(obs_config, self.config)
 
         bb_copy = carla.BoundingBox(self._vehicle.bounding_box.location, self._vehicle.bounding_box.extent)
@@ -128,6 +151,10 @@ class DataAgent(AutoPilot):
         self._local_planner = LocalPlanner(self._vehicle, opt_dict={}, map_inst=self.world_map)
 
     def sensors(self):
+
+        # self.augmentation_translation = 0.0
+        # self.augmentation_rotation = 0.0
+
         # workaraound that only does data augmentation at the beginning of the route
         if self.config.augment:
             self.augmentation_translation = np.random.uniform(low=self.config.camera_translation_augmentation_min,
@@ -143,95 +170,110 @@ class DataAgent(AutoPilot):
                     'x': self.config.camera_pos[0],
                     'y': self.config.camera_pos[1],
                     'z': self.config.camera_pos[2],
-                    'roll': self.config.camera_rot_0[0],
-                    'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2],
-                    'width': self.config.camera_width,
-                    'height': self.config.camera_height,
-                    'fov': self.config.camera_fov,
+                    'roll': self.config.camera_rot_0[0],   # 相机0的Roll角(单位:度)
+                    'pitch': self.config.camera_rot_0[1],  # 相机0的Pitch角(单位:度)
+                    'yaw': self.config.camera_rot_0[2],    # 相机0的Yaw角(单位:度)
+                    'width': self.config.camera_width,     # 图像宽度 1024
+                    'height': self.config.camera_height,   # 图像高度 512
+                    'fov': self.config.camera_fov,         # 相机视场角 110
                     'id': 'rgb'
             }, {
                     'type': 'sensor.camera.rgb',
                     'x': self.config.camera_pos[0],
-                    'y': self.config.camera_pos[1] + self.augmentation_translation,
+                    'y': self.config.camera_pos[1] + self.augmentation_translation,  # 在y轴上增加平移增强
                     'z': self.config.camera_pos[2],
                     'roll': self.config.camera_rot_0[0],
                     'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
+                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation, # 在yaw上增加旋转增强
                     'width': self.config.camera_width,
                     'height': self.config.camera_height,
                     'fov': self.config.camera_fov,
                     'id': 'rgb_augmented'
             }]
 
+            if self.SAVE_TOP_RGB:
+                result += [{
+                    'type': 'sensor.camera.rgb',
+                    'x': 0.0,
+                    'y': 0.0,
+                    'z': self.top_camera_z,
+                    'roll': 0.0,
+                    'pitch': -90.0,
+                    'yaw': 0.0,
+                    'width': self.top_camera_width,
+                    'height': self.top_camera_height,
+                    'fov': self.top_camera_fov,
+                    'id': 'top_rgb'
+                }]
+
         result.append({
                 'type': 'sensor.lidar.ray_cast',
-                'x': self.config.lidar_pos[0],
-                'y': self.config.lidar_pos[1],
-                'z': self.config.lidar_pos[2],
-                'roll': self.config.lidar_rot[0],
-                'pitch': self.config.lidar_rot[1],
-                'yaw': self.config.lidar_rot[2],
-                'rotation_frequency': self.config.lidar_rotation_frequency,
-                'points_per_second': self.config.lidar_points_per_second,
+                'x': self.config.lidar_pos[0],      # 雷达安装位置的x坐标，单位是米
+                'y': self.config.lidar_pos[1],      # 雷达安装位置的y坐标，单位是米
+                'z': self.config.lidar_pos[2],      # 雷达安装位置的z坐标，单位是米
+                'roll': self.config.lidar_rot[0],   # 雷达安装的滚转角（roll），单位是度
+                'pitch': self.config.lidar_rot[1],  # 雷达安装的俯仰角（pitch），单位是度
+                'yaw': self.config.lidar_rot[2],    # 雷达安装的偏航角（yaw），单位是度
+                'rotation_frequency': self.config.lidar_rotation_frequency,  # 激光雷达的工作频率（赫兹数）10
+                'points_per_second': self.config.lidar_points_per_second,    # 激光雷达每秒钟产生的点云数量 600000
                 'id': 'lidar'
         })
 
-        if self.SAVE_TF_LABELS:
-            result += [
-                {
-                    'type': 'sensor.camera.semantic_segmentation',
-                    'x': self.config.camera_pos[0],
-                    'y': self.config.camera_pos[1],
-                    'z': self.config.camera_pos[2],
-                    'roll': self.config.camera_rot_0[0],
-                    'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2],
-                    'width': self.config.camera_width,
-                    'height': self.config.camera_height,
-                    'fov': self.config.camera_fov,
-                    'id': 'semantics'
-                },
-                {
-                    'type': 'sensor.camera.semantic_segmentation',
-                    'x': self.config.camera_pos[0],
-                    'y': self.config.camera_pos[1] + self.augmentation_translation,
-                    'z': self.config.camera_pos[2],
-                    'roll': self.config.camera_rot_0[0],
-                    'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
-                    'width': self.config.camera_width,
-                    'height': self.config.camera_height,
-                    'fov': self.config.camera_fov,
-                    'id': 'semantics_augmented'
-                },
-                {
-                    'type': 'sensor.camera.depth',
-                    'x': self.config.camera_pos[0],
-                    'y': self.config.camera_pos[1],
-                    'z': self.config.camera_pos[2],
-                    'roll': self.config.camera_rot_0[0],
-                    'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2],
-                    'width': self.config.camera_width,
-                    'height': self.config.camera_height,
-                    'fov': self.config.camera_fov,
-                    'id': 'depth'
-                },
-                {
-                    'type': 'sensor.camera.depth',
-                    'x': self.config.camera_pos[0],
-                    'y': self.config.camera_pos[1] + self.augmentation_translation,
-                    'z': self.config.camera_pos[2],
-                    'roll': self.config.camera_rot_0[0],
-                    'pitch': self.config.camera_rot_0[1],
-                    'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
-                    'width': self.config.camera_width,
-                    'height': self.config.camera_height,
-                    'fov': self.config.camera_fov,
-                    'id': 'depth_augmented'
-                }
-            ]
+        # if self.SAVE_TF_LABELS:
+        #     result += [
+        #         {
+        #             'type': 'sensor.camera.semantic_segmentation',  # 语义分割相机
+        #             'x': self.config.camera_pos[0],
+        #             'y': self.config.camera_pos[1],
+        #             'z': self.config.camera_pos[2],
+        #             'roll': self.config.camera_rot_0[0],
+        #             'pitch': self.config.camera_rot_0[1],
+        #             'yaw': self.config.camera_rot_0[2],
+        #             'width': self.config.camera_width,
+        #             'height': self.config.camera_height,
+        #             'fov': self.config.camera_fov,
+        #             'id': 'semantics'
+        #         },
+        #         {
+        #             'type': 'sensor.camera.semantic_segmentation',  # 增强后的语义分割相机
+        #             'x': self.config.camera_pos[0],
+        #             'y': self.config.camera_pos[1] + self.augmentation_translation,
+        #             'z': self.config.camera_pos[2],
+        #             'roll': self.config.camera_rot_0[0],
+        #             'pitch': self.config.camera_rot_0[1],
+        #             'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
+        #             'width': self.config.camera_width,
+        #             'height': self.config.camera_height,
+        #             'fov': self.config.camera_fov,
+        #             'id': 'semantics_augmented'
+        #         },
+        #         {
+        #             'type': 'sensor.camera.depth',  # 深度相机
+        #             'x': self.config.camera_pos[0],
+        #             'y': self.config.camera_pos[1],
+        #             'z': self.config.camera_pos[2],
+        #             'roll': self.config.camera_rot_0[0],
+        #             'pitch': self.config.camera_rot_0[1],
+        #             'yaw': self.config.camera_rot_0[2],
+        #             'width': self.config.camera_width,
+        #             'height': self.config.camera_height,
+        #             'fov': self.config.camera_fov,
+        #             'id': 'depth'
+        #         },
+        #         {
+        #             'type': 'sensor.camera.depth',  # 增强后的深度相机
+        #             'x': self.config.camera_pos[0],
+        #             'y': self.config.camera_pos[1] + self.augmentation_translation,
+        #             'z': self.config.camera_pos[2],
+        #             'roll': self.config.camera_rot_0[0],
+        #             'pitch': self.config.camera_rot_0[1],
+        #             'yaw': self.config.camera_rot_0[2] + self.augmentation_rotation,
+        #             'width': self.config.camera_width,
+        #             'height': self.config.camera_height,
+        #             'fov': self.config.camera_fov,
+        #             'id': 'depth_augmented'
+        #         }
+        #     ]
 
 
         return result
@@ -240,31 +282,37 @@ class DataAgent(AutoPilot):
         result = {}
 
         if self.save_path is not None and (self.datagen or self.tmp_visu):
-            rgb = input_data['rgb'][1][:, :, :3]
-            rgb_augmented = input_data['rgb_augmented'][1][:, :, :3]
+            rgb = input_data['rgb'][1][:, :, :3]                      # 前视摄像头抓取的RGB图像
+            rgb_augmented = input_data['rgb_augmented'][1][:, :, :3]  # 旋转+平移后的前视摄像头抓取的RGB图像
 
-            if self.SAVE_TF_LABELS:
-                # We store depth at 8 bit to reduce the filesize. 16 bit would be ideal, but we can't afford the extra storage.
-                depth = input_data['depth'][1][:, :, :3]
-                depth = (t_u.convert_depth(depth) * 255.0 + 0.5).astype(np.uint8)
+            # if self.SAVE_TF_LABELS:
+            #     # 为了减小文件大小，我们使用 8 位存储深度信息。16 位存储深度信息是理想的，但我们负担不起额外的存储空间。
+            #     depth = input_data['depth'][1][:, :, :3]
+            #     depth = (t_u.convert_depth(depth) * 255.0 + 0.5).astype(np.uint8)
 
-                depth_augmented = input_data['depth_augmented'][1][:, :, :3]
-                depth_augmented = (t_u.convert_depth(depth_augmented) * 255.0 + 0.5).astype(np.uint8)
+            #     depth_augmented = input_data['depth_augmented'][1][:, :, :3]
+            #     depth_augmented = (t_u.convert_depth(depth_augmented) * 255.0 + 0.5).astype(np.uint8)
 
-                semantics = input_data['semantics'][1][:, :, 2]
-                semantics_augmented = input_data['semantics_augmented'][1][:, :, 2]
+            #     semantics = input_data['semantics'][1][:, :, 2]
+            #     semantics_augmented = input_data['semantics_augmented'][1][:, :, 2]
+
+            if self.SAVE_TOP_RGB and 'top_rgb' in input_data:
+                top_rgb = input_data['top_rgb'][1][:, :, :3]
+            else:
+                top_rgb = None
 
         else:
             rgb = None
             rgb_augmented = None
-            if self.SAVE_TF_LABELS:
-                semantics = None
-                semantics_augmented = None
-                depth = None
-                depth_augmented = None
+            # if self.SAVE_TF_LABELS:
+            #     semantics = None
+            #     semantics_augmented = None
+            #     depth = None
+            #     depth_augmented = None
+            top_rgb = None
 
-        # The 10 Hz LiDAR only delivers half a sweep each time step at 20 Hz.
-        # Here we combine the 2 sweeps into the same coordinate system
+        # 10 Hz 的激光雷达在 20 Hz 时，每个时间步长只能提供半次扫描。
+        # 这里我们将两次扫描合并到同一个坐标系中。
         if self.last_lidar is not None:
             ego_transform = self._vehicle.get_transform()
             ego_location = ego_transform.location
@@ -291,35 +339,52 @@ class DataAgent(AutoPilot):
         else:
             lidar_360 = input_data['lidar']  # The first frame only has 1 half
 
+        # 作者创新点的核心函数
         bounding_boxes = self.get_bounding_boxes(lidar=lidar_360)
 
         self.stop_sign_criteria.tick(self._vehicle)
 
         if self.SAVE_TF_LABELS:
+            # 这是获取BEV相关信息的关键函数
             bev_semantics = self.ss_bev_manager.get_observation(self.close_traffic_lights)
             bev_semantics_augmented = self.ss_bev_manager_augmented.get_observation(self.close_traffic_lights)
 
-            if self.tmp_visu:
-                self.visualuize(bev_semantics['rendered'], rgb)
+            # 拼接RGB图像和BEV图像进行可视化
+            # if self.tmp_visu:
+            #     self.visualuize(bev_semantics['rendered'], rgb)  
 
         result.update({
                 'lidar': lidar_360,
                 'rgb': rgb,
                 'rgb_augmented': rgb_augmented,
-                'bounding_boxes': bounding_boxes,
+                'top_rgb': top_rgb,
+                'bounding_boxes': bounding_boxes,  # 这是作者的核心数据结构之一
         })
+
         if self.SAVE_TF_LABELS:
             result.update({
-                'semantics': semantics,
-                'semantics_augmented': semantics_augmented,
-                'depth': depth,
-                'depth_augmented': depth_augmented,
-                'bev_semantics': bev_semantics['bev_semantic_classes'],
-                'bev_semantics_augmented': bev_semantics_augmented['bev_semantic_classes'],
+                # 'semantics': semantics,
+                # 'semantics_augmented': semantics_augmented,
+                # 'depth': depth,
+                # 'depth_augmented': depth_augmented,
+                # 'bev_semantics': bev_semantics['bev_semantic_classes'],
+                # 'bev_semantics_augmented': bev_semantics_augmented['bev_semantic_classes'],
 
-                # 新增
+                # 新增：静态环境 mask
                 'bev_static_masks': bev_semantics['bev_static_masks'],
                 'bev_static_masks_augmented': bev_semantics_augmented['bev_static_masks'],
+
+                # 新增：当前动态交通参与者 mask
+                'bev_dynamic_masks': bev_semantics['bev_dynamic_masks'],
+                'bev_dynamic_masks_augmented': bev_semantics_augmented['bev_dynamic_masks'],
+
+                # 新增：交通灯/停止线相关 mask
+                'bev_traffic_masks': bev_semantics['bev_traffic_masks'],
+                'bev_traffic_masks_augmented': bev_semantics_augmented['bev_traffic_masks'],
+
+                # 新增：BEV 元信息
+                'bev_meta': bev_semantics['bev_meta'],
+                'bev_meta_augmented': bev_semantics_augmented['bev_meta'],
             })
 
         return result
@@ -339,8 +404,17 @@ class DataAgent(AutoPilot):
 
         tick_data = self.tick(input_data)
 
+        # if self.step % self.config.data_save_freq == 0:
+        #     if self.save_path is not None and self.datagen:
+        #         self.save_sensors(tick_data)
         if self.step % self.config.data_save_freq == 0:
             if self.save_path is not None and self.datagen:
+                print(
+                    f"[DATA_AGENT] Saving frame. step={self.step}, "
+                    f"save_freq={self.config.data_save_freq}, "
+                    f"save_path={self.save_path}",
+                    flush=True
+                )
                 self.save_sensors(tick_data)
 
         self.last_lidar = input_data['lidar']
@@ -434,24 +508,44 @@ class DataAgent(AutoPilot):
         cv2.imwrite(str(save_path), image)
 
     def save_sensors(self, tick_data):
-        frame = self.step // self.config.data_save_freq
+
+        # 0.00s 0.25s 0.50s 0.75s 1.00s 1.25s ...
+        frame = self.step // self.config.data_save_freq   # 每隔 self.config.data_save_freq = 5 步保存一次数据,由于每步频率为20Hz,所以每0.25秒保存一次数据
 
         # CARLA images are already in opencv's BGR format.
         cv2.imwrite(str(self.save_path / 'rgb' / (f'{frame:04}.jpg')), tick_data['rgb'])
         cv2.imwrite(str(self.save_path / 'rgb_augmented' / (f'{frame:04}.jpg')), tick_data['rgb_augmented'])
 
+        if self.SAVE_TOP_RGB and tick_data.get('top_rgb') is not None:
+            cv2.imwrite(str(self.save_path / 'top_rgb' / (f'{frame:04}.jpg')), tick_data['top_rgb'])
+
         if self.SAVE_TF_LABELS:
-            
-            ################  语义、深度图等相关内容 暂时注释掉 ################
-            # cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
-            # cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
-            # cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
-            # cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
-            # cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
-            # cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
-            #                         tick_data['bev_semantics_augmented'])
+            # if 0:
+            #     cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
+            #     cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
+
+            #     cv2.imwrite(str(self.save_path / 'depth' / (f'{frame:04}.png')), tick_data['depth'])
+            #     cv2.imwrite(str(self.save_path / 'depth_augmented' / (f'{frame:04}.png')), tick_data['depth_augmented'])
+
+            #     cv2.imwrite(str(self.save_path / 'bev_semantics' / (f'{frame:04}.png')), tick_data['bev_semantics'])
+            #     cv2.imwrite(str(self.save_path / 'bev_semantics_augmented' / (f'{frame:04}.png')),
+            #                             tick_data['bev_semantics_augmented'])
 
             # 新增
+            # 确保新增目录存在
+            for folder_name in [
+                'bev_static_masks',
+                'bev_static_masks_augmented',
+                'bev_dynamic_masks',
+                'bev_dynamic_masks_augmented',
+                'bev_traffic_masks',
+                'bev_traffic_masks_augmented',
+                'bev_meta',
+                'bev_meta_augmented',
+            ]:
+                (self.save_path / folder_name).mkdir(parents=True, exist_ok=True)
+
+            # 1. 保存静态环境 mask
             np.savez_compressed(
                 str(self.save_path / 'bev_static_masks' / (f'{frame:04}.npz')),
                 road=tick_data['bev_static_masks']['road'],
@@ -468,16 +562,55 @@ class DataAgent(AutoPilot):
                 lane_broken=tick_data['bev_static_masks_augmented']['lane_broken'],
                 lane_solid=tick_data['bev_static_masks_augmented']['lane_solid'],
             )
-            
-            ################  道路相关的mask收集debug相关内容 暂时注释掉 ################
-            self.save_bev_static_debug_png(
-                self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
-                tick_data['bev_static_masks']
+
+            # 2. 保存当前动态 actor mask
+            np.savez_compressed(
+                str(self.save_path / 'bev_dynamic_masks' / (f'{frame:04}.npz')),
+                vehicle=tick_data['bev_dynamic_masks']['vehicle'],
+                walker=tick_data['bev_dynamic_masks']['walker'],
+                actor=tick_data['bev_dynamic_masks']['actor'],
             )
-            self.save_bev_static_debug_png(
-                self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
-                tick_data['bev_static_masks_augmented']
+
+            np.savez_compressed(
+                str(self.save_path / 'bev_dynamic_masks_augmented' / (f'{frame:04}.npz')),
+                vehicle=tick_data['bev_dynamic_masks_augmented']['vehicle'],
+                walker=tick_data['bev_dynamic_masks_augmented']['walker'],
+                actor=tick_data['bev_dynamic_masks_augmented']['actor'],
             )
+
+            # 3. 保存交通规则 mask
+            np.savez_compressed(
+                str(self.save_path / 'bev_traffic_masks' / (f'{frame:04}.npz')),
+                stop=tick_data['bev_traffic_masks']['stop'],
+                tl_green=tick_data['bev_traffic_masks']['tl_green'],
+                tl_yellow=tick_data['bev_traffic_masks']['tl_yellow'],
+                tl_red=tick_data['bev_traffic_masks']['tl_red'],
+            )
+
+            np.savez_compressed(
+                str(self.save_path / 'bev_traffic_masks_augmented' / (f'{frame:04}.npz')),
+                stop=tick_data['bev_traffic_masks_augmented']['stop'],
+                tl_green=tick_data['bev_traffic_masks_augmented']['tl_green'],
+                tl_yellow=tick_data['bev_traffic_masks_augmented']['tl_yellow'],
+                tl_red=tick_data['bev_traffic_masks_augmented']['tl_red'],
+            )
+
+            # 4. 保存 BEV meta 信息
+            with gzip.open(self.save_path / 'bev_meta' / (f'{frame:04}.json.gz'), 'wt', encoding='utf-8') as f:
+                json.dump(tick_data['bev_meta'], f, indent=4)
+
+            with gzip.open(self.save_path / 'bev_meta_augmented' / (f'{frame:04}.json.gz'), 'wt', encoding='utf-8') as f:
+                json.dump(tick_data['bev_meta_augmented'], f, indent=4)
+
+            # if 0:
+            #     self.save_bev_static_debug_png(
+            #         self.save_path / 'bev_static_debug' / (f'{frame:04}.png'),
+            #         tick_data['bev_static_masks']
+            #     )
+            #     self.save_bev_static_debug_png(
+            #         self.save_path / 'bev_static_debug_augmented' / (f'{frame:04}.png'),
+            #         tick_data['bev_static_masks_augmented']
+            #     )
 
         ################  雷达相关内容 暂时注释掉 ################
         # # Specialized LiDAR compression format
@@ -492,6 +625,7 @@ class DataAgent(AutoPilot):
         #
         #     writer.write_points(point_record)
 
+        # 保存 bounding boxes 信息，格式为 JSON，使用 gzip 压缩以节省空间
         with gzip.open(self.save_path / 'boxes' / (f'{frame:04}.json.gz'), 'wt', encoding='utf-8') as f:
             json.dump(tick_data['bounding_boxes'], f, indent=4)
 
@@ -503,8 +637,7 @@ class DataAgent(AutoPilot):
                 json.dump(results.__dict__, f, indent=2)
 
         super().destroy(results)
-        
-        
+               
     def _wps_next_until_lane_end(self, wp):
         try:
             road_id_cur = wp.road_id
@@ -530,22 +663,33 @@ class DataAgent(AutoPilot):
     def get_bounding_boxes(self, lidar=None):
         results = []
 
-        ego_transform = self._vehicle.get_transform()
-        ego_control = self._vehicle.get_control()
-        ego_velocity = self._vehicle.get_velocity()
-        ego_matrix = np.array(ego_transform.get_matrix())
-        ego_rotation = ego_transform.rotation
-        ego_extent = self._vehicle.bounding_box.extent
-        ego_speed = self._get_forward_speed(transform=ego_transform, velocity=ego_velocity)
-        ego_dx = np.array([ego_extent.x, ego_extent.y, ego_extent.z])
-        ego_yaw = np.deg2rad(ego_rotation.yaw)
-        ego_brake = ego_control.brake
+        ########################################### 1. 获取自车状态 ###########################################
+        ego_transform = self._vehicle.get_transform()       # 自车在世界坐标系下的位置和姿态
+        ego_control = self._vehicle.get_control()           # 自车当前控制量, brake、steer、throttle
+        ego_velocity = self._vehicle.get_velocity()         # 自车在世界坐标系下的速度矢量
+        ego_matrix = np.array(ego_transform.get_matrix())   # 自车在世界坐标系下的4x4变换矩阵，包含位置和旋转信息
+        ego_rotation = ego_transform.rotation               # 自车的旋转信息，包含 roll、pitch、yaw
+        ego_extent = self._vehicle.bounding_box.extent      # 自车的bounding box的extent信息，包含x、y、z三个方向上的半尺寸
+        ego_speed = self._get_forward_speed(transform=ego_transform, velocity=ego_velocity)   # 自车的前向速度标量值，单位是米/秒
+        ego_dx = np.array([ego_extent.x, ego_extent.y, ego_extent.z])  # 自车bounding box在x、y、z三个方向上的半尺寸，单位是米
+        ego_yaw = np.deg2rad(ego_rotation.yaw)   # 自车的航向角，单位是弧度
+        ego_brake = ego_control.brake            # 自车的刹车量，范围是0.0到1.0
 
+
+        ########################################### 2. 计算自车相对于自车的位置和朝向 ###########################################
         relative_yaw = 0.0
         relative_pos = t_u.get_relative_transform(ego_matrix, ego_matrix)
+        # 计算自车相对于自车的位置和朝向,所以 relative_yaw = 0.0,relative_pos ≈ [0, 0, 0]
+        # 也就是说, 后面所有 actor 的 position 和 yaw 都是在 自车坐标系 下表达的, 而不是 CARLA 世界坐标系
 
+
+        ########################################### 3.获取自车所在道路和车道信息 ###########################################
+        # 把自车当前位置投影到 CARLA 高精地图上，得到自车所在的 waypoint 对象
         ego_wp = self.world_map.get_waypoint(self._vehicle.get_location(), project_to_road=True, lane_type=carla.libcarla.LaneType.Any)
-        
+
+        ########################################
+        #### 3.1 计算左右车道、同向车道、对向车道
+        ########################################
         # to compute lane_relative_to_ego for walkers and other cars we first have to precompute some in which direction the opposite lane is & the width of the center lane
         left_wp, right_wp = ego_wp.get_left_lane(), ego_wp.get_right_lane()
         left_decreasing_lane_id = left_wp is not None and left_wp.lane_id < ego_wp.lane_id or right_wp is not None and right_wp.lane_id > ego_wp.lane_id
@@ -567,20 +711,23 @@ class DataAgent(AutoPilot):
             if wp.lane_type != carla.LaneType.Driving:
                 remove_lanes_for_lane_relative_to_ego += 1
 
+        ########################################
+        #### 3.2 计算自车距离下一个路口有多远
+        ########################################
         # how far is next junction
-        next_wps = self._wps_next_until_lane_end(ego_wp)
+        next_wps = self._wps_next_until_lane_end(ego_wp)  # 作用是从当前 ego_wp 沿着道路往前走，直到当前 lane 结束
         try:
             next_lane_wps_ego = next_wps[-1].next(1)
             if len(next_lane_wps_ego) == 0:
                 next_lane_wps_ego = [next_wps[-1]]
         except:
             next_lane_wps_ego = []
-        if ego_wp.is_junction:
-            distance_to_junction_ego = 0.0
-            # get distance to ego vehicle
-        elif len(next_lane_wps_ego)>0 and next_lane_wps_ego[0].is_junction:
-            distance_to_junction_ego = next_lane_wps_ego[0].transform.location.distance(ego_wp.transform.location)
-        else:
+
+        if ego_wp.is_junction:  # 自车已经在路口内
+            distance_to_junction_ego = 0.0  # 距离=0
+        elif len(next_lane_wps_ego)>0 and next_lane_wps_ego[0].is_junction:  # 前方下一个lane是路口
+            distance_to_junction_ego = next_lane_wps_ego[0].transform.location.distance(ego_wp.transform.location)  # 距离=自车当前位置到下一个路口的位置的距离
+        else:  # 前方不是路口
             distance_to_junction_ego = None
             
         next_road_ids_ego = []
@@ -706,40 +853,58 @@ class DataAgent(AutoPilot):
             } for lane_wp in lanes_to_the_right
         ]
 
-        # Check for possible vehicle obstacles
-        # Retrieve all relevant actors
+
+        ########################################### 4. 检测自车前方障碍风险 ###########################################
+        # 检查是否存在车辆障碍物(从自车角度判断前方是否被车辆影响)
+        # 获取所有相关参与者
         self._actors = self._world.get_actors()
         vehicle_list = self._actors.filter('*vehicle*')
 
+        ########################################
+        #### 4.1 前方10米内是否有车辆障碍物
+        ########################################
         hazard_detected_10 = False
         affected_by_vehicle_10, aff_vehicle_id_10, aff_vehicle_dis_10 = self._vehicle_obstacle_detected(vehicle_list, 10)
         if affected_by_vehicle_10:
                 hazard_detected_10 = True
                 
+        ########################################
+        #### 4.2 前方15米内是否有车辆障碍物
+        ########################################
         hazard_detected_15 = False
         affected_by_vehicle_15, aff_vehicle_id_15, aff_vehicle_dis_15 = self._vehicle_obstacle_detected(vehicle_list, 15)
         if affected_by_vehicle_15:
                 hazard_detected_15 = True
-                
+
+        ########################################
+        #### 4.3 前方20米内是否有车辆障碍物
+        ########################################
         hazard_detected_20 = False
         affected_by_vehicle_20, aff_vehicle_id_20, aff_vehicle_dis_20 = self._vehicle_obstacle_detected(vehicle_list, 20)
         if affected_by_vehicle_20:
                 hazard_detected_20 = True
-                
+
+        ########################################
+        #### 4.4 前方40米内是否有车辆障碍物
+        ########################################                
         hazard_detected_40 = False
         affected_by_vehicle_40, aff_vehicle_id_40, aff_vehicle_dis_40 = self._vehicle_obstacle_detected(vehicle_list, 40)
         if affected_by_vehicle_40:
                 hazard_detected_40 = True
                         
+        
+        ########################################### 5. 先把自车自己加入results ###########################################
         try:
             next_action = self.tm.get_next_action(self._vehicle)[0]
         except:
             next_action = None
+        
+        # 自车字典
         result = {
                 'class': 'ego_car',
                 'extent': [ego_dx[0], ego_dx[1], ego_dx[2]],
-                'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
-                'yaw': relative_yaw,
+                'position': [relative_pos[0], relative_pos[1], relative_pos[2]],  # [0,0,0]
+                'yaw': relative_yaw,  # 0
                 'num_points': -1,
                 'distance': -1,
                 'speed': ego_speed,
@@ -749,7 +914,10 @@ class DataAgent(AutoPilot):
         }
         results.append(result)
 
+
+        ########################################### 6. 遍历周围车辆 ###########################################
         for vehicle in vehicle_list:
+            # 只保存距离自车小于 bb_save_radius 的车辆，并且排除自车本身
             if vehicle.get_location().distance(self._vehicle.get_location()) < self.config.bb_save_radius:
                 if vehicle.id != self._vehicle.id:
                     vehicle_transform = vehicle.get_transform()
@@ -824,14 +992,14 @@ class DataAgent(AutoPilot):
                     vehicle_extent_list = [vehicle_extent.x, vehicle_extent.y, vehicle_extent.z]
                     yaw = np.deg2rad(vehicle_rotation.yaw)
 
-                    relative_yaw = t_u.normalize_angle(yaw - ego_yaw)
-                    relative_pos = t_u.get_relative_transform(ego_matrix, vehicle_matrix)
+                    relative_yaw = t_u.normalize_angle(yaw - ego_yaw)  # ！！！周围车辆的航向角相对于自车的航向角，单位是弧度，表达在自车坐标系下
+                    relative_pos = t_u.get_relative_transform(ego_matrix, vehicle_matrix)  # ！！！周围车辆相对于自车的位置，单位是米，表达在自车坐标系下
                     vehicle_speed = self._get_forward_speed(transform=vehicle_transform, velocity=vehicle_velocity)
                     vehicle_brake = vehicle_control.brake
                     vehicle_steer = vehicle_control.steer
                     vehicle_throttle = vehicle_control.throttle
 
-                    # Computes how many LiDAR hits are on a bounding box. Used to filter invisible boxes during data loading.
+                    # 计算边界框内激光雷达探测到的数据点数量。用于在数据加载过程中过滤掉不可见的边界框。
                     if not lidar is None:
                         num_in_bbox_points = self.get_points_in_bbox(relative_pos, relative_yaw, vehicle_extent_list, lidar)
                     else:
@@ -861,7 +1029,7 @@ class DataAgent(AutoPilot):
                     except:
                         next_action = None
                         
-                                                
+                    # 判断是否切入场景中的车辆                            
                     vehicle_cuts_in = False
                     if (self.scenario_name == 'ParkingCutIn') and vehicle.attributes['role_name']=='scenario':
                         if self.cutin_vehicle_starting_position is None:
@@ -915,6 +1083,8 @@ class DataAgent(AutoPilot):
                     }
                     results.append(result)
 
+
+        ########################################### 7. 遍历周围行人 ###########################################、
         walkers = self._actors.filter('*walker*')
         for walker in walkers:
             if walker.get_location().distance(self._vehicle.get_location()) < self.config.bb_save_radius:
@@ -982,6 +1152,8 @@ class DataAgent(AutoPilot):
                 }
                 results.append(result)
 
+
+        ########################################### 8. 交通灯和停止标志 ###########################################
         for traffic_light in self.close_traffic_lights:
             traffic_light_extent = [traffic_light[0].extent.x, traffic_light[0].extent.y, traffic_light[0].extent.z]
 
@@ -1217,6 +1389,7 @@ class DataAgent(AutoPilot):
         #         results.append(result)
        
 
+        ########################################### 9. 遍历静态障碍物 ###########################################
         statics = self._actors.filter('static.*')
         for static in statics:
             if static.get_location().distance(self._vehicle.get_location()) < self.config.bb_save_radius:
@@ -1266,7 +1439,7 @@ class DataAgent(AutoPilot):
                     
                     lane_relative_to_ego = -lane_relative_to_ego
 
-
+                # 静态车
                 if static.type_id == 'static.prop.mesh':
                     if "Car" in static.attributes['mesh_path']:
                         result = {
@@ -1289,6 +1462,7 @@ class DataAgent(AutoPilot):
                         }
                     else:
                         pass
+                # 施工警告牌
                 elif static.type_id == 'static.prop.trafficwarning': # the huge traffic warning sign in the scenarios ConstructionObstacle and ConstructionObstacleTwoWays
                     result = {
                         'class': 'static_trafficwarning',
@@ -1312,7 +1486,9 @@ class DataAgent(AutoPilot):
                     }
                 results.append(result)
 
-        landmarks = ego_wp.get_landmarks(40.0)
+
+        ########################################### 10. 地图landmark ###########################################
+        landmarks = ego_wp.get_landmarks(40.0)  # 表示获取自车前方或附近 40 米内的地图 landmark
         for landmark in landmarks:
             landmark_transform = landmark.transform
             landmark_location = landmark_transform.location
@@ -1337,7 +1513,8 @@ class DataAgent(AutoPilot):
             }
             results.append(result)
 
-        # weather information:
+
+        ########################################### 11. 当前天气信息 ###########################################
         weather = self._world.get_weather()
         weather_info = {
             'class': 'weather',
@@ -1365,12 +1542,14 @@ class DataAgent(AutoPilot):
             next_is_junction = None
             next_junction_id = None
 
+
+        ########################################### 12. 自车当前所处道路环境 ###########################################
         result = {
             'class': 'ego_info',
-            'scenario': self.scenario_name,
-            'traffic_light_state': tl_state,
-            'distance_to_junction': distance_to_junction_ego,
-            'ego_lane_number': ego_lane_number,
+            'scenario': self.scenario_name,   # 当前场景名称
+            'traffic_light_state': tl_state,  # 自车前方交通灯状态
+            'distance_to_junction': distance_to_junction_ego,  # 自车到下一个路口距离
+            'ego_lane_number': ego_lane_number, 
             'road_id': ego_wp.road_id,
             'lane_id': ego_wp.lane_id,
             'is_in_junction': ego_wp.is_junction,
@@ -1443,6 +1622,9 @@ class DataAgent(AutoPilot):
         return num_points
 
     def visualuize(self, rendered, visu_img):
+        """
+        函数功能:将前视摄像头抓取的RGB图像和生成的BEV图像拼接在一起，并保存到指定路径。
+        """
         rendered = cv2.resize(rendered, dsize=(visu_img.shape[1], visu_img.shape[1]), interpolation=cv2.INTER_LINEAR)
         visu_img = cv2.cvtColor(visu_img, cv2.COLOR_BGR2RGB)
 

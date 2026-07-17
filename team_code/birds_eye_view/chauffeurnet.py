@@ -146,13 +146,14 @@ class ObsManager(ObsManagerBase):
 
   def get_observation(self, close_traffic_lights=None):
 
-    # 获取自车状态
+    ####################################  🔔 获取自车状态 🔔 ####################################
     ev_transform = self.vehicle.get_transform()
     ev_loc = ev_transform.location        # 自车carla世界坐标系下的位置(中心坐标[x,y,z])
     ev_rot = ev_transform.rotation        # 自车carla世界坐标系下的姿态(欧拉角yaw pitch roll)
-    ev_bbox = self.vehicle.bounding_box   # 自车尺寸 一般是[l/2, w/2, h/2]
+    ev_bbox = self.vehicle.bounding_box   # 自车尺寸 [l/2, w/2, h/2]
 
-    # 判断周围车辆/行人是否在感兴趣区域内
+
+    #################################### 🔔 判断周围车辆/行人是否在感兴趣区域内 🔔 ####################################
     def is_within_distance(w):
       c_distance = abs(ev_loc.x - w.location.x) < self._distance_threshold \
           and abs(ev_loc.y - w.location.y) < self._distance_threshold \
@@ -160,14 +161,16 @@ class ObsManager(ObsManagerBase):
       # Cheap trick to remove the ego bounding box
       c_ev = abs(ev_loc.x - w.location.x) < self.config.ego_extent_y and abs(ev_loc.y -
                                                                              w.location.y) < self.config.ego_extent_y
-      return c_distance and (not c_ev)
+      return c_distance and (not c_ev)  # 在距离范围内且不是自车(True or False)
 
+
+    ####################################  🔔 获取周围车辆和行人 🔔 ####################################
     actors = self._world.get_actors()
     vehicles = list(actors.filter('*vehicle*'))
     walkers = actors.filter('*walker*')
     static_all = actors.filter('*static*')
     for static in static_all:
-      if static.type_id == 'static.prop.mesh':
+      if static.type_id == 'static.prop.mesh':  # 静态周围车辆
         if 'mesh_path' in static.attributes:
           if 'Car' in static.attributes['mesh_path']:
             vehicles.append(static)
@@ -211,6 +214,8 @@ class ObsManager(ObsManagerBase):
       vehicles = self._get_surrounding_actors(vehicle_bbox_list, is_within_distance)
       walkers = self._get_surrounding_actors(walker_bbox_list, is_within_distance)
 
+
+    #################################### 🔔  🔔 ####################################
     tl_green = TrafficLightHandler.get_stopline_vtx(ev_loc, 0, self._distance_threshold, close_traffic_lights)
     tl_yellow = TrafficLightHandler.get_stopline_vtx(ev_loc, 1, self._distance_threshold, close_traffic_lights)
     tl_red = TrafficLightHandler.get_stopline_vtx(ev_loc, 2, self._distance_threshold, close_traffic_lights)
@@ -218,84 +223,151 @@ class ObsManager(ObsManagerBase):
 
     self._history_queue.append((vehicles, walkers, tl_green, tl_yellow, tl_red, stops))
 
-    m_warp = self._get_warp_transform(ev_loc, ev_rot)  # 仿射变换矩阵，这是核心，这个变换矩阵就使得自车中心在BEV中的位置、自车朝向图像向上
 
+    #################################### 🔔 仿射变换矩阵 🔔 ####################################
+    m_warp = self._get_warp_transform(ev_loc, ev_rot)
+    # 仿射变换矩阵，这是核心，这个变换矩阵就使得自车中心在BEV中心的位置、自车朝向图像向上,每像素0.5m
+
+
+    #################################### 🔔 历史+当前 🔔 ####################################
     # objects with history  周围车辆、周围行人、绿灯、黄灯、红灯、停止线的 BEVmask 均为列表 均是历史的加当前的
     vehicle_masks, walker_masks, tl_green_masks, tl_yellow_masks, tl_red_masks, stop_masks \
         = self._get_history_masks(m_warp)
 
-    ############################### mask ###############################
-    # road_mask(道路),side_walk(人行道), lane_mask道路线(实线 虚线)
+    #################################### 🔔 mask 🔔 ####################################
+    # road_mask(道路),side_walk(人行道), lane_mask_all道路线(实线+虚线), lane_mask_broken(虚线)
     road_mask = cv.warpAffine(self._road, m_warp, (self._width, self._width)).astype(bool)
     sidewalk_mask = cv.warpAffine(self._sidewalk, m_warp, (self._width, self._width)).astype(bool)
     lane_mask_all = cv.warpAffine(self._lane_marking_all, m_warp, (self._width, self._width)).astype(bool)
     lane_mask_broken = cv.warpAffine(self._lane_marking_white_broken, m_warp, (self._width, self._width)).astype(bool)
 
-    # render
+
+    #################################### 🔔 image 🔔 ####################################
     if self.visualize:
       # ev_mask
       ev_mask = self._get_mask_from_actor_list([(ev_transform, ev_bbox.location, ev_bbox.extent)], m_warp)
 
-      image = np.zeros([self._width, self._width, 3], dtype=np.uint8)
-      image[road_mask] = COLOR_ALUMINIUM_5  # 行车道(深灰)
-      image[sidewalk_mask] = COLOR_GREY     # 人行道(中灰)
-      image[lane_mask_all] = COLOR_MAGENTA      # 实线(品红)
+      image = np.zeros([self._width, self._width, 3], dtype=np.uint8)  # 背景默认黑色
+      image[road_mask] = COLOR_ALUMINIUM_5      # 行车道(深灰)
+      image[sidewalk_mask] = COLOR_GREY         # 人行道(中灰)
+      image[lane_mask_all] = COLOR_MAGENTA      # 实线 + 虚线(品红)
       image[lane_mask_broken] = COLOR_MAGENTA_2 # 虚线(浅品红)
 
       h_len = len(self._history_idx) - 1
       for i, mask in enumerate(stop_masks):
-        image[mask] = tint(COLOR_YELLOW_2, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_YELLOW_2, (h_len - i) * 0.2)  # 停止线(浅黄色)，历史越近颜色越深
       for i, mask in enumerate(tl_green_masks):
-        image[mask] = tint(COLOR_GREEN, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_GREEN, (h_len - i) * 0.2)     # 绿灯(绿色)，历史越近颜色越深
       for i, mask in enumerate(tl_yellow_masks):
-        image[mask] = tint(COLOR_YELLOW, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_YELLOW, (h_len - i) * 0.2)    # 黄灯(黄色)，历史越近颜色越深
       for i, mask in enumerate(tl_red_masks):
-        image[mask] = tint(COLOR_RED, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_RED, (h_len - i) * 0.2)       # 红灯(红色)，历史越近颜色越深
 
       for i, mask in enumerate(vehicle_masks):
-        image[mask] = tint(COLOR_BLUE, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_BLUE, (h_len - i) * 0.2)      # 车辆(蓝色)，历史越近颜色越深
       for i, mask in enumerate(walker_masks):
-        image[mask] = tint(COLOR_CYAN, (h_len - i) * 0.2)
+        image[mask] = tint(COLOR_CYAN, (h_len - i) * 0.2)      # 行人(蓝绿)，历史越近颜色越深
 
-      image[ev_mask] = COLOR_WHITE
+      image[ev_mask] = COLOR_WHITE                             # 自车(白色)
 
-    # masks
+    #################################### 🔔 语义分割信息 🔔 ####################################
     # 0 = Unlabeled
-    c_all = road_mask * 1
-    c_all[sidewalk_mask] = 2
-    c_all[lane_mask_all] = 3
-    c_all[lane_mask_broken] = 4
-    c_all[stop_masks[-1]] = 5
-    c_all[tl_green_masks[-1]] = 6
-    c_all[tl_yellow_masks[-1]] = 7
-    c_all[tl_red_masks[-1]] = 8
-    c_all[vehicle_masks[-1]] = 9
-    c_all[walker_masks[-1]] = 10
-
+    c_all = road_mask * 1            # 道路可行驶区域
+    c_all[sidewalk_mask] = 2         # 人行道区域
+    c_all[lane_mask_all] = 3         # 所有车道线(实线+虚线)
+    c_all[lane_mask_broken] = 4      # 虚线
+    c_all[stop_masks[-1]] = 5        # 停止线(只考虑当前帧的停止线)
+    c_all[tl_green_masks[-1]] = 6    # 绿灯(只考虑当前帧的红绿灯)
+    c_all[tl_yellow_masks[-1]] = 7   # 黄灯(只考虑当前帧的红绿灯)
+    c_all[tl_red_masks[-1]] = 8      # 红灯(只考虑当前帧的红绿灯)
+    c_all[vehicle_masks[-1]] = 9     # 车辆(只考虑当前帧的车辆)
+    c_all[walker_masks[-1]] = 10     # 行人(只考虑当前帧的行人)
     # Align with LiDAR voxelgrid
-    c_all = np.rot90(c_all, k=-1)
+    c_all = np.rot90(c_all, k=-1)    # 向右旋转90度
 
+
+    #################################### 🔔 返回值 🔔 ####################################
+    rot = False
     lane_mask_solid = lane_mask_all & (~lane_mask_broken)  # 实线
-    # obs_dict = {
-    #   'bev_semantic_classes': c_all,
-    #   'bev_static_masks': {
-    #     'road': np.rot90(road_mask.astype(np.uint8), k=-1),  # 道路可行驶区域
-    #     'sidewalk': np.rot90(sidewalk_mask.astype(np.uint8), k=-1),  # 人行道区域
-    #     'lane_all': np.rot90(lane_mask_all.astype(np.uint8), k=-1),  # 所有车道线
-    #     'lane_broken': np.rot90(lane_mask_broken.astype(np.uint8), k=-1),  # 虚线
-    #     'lane_solid': np.rot90(lane_mask_solid.astype(np.uint8), k=-1),  # 实线
-    #   }
-    # }
-    obs_dict = {
-      'bev_semantic_classes': c_all,
-      'bev_static_masks': {
-        'road': road_mask.astype(np.uint8),
-        'sidewalk': sidewalk_mask.astype(np.uint8),
-        'lane_all': lane_mask_all.astype(np.uint8),
-        'lane_broken': lane_mask_broken.astype(np.uint8),
-        'lane_solid': lane_mask_solid.astype(np.uint8),
+    if rot:
+      obs_dict = {
+          'bev_semantic_classes': c_all,
+
+          'bev_static_masks': {
+              'road': np.rot90(road_mask.astype(np.uint8), k=-1),  
+              'sidewalk': np.rot90(sidewalk_mask.astype(np.uint8), k=-1),  
+              'lane_all': np.rot90(lane_mask_all.astype(np.uint8), k=-1), 
+              'lane_broken': np.rot90(lane_mask_broken.astype(np.uint8), k=-1),  
+              'lane_solid': np.rot90(lane_mask_solid.astype(np.uint8), k=-1),
+          },
+          
+          'bev_dynamic_masks': {
+              'vehicle': np.rot90(vehicle_masks[-1].astype(np.uint8), k=-1),  
+              'walker': np.rot90(walker_masks[-1].astype(np.uint8), k=-1),  
+              'actor': np.rot90((vehicle_masks[-1] | walker_masks[-1]).astype(np.uint8), k=-1),
+          },
+
+          'bev_traffic_masks': {
+              'stop': np.rot90(stop_masks[-1].astype(np.uint8), k=-1),
+              'tl_green': np.rot90(tl_green_masks[-1].astype(np.uint8), k=-1),
+              'tl_yellow': np.rot90(tl_yellow_masks[-1].astype(np.uint8), k=-1),
+              'tl_red': np.rot90(tl_red_masks[-1].astype(np.uint8), k=-1),
+          },
+
+          'bev_meta': {
+              'width': int(self._width),
+              'height': int(self._width),
+              'pixels_per_meter': float(self._pixels_per_meter),
+              'meters_per_pixel': float(1.0 / self._pixels_per_meter),
+              'bev_size_m': float(self._width / self._pixels_per_meter),
+              'pixels_ev_to_bottom': float(self._pixels_ev_to_bottom),
+              'meters_ev_to_bottom': float(self._pixels_ev_to_bottom / self._pixels_per_meter),
+              'ego_center': [int(self._width // 2), int(self._pixels_ev_to_bottom)],
+              'coordinate': 'current_ego_aligned_bev',
+              'rotated': True,
+          }
       }
-    }
+    else:
+      obs_dict = {
+          'bev_semantic_classes': c_all,
+          # 静态元素mask
+          'bev_static_masks': {
+              'road': road_mask.astype(np.uint8),  # 道路可行驶区域
+              'sidewalk': sidewalk_mask.astype(np.uint8),  # 人行道区域
+              'lane_all': lane_mask_all.astype(np.uint8),  # 所有车道线(实线+虚线)
+              'lane_broken': lane_mask_broken.astype(np.uint8),  # 虚线
+              'lane_solid': lane_mask_solid.astype(np.uint8),  # 实线
+          },
+          # 动态元素mask
+          'bev_dynamic_masks': {
+              'vehicle': vehicle_masks[-1].astype(np.uint8),  # 车辆(只考虑当前帧的车辆)
+              'walker': walker_masks[-1].astype(np.uint8),  # 行人(只考虑当前帧的行人)
+              'actor': (vehicle_masks[-1] | walker_masks[-1]).astype(np.uint8),  
+          },
+          # 交通元素mask
+          'bev_traffic_masks': {
+              'stop': stop_masks[-1].astype(np.uint8),  # 停止线(只考虑当前帧的停止线)
+              'tl_green': tl_green_masks[-1].astype(np.uint8),  # 绿灯(只考虑当前帧的红绿灯)
+              'tl_yellow': tl_yellow_masks[-1].astype(np.uint8),  # 黄灯(只考虑当前帧的红绿灯)
+              'tl_red': tl_red_masks[-1].astype(np.uint8),  # 红灯(只考虑当前帧的红绿灯)
+          },
+          # 元信息
+          'bev_meta': {
+              'width': int(self._width),
+              'height': int(self._width),
+              'pixels_per_meter': float(self._pixels_per_meter),
+              'meters_per_pixel': float(1.0 / self._pixels_per_meter),
+              'bev_size_m': float(self._width / self._pixels_per_meter),
+              'pixels_ev_to_bottom': float(self._pixels_ev_to_bottom),
+              'meters_ev_to_bottom': float(self._pixels_ev_to_bottom / self._pixels_per_meter),
+              'ego_center': [int(self._width // 2), int(self._pixels_ev_to_bottom)],
+              'coordinate': 'current_ego_aligned_bev',
+              'rotated': False,
+          }
+      }
+
+
+    #################################### 🔔 image 🔔 ####################################
     if self.visualize:
       obs_dict['rendered'] = image
 

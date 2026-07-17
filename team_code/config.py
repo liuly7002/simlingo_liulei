@@ -352,15 +352,16 @@ class GlobalConfig:
     # Number of points the LiDAR generates per second.
     # Change in proportion to the rotation frequency.
     self.lidar_points_per_second = 600000
-    self.camera_pos = [-1.5, 0.0, 2.0]  # x, y, z mounting position of the camera
+    self.camera_pos = [-1.5, 0.0, 2.0]   # x, y, z mounting position of the camera
     self.camera_rot_0 = [0.0, 0.0, 0.0]  # Roll Pitch Yaw of camera 0 in degree
 
     # Therefore their size is smaller
     self.camera_width = 1024  # Camera width in pixel during data collection and eval (affects sensor agent)
     self.camera_height = 512  # Camera height in pixel during data collection and eval (affects sensor agent)
-    self.camera_fov = 110
+    self.camera_fov = 110     # 视场角
 
     # Crop the image during training to the values below. also affects the transformer tokens self.img_vert_anchors
+    # 训练期间将图像裁剪到以下值, 这也会影响 Transformer 的 tokens self.img_vert_anchors
     self.crop_image = True
     self.cropped_height = 384  # crops off the bottom part
     self.cropped_width = 1024  # crops off both sides symmetrically
@@ -377,8 +378,8 @@ class GlobalConfig:
     self.skip_first = int(2.5 * self.carla_fps) // self.data_save_freq
     self.pred_len = int(2.0 * self.carla_fps) // self.data_save_freq  # number of future waypoints predicted
     # Width and height of the LiDAR grid that the point cloud is voxelized into.
-    self.lidar_resolution_width = 256
-    self.lidar_resolution_height = 256
+    self.lidar_resolution_width = 256   # 默认256
+    self.lidar_resolution_height = 256  # 默认256
     # Crop the BEV semantics, bounding boxes and LiDAR range to the values above. Also affects self.lidar_vert_anchors
     self.crop_bev = False
     # If true, cuts BEV off behind the vehicle. If False, cuts off front and back symmetrically
@@ -391,7 +392,7 @@ class GlobalConfig:
     self.pixels_per_meter = 4.0
     # Pixels per meter used in the semantic segmentation map during data collection.
     # On Town 13 2.0 is the highest that opencv can handle.
-    self.pixels_per_meter_collection = 2.0
+    self.pixels_per_meter_collection = 2.0  # 默认2.0
     # Max number of LiDAR points per pixel in voxelized LiDAR
     self.hist_max_per_pixel = 5
     # Height at which the LiDAR points are split into the 2 channels.
