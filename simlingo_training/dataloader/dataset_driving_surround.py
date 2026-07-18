@@ -25,7 +25,7 @@ class Data_Driving_Surround(
         # Six collected cameras have no corresponding geometric-shift sensor
         # set. Keep all views and geometric supervision in the original frame.
         common_cfg = dict(cfg)
-        common_cfg["img_shift_augmentation"] = False
+        common_cfg["img_shift_augmentation"] = False  # 六视角训练不使用几何增强。
 
         Data_Driving.__init__(self, **common_cfg)
         self._initialize_surround_dataset()

@@ -35,6 +35,10 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
         base_cfg["use_qa"] = False
         base_cfg["use_commentary"] = False
 
+        # LG与普通Driving统一使用无几何增强六视角图像。
+        base_cfg["img_shift_augmentation"] = False
+
+
         if bool(base_cfg.get("lg_match_dreamer_split", True)):
             base_cfg["use_town13"] = False
 
@@ -386,11 +390,12 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             )
 
         if mode == "random_question":
-            selected = (
-                random.choice(questions)
-                if self.split == "train"
-                else questions[0]
-            )
+            # selected = (
+            #     random.choice(questions)
+            #     if self.split == "train"
+            #     else questions[0]
+            # )
+            selected = random.choice(questions)
             prompt = (
                 f"{prefix} Q: {selected['question']} "
                 "Then predict the waypoints."
@@ -547,11 +552,12 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             )
             and len(target_options) > 0
         ):
-            navigation_text = (
-                random.choice(target_options)
-                if self.split == "train"
-                else target_options[0]
-            )
+            # navigation_text = (
+            #     random.choice(target_options)
+            #     if self.split == "train"
+            #     else target_options[0]
+            # )
+            navigation_text = random.choice(target_options)
             prefix = f"{prefix} {navigation_text}"
 
         prompt, answer = self._build_language_text(
