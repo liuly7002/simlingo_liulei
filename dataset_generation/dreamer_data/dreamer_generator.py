@@ -49,7 +49,7 @@ class CarlaAlternativeCreator():
  
     # Dataset and path settings
     base_folder = 'database'   # 数据集根目录
-    dataset_name = 'simlingo_v2_2026_07_03_19_20_14'  # 数据集名称
+    dataset_name = 'simlingo_v2_2026_07_17_23_23_22'  # 数据集名称
     data_directory = f'{base_folder}/{dataset_name}/data'  # 脚本读取原始数据的根目录
     viz_save_path = 'viz/dreamer' if not viz_for_video else 'viz/dreamer_video'
     Path(viz_save_path).mkdir(parents=True, exist_ok=True)

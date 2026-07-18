@@ -5,7 +5,7 @@ import pathlib
 
 
 # 数据集目录
-dataset_path = '/home/kemove/ll/simlingo/database/simlingo_v2_2026_07_03_19_20_14/data/simlingo'
+dataset_path = '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo'
 
 
 all_data_folders = glob.glob(f'{dataset_path}/**/Town*', recursive=True)

@@ -99,8 +99,8 @@ class DataAgent(AutoPilot):
                 # 新增
                 (self.save_path / 'bev_static_masks').mkdir(parents=True, exist_ok=True)
                 (self.save_path / 'bev_static_masks_augmented').mkdir(parents=True, exist_ok=True)
-                (self.save_path / 'bev_static_debug').mkdir(parents=True, exist_ok=True)
-                (self.save_path / 'bev_static_debug_augmented').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'bev_static_debug').mkdir(parents=True, exist_ok=True)
+                # (self.save_path / 'bev_static_debug_augmented').mkdir(parents=True, exist_ok=True)
                 # 新增
                 (self.save_path / 'bev_dynamic_masks').mkdir(parents=True, exist_ok=True)
                 (self.save_path / 'bev_dynamic_masks_augmented').mkdir(parents=True, exist_ok=True)

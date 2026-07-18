@@ -101,6 +101,15 @@ python a_validate/validate_action_consistency.py
 3. 生成 Commentary 类型 .json.gz 文件
 ```
 python dataset_generation/language_labels/commentary/carla_commentary_generator_main.py
+
+
+# 备注：需要修改的内容为：
+    path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_07_17_23_23_22',
+                            help='Data directory containing the dataset')  # 数据集根目录
+    path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_07_17_23_23_22/commentary',
+                            help='Output directory for the vqa-graph')  # 保存Commentary标签的目录
+    path_group.add_argument('--output-examples-directory', type=str, default='database/simlingo_v2_2026_07_17_23_23_22/commentary',
+                            help='Output directory for examples of the vqa-graph')
 ```
 
 4. 生成 Dreamer 类型 .json.gz 文件
