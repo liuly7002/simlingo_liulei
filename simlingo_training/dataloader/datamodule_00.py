@@ -44,11 +44,8 @@ class DataModule(LightningDataModule):
         
         self.printed = False
 
-        self.NUM_CAMERAS = 6
         self.NUM_IMAGE_PATCHES = 2             # 一张原始输入图像会被拆成2个patch
-        # front-forward image, other images are not supported
-        self.IMAGES_TO_CONSIDER = ['image_surround'] # 六视角图像，顺序由DatasetOutput.camera_order固定
-        self.NUM_IMAGE_PATCHES_TOTAL = self.NUM_CAMERAS * self.NUM_IMAGE_PATCHES
+        self.IMAGES_TO_CONSIDER = ['image_ff'] # front-forward image, other images are not supported
 
 
 
@@ -68,7 +65,7 @@ class DataModule(LightningDataModule):
         ######################################## 🥬 图像 tokens 🥬 ########################################
 
         self.num_image_tokens_per_patch = get_num_image_tokens_per_patch(self.encoder_variant)  # self.encoder_variant=OpenGVLab/InternVL2-1B
-        self.num_image_tokens_total = self.num_image_tokens_per_patch * self.NUM_IMAGE_PATCHES_TOTAL
+        self.num_image_tokens_total = self.num_image_tokens_per_patch * self.NUM_IMAGE_PATCHES
             
         #
         if 'tokenizer' in self.processor.__dict__:
@@ -128,7 +125,7 @@ class DataModule(LightningDataModule):
                 # 情况1：两个都存在 那么最后变为
                 # used_driving_datasets = [driving_dataset, dreamer_dataset]
                 # used_train_partitions = [train_partitions, train_partitions_dreamer]
-                # 情况2：只有 driving_dataset 存在 那么最后变为
+                # 情况2：只有 driving_dataset 存在  那么最后变为
                 # used_driving_datasets = [driving_dataset]
                 # used_train_partitions = [train_partitions]
 
@@ -422,20 +419,7 @@ class DataModule(LightningDataModule):
             
             # img_tmp是经过裁减之后的前视图像,就是将image_ff_org的图像的底部包含自车引擎盖的那部分裁减掉了
             img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_ff  也就是从 batch 第一个样本里取出前视图图像
-
-            if img_to_consider == 'image_surround':
-                T, V, C, H, W = img_tmp.shape
-                assert V == self.NUM_CAMERAS, f"Expected {self.NUM_CAMERAS} camera views, received {V}"
-                camera_order = tuple(data[0].camera_order)
-                assert len(camera_order) == self.NUM_CAMERAS, (
-                    f"Expected {self.NUM_CAMERAS} camera names, received {len(camera_order)}"
-                )
-                for sample in data:
-                    assert tuple(sample.camera_order) == camera_order, "Camera order mismatch inside the batch"
-            else:
-                T, C, H, W = img_tmp.shape                  # img_tmp 的 shape 是 [T, C, H, W] 也就是说每个样本的这一种图像是一个有 T 帧的图像序列. 例如 T=4 就是4帧图像(但是当前只支持一帧图像). C=3 是通道数,H和W是图像尺寸.
-                V = 1
-
+            T, C, H, W = img_tmp.shape                  # img_tmp 的 shape 是 [T, C, H, W] 也就是说每个样本的这一种图像是一个有 T 帧的图像序列. 例如 T=4 就是4帧图像(但是当前只支持一帧图像). C=3 是通道数,H和W是图像尺寸.
             assert T == 1, "Only one timestep as input supported"
             
             # 对于当前 batch 中每个样本：
@@ -446,7 +430,7 @@ class DataModule(LightningDataModule):
             # 把上面的列表变成 numpy 数组, 如果每个单样本图像是 [T,C,H,W]，那么 batch 后就变成[BS, T, C, H, W]
             # 转成 PyTorch float tensor  注意这里直接转成 float,说明后续视觉预处理函数是按浮点张量来处理的,而不是保留 uint8
             images_batch_tensor = torch.tensor(np.asarray([getattr(data[i], img_to_consider) if getattr(data[i], img_to_consider) is not None else np.zeros_like(img_tmp) for i in range(len(data))])).float()
-            images_batch_tensor = images_batch_tensor.view(BS*T*V, C, H, W)  # 六视角时把 [BS,T,V,C,H,W] 变成 [BS*T*V,C,H,W]
+            images_batch_tensor = images_batch_tensor.view(BS*T, C, H, W)  # 把 [BS,T,C,H,W] 变成 [BS*T,C,H,W]
             
             images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，每一个元素的形状是 [C,H,W], 一共有BS*T个元素.
             # print(f"images batch list 0: {images_batch_list[0]}")
@@ -485,20 +469,15 @@ class DataModule(LightningDataModule):
             images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
             image_sizes = images_processed['image_sizes']    # 当前帧图像的尺寸信息 形状为 [BS*T, 2]，每行是一个 [原图高度 H, 原图宽度 W]
             
-            assert images_pixel.shape[0] == BS * T * V   # 检查预处理后第一维是否仍然和输入图像数一致,也就是确保没有多图少图
+            assert images_pixel.shape[0] == BS * T   # 检查预处理后第一维是否仍然和输入图像数一致,也就是确保没有多图少图
             num_patches = images_pixel.shape[1]      # 取出每张图像被切成多少个 patch
-            assert num_patches == self.NUM_IMAGE_PATCHES
             assert images_pixel.shape[2] == C        # 检查通道数有没有变
             new_height = images_pixel.shape[3]       # 取patch高度
             new_width = images_pixel.shape[4]        # 取patch宽度
-            images_pixel = images_pixel.view(BS, T, V, num_patches, C, new_height, new_width)
-            images_pixel = images_pixel.view(BS, T, V * num_patches, C, new_height, new_width)  # 六视角按固定顺序展开为 [BS,T,12,C,H,W]
+            images_pixel = images_pixel.view(BS, T, num_patches, C, new_height, new_width)  # 把图像张量重新 reshape 回 [BS, T, num_patches, C, new_H, new_W] 的形状
             # images_pixel 就是 DrivingInput.camera_images 的标准格式
 
-            if img_to_consider == 'image_surround':
-                image_ff_pixel = images_pixel  # [BS, T, 12, 3, 448, 448] 六视角，每个视角2个patch
-                image_ff_sizes = image_sizes   # [BS*T*V, 2]
-            elif img_to_consider == 'image_ff':
+            if img_to_consider == 'image_ff':
                 image_ff_pixel = images_pixel  # [BS, T, 2, 3, 448, 448] 这就是前视图图像的预处理结果
                 image_ff_sizes = image_sizes   # [BS*T, 2] 
             else:
@@ -617,6 +596,9 @@ class DataModule(LightningDataModule):
 
 
 
+
+
+
         ################################################### 🦺 5.拉取 waypoints 信息 🦺 ###################################################
         
 
@@ -625,7 +607,6 @@ class DataModule(LightningDataModule):
             waypoints = torch.tensor(np.asarray([data[i].waypoints_1d for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         else:
             waypoints = torch.tensor(np.asarray([data[i].waypoints for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
-        
         
         
         
@@ -662,19 +643,6 @@ class DataModule(LightningDataModule):
                 prompt=prompt_languagelabel,                            # 训练用 prompt 包含问题和答案
                 prompt_inference=prompt_question_languagelabel,         # 推理用 prompt 包含问题但不包含答案
             )
-
-        if not self.printed:
-            print("========================================")
-            print("[Six-view datamodule check]")
-            print("camera_images:", driving_input.camera_images.shape)
-            print("image_sizes:", driving_input.image_sizes.shape)
-            print("camera_intrinsics:", driving_input.camera_intrinsics.shape)
-            print("camera_extrinsics:", driving_input.camera_extrinsics.shape)
-            print("num_image_tokens_per_patch:", self.num_image_tokens_per_patch)
-            print("num_image_tokens_total:", self.num_image_tokens_total)
-            print("camera_order:", data[0].camera_order)
-            print("========================================")
-            self.printed = True
 
         # 整个 batch 的监督信号对象
         driving_label=DrivingLabel(
