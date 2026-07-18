@@ -4,7 +4,8 @@ defaults:
 # Use SimLingo's original Data_Driving implementation for training, while
 # replacing only validation prompts with a deterministic waypoint task.
 driving_dataset:
-  _target_: simlingo_training.dataloader.dataset_driving_fixed_val.Data_Driving_FixedVal
+  # _target_: simlingo_training.dataloader.dataset_driving_fixed_val.Data_Driving_FixedVal
+  _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
 # Keep the ordinary SimLingo driving source and bucket proportions unchanged.
 train_partitions:
