@@ -3,6 +3,8 @@ from torch import nn
 from typing import List, Optional
 from transformers import AutoModel
 
+import torch.nn.functional as F
+
 class LingoInternVLModel(nn.Module):
     
     
@@ -32,6 +34,20 @@ class LingoInternVLModel(nn.Module):
         # 三、两个预留接口 
         self.use_global_img = None  # 预留接口
         self.processor = None       # 预留接口
+
+
+        # 六视角视觉token压缩配置。
+        # 每个相机有2个patch，每个patch的256个token排列为16×16。
+        # 将每个patch池化为4×8，共32个token；
+        # 因而每个相机保留64个token，六个相机共384个token。
+        self.num_cameras = 6
+        self.num_patches_per_camera = 2
+        self.visual_pool_height = 4
+        self.visual_pool_width = 8
+        self.num_visual_tokens_per_patch = (
+            self.visual_pool_height
+            * self.visual_pool_width
+        )
         
     
     
@@ -91,7 +107,14 @@ class LingoInternVLModel(nn.Module):
 
 
 
-            inputs_embeds = adaptor_dict['language_inputs']  # ❤️ 初始文本 embedding, 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
+            # inputs_embeds = adaptor_dict['language_inputs']  # ❤️ 初始文本 embedding, 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
+            
+            # clone后得到非叶子张量，允许后续结构化placeholder替换参与正常梯度传播
+            inputs_embeds = adaptor_dict['language_inputs'].clone()  # ❤️ 初始文本 embedding, 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
+            
+            
+            
+            
             input_ids = adaptor_dict['language__ids']        # ❤️ 对应的   token id,  形状为[B,L] 其中B是batch size, L是文本长度
             
             
@@ -179,23 +202,172 @@ class LingoInternVLModel(nn.Module):
                         # otherwise has to be stacked from list of (num_patches, num_channels, height, width)
                         raise ValueError(f"pixel_values of shape {pixel_values_tmp.shape}, expect to be of 4 or 5 dimensions")
                     
+
+
+                    # image_features = self.model.extract_feature(pixel_values_tmp)  # 视觉网络
+                    # image_features = image_features.reshape(-1, C_embed)           # 行数：总共多少个视觉 token 列数：每个 token 的特征维度                 
+                    # all_image_features.append(image_features)  # 因为可能未来有多路图像输入，所以先存列表，最后再拼接起来
+
+
+
+
+
+
+
+
+
                     image_features = self.model.extract_feature(pixel_values_tmp)  # 视觉网络
-                    image_features = image_features.reshape(-1, C_embed)           # 行数：总共多少个视觉 token 列数：每个 token 的特征维度
-                                        
+                    # image_features:
+                    # [BS * NP, 256, C_embed]
+                    # 其中每个原始patch对应256个视觉token，也就是16×16的空间网格。
+
+                    expected_num_patches = (
+                        self.num_cameras
+                        * self.num_patches_per_camera
+                    )
+                    assert NP == expected_num_patches, (
+                        f"Expected {expected_num_patches} image patches "
+                        f"from {self.num_cameras} cameras, but received {NP}"
+                    )
+
+                    num_image_patches, num_tokens_per_patch, feature_dim = (
+                        image_features.shape
+                    )
+
+                    feature_grid_size = int(
+                        num_tokens_per_patch ** 0.5
+                    )
+                    assert (
+                        feature_grid_size * feature_grid_size
+                        == num_tokens_per_patch
+                    ), (
+                        "The number of visual tokens in each patch must form "
+                        f"a square grid, but received {num_tokens_per_patch}"
+                    )
+
+                    assert feature_dim == C_embed, (
+                        f"Visual feature dimension {feature_dim} does not "
+                        f"match language embedding dimension {C_embed}"
+                    )
+
+                    # [BS*NP, 256, C_embed]
+                    # → [BS*NP, C_embed, 16, 16]
+                    image_features = image_features.transpose(1, 2)
+                    image_features = image_features.reshape(
+                        num_image_patches,
+                        feature_dim,
+                        feature_grid_size,
+                        feature_grid_size,
+                    )
+
+                    # 每个patch从16×16=256个token池化为4×8=32个token。
+                    # 每个相机有2个patch，因此每个相机最终保留64个token。
+                    image_features = F.adaptive_avg_pool2d(
+                        image_features,
+                        output_size=(
+                            self.visual_pool_height,
+                            self.visual_pool_width,
+                        ),
+                    )
+
+                    # [BS*NP, C_embed, 4, 8]
+                    # → [BS*NP, 32, C_embed]
+                    image_features = image_features.flatten(2)
+                    image_features = image_features.transpose(1, 2).contiguous()
+
+                    # 按固定顺序恢复每个样本的视觉token：
+                    # front、front_left、front_right、rear、rear_left、rear_right。
+                    # 每个样本最终得到12×32=384个视觉token。
+                    image_features = image_features.reshape(
+                        BS,
+                        NP * self.num_visual_tokens_per_patch,
+                        C_embed,
+                    )
+
                     all_image_features.append(image_features)  # 因为可能未来有多路图像输入，所以先存列表，最后再拼接起来
+
+
+
+
+
+
+
+
+
+
+
+
+
 
                 vit_embeds = torch.cat(all_image_features, dim=0)  # 拼接所有视觉特征 最终得到vit_embeds.shape = [N_visual_total, C_embed]其中 N_visual_total 是所有图像 token 总数
                 inputs_embeds = inputs_embeds.reshape(BS * N_embed, C_embed)
                 input_ids = input_ids.reshape(BS * N_embed)
                 selected = (input_ids == self.img_context_token_id)  # 实际上这也是一个mask
-                try:
-                    inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C_embed)
-                except Exception as e:
-                    vit_embeds = vit_embeds.reshape(-1, C)
-                    print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
-                        f'vit_embeds.shape={vit_embeds.shape}')
-                    n_token = selected.sum()
-                    inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds[:n_token]
+
+
+
+                num_selected_image_tokens = int(
+                    selected.sum().item()
+                )
+                num_visual_features = vit_embeds.reshape(
+                    -1,
+                    C_embed,
+                ).shape[0]
+
+                assert (
+                    num_selected_image_tokens
+                    == num_visual_features
+                ), (
+                    "The number of <IMG_CONTEXT> tokens does not match "
+                    "the number of pooled visual features: "
+                    f"{num_selected_image_tokens} vs {num_visual_features}"
+                )
+
+
+
+                # try:
+                #     inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C_embed)
+                # except Exception as e:
+                #     vit_embeds = vit_embeds.reshape(-1, C)
+                #     print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
+                #         f'vit_embeds.shape={vit_embeds.shape}')
+                #     n_token = selected.sum()
+                #     inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds[:n_token]
+
+
+
+
+                # 将池化后的视觉特征整理为[视觉token数量, embedding维度]
+                vit_embeds_flat = vit_embeds.reshape(
+                    -1,
+                    C_embed,
+                ).to(
+                    device=inputs_embeds.device,
+                    dtype=inputs_embeds.dtype,
+                )
+
+                # 找到所有<IMG_CONTEXT>位置
+                selected_indices = selected.nonzero(
+                    as_tuple=False
+                ).squeeze(1)
+
+                assert selected_indices.numel() == vit_embeds_flat.size(0), (
+                    "The number of <IMG_CONTEXT> positions does not match "
+                    "the number of pooled visual features: "
+                    f"{selected_indices.numel()} vs {vit_embeds_flat.size(0)}"
+                )
+
+                # 使用非原地index_copy替换图像token，
+                # 避免对requires_grad的叶子张量或其view执行原地操作
+                inputs_embeds = inputs_embeds.index_copy(
+                    0,
+                    selected_indices,
+                    vit_embeds_flat,
+                )
+
+
+
+
                 inputs_embeds = inputs_embeds.reshape(BS, N_embed, C_embed)
                 input_ids = input_ids.reshape(BS, N_embed)
             # pixel_values is not None but is empty ---> text only cases

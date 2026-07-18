@@ -316,41 +316,120 @@ class LanguageAdaptor(nn.Module):
         # adaptor_logits  ：模型输出
         # inputs          ：forward 的输出
 
+        # del example  # 节省显存
+
+        # # 如果没给 logits 用lm_head生成
+        # if adaptor_logits is None:
+        #     adaptor_logits = self.lm_head(outputs[:, :-1])  # 👉 outputs[:, :-1] 去掉最后一个 token outputs = LLM forward 的 hidden states（最后一层输出）
+        # else:
+        #     adaptor_logits = adaptor_logits[:, :-1]         # 👉 adaptor_logits[:, :-1] 如果已有 logits，也裁掉最后一位
+        
+        # # 在标准 LLM 中，流程是：
+
+        # # input_ids / inputs_embeds
+        # #         ↓
+        # # Transformer（多层 attention）
+        # #         ↓
+        # # outputs（hidden states）   ← 就是这里的 outputs
+        # #         ↓
+        # # lm_head（线性层）
+        # #         ↓
+        # # logits（预测每个词的概率）
+        
+        
+        # # 找出来用于计算loss的labels
+        # labels = torch.where(inputs["_ids_mask"], inputs["_ids"], -1)  # mask=True → 用真实 token  mask=False → 设为 -1（ignore）
+        
+        # # Shift by 1 for next token prediction
+        # # 👉 标准语言模型训练：
+        # # input:  x1 x2 x3
+        # # target:    x2 x3 x4
+        # # 即：预测“下一个 token”
+        # labels = labels[:, 1:]  # 丢掉index=0
+        
+        # # 计算交叉熵
+        # language_loss = F.cross_entropy(adaptor_logits.flatten(0, -2), labels.flatten(), ignore_index=-1, reduction="none").view_as(labels)
+
+        # return {"language_loss": (language_loss, labels.ne(-1))}  # language_loss: 每个 token loss    labels.ne(-1): 有效 mask
+
         del example  # 节省显存
 
-        # 如果没给 logits 用lm_head生成
-        if adaptor_logits is None:
-            adaptor_logits = self.lm_head(outputs[:, :-1])  # 👉 outputs[:, :-1] 去掉最后一个 token outputs = LLM forward 的 hidden states（最后一层输出）
+        # ids_mask=True的位置才参与语言损失。
+        labels = torch.where(
+            inputs["_ids_mask"],
+            inputs["_ids"],
+            -1,
+        )
+
+        # 标准next-token prediction：
+        # 第i个hidden feature预测第i+1个token。
+        labels = labels[:, 1:]
+        features_for_prediction = adaptor_features[:, :-1]
+
+        valid_mask = labels.ne(-1)
+
+        if valid_mask.any():
+            # 只选取真正参与语言监督的位置。
+            # 图像token、问题token、padding和Driving query均不会生成词表logits。
+            selected_features = features_for_prediction[
+                valid_mask
+            ]
+            selected_labels = labels[valid_mask]
+
+            if adaptor_logits is None:
+                selected_logits = self.lm_head(
+                    selected_features
+                )
+            else:
+                selected_logits = adaptor_logits[
+                    :, :-1
+                ][valid_mask]
+
+            selected_loss = F.cross_entropy(
+                selected_logits,
+                selected_labels,
+                reduction="none",
+            )
+
+            # 恢复为与labels相同的形状，
+            # 以保持后续loss汇总逻辑不变。
+            valid_indices = (
+                valid_mask.reshape(-1)
+                .nonzero(as_tuple=False)
+                .squeeze(1)
+            )
+
+            language_loss_flat = torch.zeros(
+                labels.numel(),
+                device=selected_loss.device,
+                dtype=selected_loss.dtype,
+            )
+
+            language_loss_flat = language_loss_flat.scatter(
+                0,
+                valid_indices,
+                selected_loss,
+            )
+
+            language_loss = language_loss_flat.view_as(
+                labels
+            )
         else:
-            adaptor_logits = adaptor_logits[:, :-1]         # 👉 adaptor_logits[:, :-1] 如果已有 logits，也裁掉最后一位
-        
-        # 在标准 LLM 中，流程是：
+            # 极端情况下该batch没有语言监督位置，
+            # 保留一条与模型特征相连的零梯度计算图。
+            language_loss = (
+                features_for_prediction.sum(dim=-1)
+                * 0.0
+            )
 
-        # input_ids / inputs_embeds
-        #         ↓
-        # Transformer（多层 attention）
-        #         ↓
-        # outputs（hidden states）   ← 就是这里的 outputs
-        #         ↓
-        # lm_head（线性层）
-        #         ↓
-        # logits（预测每个词的概率）
-        
-        
-        # 找出来用于计算loss的labels
-        labels = torch.where(inputs["_ids_mask"], inputs["_ids"], -1)  # mask=True → 用真实 token  mask=False → 设为 -1（ignore）
-        
-        # Shift by 1 for next token prediction
-        # 👉 标准语言模型训练：
-        # input:  x1 x2 x3
-        # target:    x2 x3 x4
-        # 即：预测“下一个 token”
-        labels = labels[:, 1:]  # 丢掉index=0
-        
-        # 计算交叉熵
-        language_loss = F.cross_entropy(adaptor_logits.flatten(0, -2), labels.flatten(), ignore_index=-1, reduction="none").view_as(labels)
+        return {
+            "language_loss": (
+                language_loss,
+                valid_mask,
+            )
+        }
 
-        return {"language_loss": (language_loss, labels.ne(-1))}  # language_loss: 每个 token loss    labels.ne(-1): 有效 mask
+
 
 
 class AdaptorList(nn.Module):
@@ -449,16 +528,38 @@ class AdaptorList(nn.Module):
         把 Transformer 的输出 "features(compute_loss函数的输入)" 分发给正确的 adaptor,让它们各自算各自的损失
         """
 
-        # 按 adaptor 拆分输出特征
-        features_by_adaptor = self.split_outputs_by_adaptor(input_dict, features)
-        logits_by_adaptor = self.split_outputs_by_adaptor(input_dict, logits)
-        """
-        把总的 features: [B, L+N, D] 拆成:
-        {
-            "language": [B, L, D],
-            "driving": [B, N, D]
-        }
-        """
+        # # 按 adaptor 拆分输出特征
+        # features_by_adaptor = self.split_outputs_by_adaptor(input_dict, features)
+        # logits_by_adaptor = self.split_outputs_by_adaptor(input_dict, logits)
+        # """
+        # 把总的 features: [B, L+N, D] 拆成:
+        # {
+        #     "language": [B, L, D],
+        #     "driving": [B, N, D]
+        # }
+        # """
+
+
+
+        features_by_adaptor = self.split_outputs_by_adaptor(
+            input_dict,
+            features,
+        )
+
+        # Driving分支不需要logits；
+        # 语言分支将在有效答案位置根据hidden features局部计算logits。
+        if logits is None:
+            logits_by_adaptor = {
+                key: None
+                for key in self.adaptors.keys()
+            }
+        else:
+            logits_by_adaptor = self.split_outputs_by_adaptor(
+                input_dict,
+                logits,
+            )
+
+
 
         loss_dict: Dict[str, Tuple[Tensor, Tensor]] = {}
 

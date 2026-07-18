@@ -331,34 +331,54 @@ class DrivingModel(pl.LightningModule):
         )
         attention_mask = adaptor_mask
 
-        outputs = self.language_model.model(   # 把拼好的多模态 embedding 序列，送进 Transformer（LLM），得到每个 token 的“理解表示”和“预测分布”
+
+        
+        # outputs = self.language_model.model(   # 把拼好的多模态 embedding 序列，送进 Transformer（LLM），得到每个 token 的“理解表示”和“预测分布”
+        #     attention_mask=attention_mask,
+        #     position_ids=position_ids,
+        #     inputs_embeds=input_embeds,
+        #     output_hidden_states=True,
+        #     return_dict=True,
+        # )
+        # features = outputs.hidden_states[-1]  # 最后一层 Transformer 的输出特征 
+        # logits = outputs[0]  # 等价于logits = outputs.logits, 含义:每个 token → 下一个 token 的概率分布  实际上logits就是每个 hidden state 经过输出 head（线性层）得到的预测结果，和 RNN 中的输出层是等价的
+        # """
+        # 在 Transformer 中，每一层都会为每个 token 生成一个 D 维的 hidden state，因此 outputs.hidden_states 是一个包含所有层输出的列表，其中每一项的 shape 为 [B, L, D]。
+        # 通过 features = outputs.hidden_states[-1] 可以获取最后一层的 hidden states，即每个 token 的最终语义表示。
+        # 而 logits = outputs[0] 则是将这些最终 hidden states 逐 token 通过输出 head 映射到输出空间（如词表或类别空间）后的结果，因此 logits 的 shape 为 [B, L, V]，表示每个 token 的预测分布。
+        # """
+
+        # # 把 Transformer 输出的整条序列，按“token来源”拆成两部分：vision部分 和 adaptor部分
+        # vision_features, adaptor_features = features.split([features.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
+        # vision_logits, adaptor_logits = logits.split([logits.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
+        # """
+        # features.size(1)          # 总token数 L
+        # adaptor_embeds.size(1)    # adaptor token数
+        # 所以,features.size(1) - adaptor_embeds.size(1) = vision token 数量
+        # split等价于features = [ vision部分 | adaptor部分 ]
+        # 张量形式:
+        # features:         [B, L, D]
+        # vision_features:  [B, L_vision, D]
+        # adaptor_features: [B, L_adaptor, D]
+        # """
+
+        # 训练阶段只运行语言模型的Transformer主干。
+        # 不再为视觉token、问题token和Driving query生成整词表logits，
+        # 从而避免保存巨大的[B, L, vocab_size]张量。
+        features = self.language_model.forward_features(
+            embeddings=input_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            inputs_embeds=input_embeds,
-            output_hidden_states=True,
             return_dict=True,
         )
-        features = outputs.hidden_states[-1]  # 最后一层 Transformer 的输出特征 
-        logits = outputs[0]  # 等价于logits = outputs.logits, 含义:每个 token → 下一个 token 的概率分布  实际上logits就是每个 hidden state 经过输出 head（线性层）得到的预测结果，和 RNN 中的输出层是等价的
-        """
-        在 Transformer 中，每一层都会为每个 token 生成一个 D 维的 hidden state，因此 outputs.hidden_states 是一个包含所有层输出的列表，其中每一项的 shape 为 [B, L, D]。
-        通过 features = outputs.hidden_states[-1] 可以获取最后一层的 hidden states，即每个 token 的最终语义表示。
-        而 logits = outputs[0] 则是将这些最终 hidden states 逐 token 通过输出 head 映射到输出空间（如词表或类别空间）后的结果，因此 logits 的 shape 为 [B, L, V]，表示每个 token 的预测分布。
-        """
 
-        # 把 Transformer 输出的整条序列，按“token来源”拆成两部分：vision部分 和 adaptor部分
-        vision_features, adaptor_features = features.split([features.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
-        vision_logits, adaptor_logits = logits.split([logits.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
-        """
-        features.size(1)          # 总token数 L
-        adaptor_embeds.size(1)    # adaptor token数
-        所以,features.size(1) - adaptor_embeds.size(1) = vision token 数量
-        split等价于features = [ vision部分 | adaptor部分 ]
-        张量形式:
-        features:         [B, L, D]
-        vision_features:  [B, L_vision, D]
-        adaptor_features: [B, L_adaptor, D]
-        """
+        # 当前图像特征已经写入adaptor_embeds中的<IMG_CONTEXT>位置，
+        # 因此Transformer输出的整条序列就是后续adaptor需要的特征。
+        adaptor_features = features
+
+        # LanguageAdaptor将在真正计算语言loss的位置局部生成logits。
+        # DrivingAdaptor本身不使用logits。
+        adaptor_logits = None
 
 
 
@@ -889,6 +909,24 @@ class DrivingModel(pl.LightningModule):
             log_key = f"{mode}_losses/{k}"
             self.log(log_key, v, batch_size=counts[k], sync_dist=True, add_dataloader_idx=False)
 
+    # def configure_optimizers(self):
+    #     optimizer = AdamW(
+    #         self.parameters(),
+    #         lr=self.lr,
+    #         weight_decay=self.weight_decay,
+    #         betas=self.betas,
+    #     )
+    #     if self.trainer.max_steps == -1:
+    #         max_steps = self.trainer.estimated_stepping_batches
+    #     else:
+    #         max_steps = self.trainer.max_steps
+    #     scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #         optimizer, max_lr=self.lr, total_steps=max_steps, pct_start=self.pct_start, verbose=False
+    #     )
+    #     return {""
+    #     "optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "frequency": 1, "interval": "step"}}
+
+
     def configure_optimizers(self):
         optimizer = AdamW(
             self.parameters(),
@@ -896,12 +934,25 @@ class DrivingModel(pl.LightningModule):
             weight_decay=self.weight_decay,
             betas=self.betas,
         )
+
         if self.trainer.max_steps == -1:
             max_steps = self.trainer.estimated_stepping_batches
         else:
             max_steps = self.trainer.max_steps
+
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=self.lr, total_steps=max_steps, pct_start=self.pct_start, verbose=False
+            optimizer,
+            max_lr=self.lr,
+            total_steps=max_steps,
+            pct_start=self.pct_start,
+            verbose=False,
         )
-        return {""
-        "optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "frequency": 1, "interval": "step"}}
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "frequency": 1,
+                "interval": "step",
+            },
+        }

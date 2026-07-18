@@ -95,13 +95,84 @@ def main(cfg: TrainConfig):
     wandblogger.watch(model)
     loggers.append(wandblogger)
 
+    # strategy = cfg.strategy
+    # if strategy == "deepspeed_stage_2":
+    #     strategy = pl.strategies.DeepSpeedStrategy(
+    #         stage=2,
+    #         loss_scale=cfg.fp16_loss_scale,
+    #         logging_batch_size_per_gpu=cfg.data_module.batch_size,
+    #     )
+
+    # strategy = cfg.strategy
+    # if strategy == "deepspeed_stage_2":
+    #     strategy = pl.strategies.DeepSpeedStrategy(
+    #         stage=2,
+    #         loss_scale=cfg.fp16_loss_scale,
+    #         logging_batch_size_per_gpu=cfg.data_module.batch_size,
+
+    #         # 默认值为200_000_000，在FP16训练中需要约382 MiB连续显存。
+    #         # 六视角训练下将其缩小，降低反向传播开始时的显存峰值。
+    #         reduce_bucket_size=20_000_000,
+    #         allgather_bucket_size=20_000_000,
+    #     )
+
+    # strategy = cfg.strategy
+    # if strategy == "deepspeed_stage_2":
+    #     strategy = pl.strategies.DeepSpeedStrategy(
+    #         stage=2,
+    #         loss_scale=cfg.fp16_loss_scale,
+    #         logging_batch_size_per_gpu=cfg.data_module.batch_size,
+
+    #         # 将Adam优化器状态转移到CPU，降低单卡训练的GPU显存占用
+    #         offload_optimizer=True,
+    #         offload_optimizer_device="cpu",
+
+    #         # 当前只使用一张GPU，进一步减小通信缓冲区
+    #         reduce_bucket_size=5_000_000,
+    #         allgather_bucket_size=5_000_000,
+    #     )
+
+
     strategy = cfg.strategy
     if strategy == "deepspeed_stage_2":
+        deepspeed_config = {
+            # 使用LightningModule.configure_optimizers()提供的AdamW。
+            # 当前环境无法编译DeepSpeedCPUAdam，因此允许普通AdamW执行CPU Offload。
+            "zero_allow_untested_optimizer": True,
+            "zero_force_ds_cpu_optimizer": False,
+
+            "train_micro_batch_size_per_gpu": int(
+                cfg.data_module.batch_size
+            ),
+            # "gradient_accumulation_steps": 1,
+
+            "zero_optimization": {
+                "stage": 2,
+
+                # 将优化器状态和更新过程转移到CPU。
+                "offload_optimizer": {
+                    "device": "cpu",
+                    "pin_memory": False,
+                },
+
+                # 减少反向传播阶段的连续显存峰值。
+                "contiguous_gradients": True,
+                "overlap_comm": True,
+                "reduce_scatter": True,
+                "allgather_partitions": True,
+                "reduce_bucket_size": 5_000_000,
+                "allgather_bucket_size": 5_000_000,
+            },
+        }
+
         strategy = pl.strategies.DeepSpeedStrategy(
-            stage=2,
+            config=deepspeed_config,
             loss_scale=cfg.fp16_loss_scale,
-            logging_batch_size_per_gpu=cfg.data_module.batch_size,
+            logging_batch_size_per_gpu=(
+                cfg.data_module.batch_size
+            ),
         )
+
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
     model_summary = ModelSummary(max_depth=3)

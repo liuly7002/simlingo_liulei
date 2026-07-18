@@ -118,6 +118,20 @@ class LLM(nn.Module):
             self.model = get_peft_model(self.model, peft_config)
             self.model.print_trainable_parameters()
 
+        # 六视角输入增加了语言模型的序列长度。
+        # 启用梯度检查点，通过反向传播时重新计算部分中间结果，
+        # 降低Transformer激活值占用的显存。
+        if hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable()
+
+        # LoRA训练时确保输入embedding能够建立正确的梯度计算图。
+        if hasattr(self.model, "enable_input_require_grads"):
+            self.model.enable_input_require_grads()
+
+        # 训练阶段不需要KV cache。
+        if hasattr(self.model, "config"):
+            self.model.config.use_cache = False
+
         self.vocab_size = self.model.config.vocab_size
         self.hidden_size = self.model.config.hidden_size
         self.max_position_embeddings = self.model.config.max_position_embeddings
@@ -141,6 +155,54 @@ class LLM(nn.Module):
         logits = outputs[0]
 
         return features, logits
+
+
+    def forward_features(
+        self,
+        embeddings: Tensor,
+        attention_mask: Tensor = None,
+        return_dict: bool = True,
+        position_ids: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        只运行语言模型的Transformer主干并返回最后一层hidden features。
+
+        训练阶段不在这里为整条序列生成完整词表logits。
+        语言损失需要的logits由LanguageAdaptor仅在有效答案位置生成。
+        """
+
+        # 使用PEFT/LoRA时，get_base_model()返回实际的CausalLM模型。
+        if hasattr(self.model, "get_base_model"):
+            causal_lm = self.model.get_base_model()
+        else:
+            causal_lm = self.model
+
+        # InternVL2-1B的语言模型为CausalLM结构，
+        # 其中.model是没有lm_head的Transformer主干。
+        if hasattr(causal_lm, "model"):
+            backbone = causal_lm.model
+        elif hasattr(causal_lm, "base_model"):
+            backbone = causal_lm.base_model
+        else:
+            raise AttributeError(
+                "Cannot locate the Transformer backbone "
+                "inside the language model."
+            )
+
+        outputs = backbone(
+            inputs_embeds=embeddings,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            output_hidden_states=False,
+            use_cache=False,
+            return_dict=return_dict,
+        )
+
+        if return_dict:
+            return outputs.last_hidden_state
+
+        return outputs[0]
+
 
     def sample_categorical(
         self,
