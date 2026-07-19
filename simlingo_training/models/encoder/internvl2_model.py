@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from typing import List, Optional
@@ -22,16 +23,17 @@ class LingoInternVLModel(nn.Module):
         
         
         
-        # 一、加载 InternVL2 预训练模型
-        self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)  # trust_remote_code=True 表示允许 HuggingFace 执行模型仓库里自定义的 Python 代码
-        
+        # 一、加载 InternVL2 预训练视觉语言模型(这一行是整个类最核心的初始化操作,用于从 variant 指定的位置加载 InternVL2 模型)
+        self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
+        # trust_remote_code=True 表示允许 HuggingFace 执行模型仓库里自定义的 Python 代码
         
         
         
         
         # 二、语言模型原始词表一共有多少 token embedding
+        # self.model.language_model 用于访问语言模型
         try:
-            self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings
+            self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings  # num_embeddings:语言模型原始 embedding 表中一共有多少行
         except:
             self.num_embeddings = self.model.language_model.vocab_size
         
@@ -106,6 +108,12 @@ class LingoInternVLModel(nn.Module):
         self.route_camera_attention_gate = nn.Parameter(
             torch.tensor(0.1)
         )
+
+        # 保存最近一次前向传播中的六视角注意力统计，
+        # 用于W&B日志和本地验证结果记录。
+        # 前向传播时会进行detach，不参与损失计算。
+        self.latest_route_camera_weights = None
+        self.latest_route_attention_entropy = None
         
     
     
@@ -283,7 +291,7 @@ class LingoInternVLModel(nn.Module):
 
 
 
-                    image_features = self.model.extract_feature(pixel_values_tmp)  # 视觉网络
+                    image_features = self.model.extract_feature(pixel_values_tmp)  # 视觉网络,用于提取图像特征
                     # image_features:
                     # [BS * NP, 256, C_embed]
                     # 其中每个原始patch对应256个视觉token，也就是16×16的空间网格。
@@ -532,6 +540,34 @@ class LingoInternVLModel(nn.Module):
                             route_camera_scores,
                             dim=-1,
                         )
+
+                        # 保存最近一次前向传播的逐路径位置六视角注意力。
+                        # detach避免日志记录保留反向传播计算图。
+                        route_camera_weights_detached = (
+                            route_camera_weights.detach().float()
+                        )
+
+                        self.latest_route_camera_weights = (
+                            route_camera_weights_detached
+                        )
+
+                        # 计算每个route query对应的注意力熵。
+                        route_attention_prob = (
+                            route_camera_weights_detached.clamp_min(1e-8)
+                        )
+
+                        route_attention_entropy = -(
+                            route_attention_prob
+                            * route_attention_prob.log()
+                        ).sum(dim=-1)
+
+                        # 使用log(6)归一化到[0,1]。
+                        # 越接近1表示六视角权重越均匀；
+                        # 越接近0表示模型集中关注少数相机。
+                        self.latest_route_attention_entropy = (
+                            route_attention_entropy
+                            / math.log(float(self.num_cameras))
+                        ).mean(dim=1)
 
                         # 按照每个路径query对应的六相机权重融合视觉信息。
                         # route_context: [BS, 20, C_embed]

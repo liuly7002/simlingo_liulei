@@ -65,7 +65,7 @@ validation_logging:
   separate_by_source: true
   save_csv: true
   save_epoch_json: true
-  save_per_sample_jsonl: false
+  save_per_sample_jsonl: true
   save_visualizations: true
   visualization_samples_per_source: 4
   log_per_horizon_error: true

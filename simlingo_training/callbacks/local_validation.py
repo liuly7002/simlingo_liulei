@@ -264,10 +264,20 @@ class LocalValidationMetricsCallback(pl.Callback):
         batch: Any,
         epoch: int,
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        # row: Dict[str, Any] = {
+        #     "epoch": int(epoch),
+        #     "source": source,
+        #     "measurement_path": run_id,
+        # }
         row: Dict[str, Any] = {
             "epoch": int(epoch),
             "source": source,
             "measurement_path": run_id,
+
+            # 保存原始问题和答案，后续可以按照直行、左转、
+            # 右转等驾驶语义对注意力结果进行分组。
+            "prompt": prompt,
+            "answer": answer,
         }
 
         total_loss = 0.0
@@ -280,8 +290,19 @@ class LocalValidationMetricsCallback(pl.Callback):
                 total_loss_valid = True
         row["total_loss"] = total_loss if total_loss_valid else float("nan")
 
+        # speed_prediction = predictions.get("speed_wps_prediction")
+        # route_prediction = predictions.get("route_prediction")
+        # visual_record: Optional[Dict[str, Any]] = None
         speed_prediction = predictions.get("speed_wps_prediction")
         route_prediction = predictions.get("route_prediction")
+
+        route_camera_weights = predictions.get(
+            "route_camera_weights"
+        )
+        route_attention_entropy = predictions.get(
+            "route_attention_entropy"
+        )
+
         visual_record: Optional[Dict[str, Any]] = None
 
         if isinstance(speed_prediction, torch.Tensor):
@@ -363,6 +384,92 @@ class LocalValidationMetricsCallback(pl.Callback):
                     visual_record["gt_route"] = gt_route.numpy()
                     visual_record["waypoint_to_route_error_m"] = row[
                         "waypoint_to_route_error_m"
+                    ]
+
+        camera_names = (
+            "front",
+            "front_left",
+            "front_right",
+            "rear",
+            "rear_left",
+            "rear_right",
+        )
+
+        if isinstance(route_camera_weights, torch.Tensor):
+            # 当前样本：
+            # [20, 6]，分别对应20个route query和6个相机。
+            sample_camera_weights = (
+                route_camera_weights[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+
+            if (
+                sample_camera_weights.ndim == 2
+                and sample_camera_weights.shape[-1]
+                == len(camera_names)
+            ):
+                # 对20个参考路径位置求平均，得到该样本的六相机权重。
+                mean_camera_weights = (
+                    sample_camera_weights.mean(dim=0)
+                )
+
+                for camera_name, camera_weight in zip(
+                    camera_names,
+                    mean_camera_weights,
+                ):
+                    row[
+                        f"route_attention_{camera_name}"
+                    ] = _to_float(camera_weight)
+
+                dominant_camera_index = int(
+                    mean_camera_weights.argmax().item()
+                )
+
+                row["route_attention_dominant_camera"] = (
+                    camera_names[dominant_camera_index]
+                )
+                row["route_attention_max_camera_weight"] = (
+                    _to_float(mean_camera_weights.max())
+                )
+
+                if isinstance(
+                    route_attention_entropy,
+                    torch.Tensor,
+                ):
+                    row["route_attention_entropy"] = _to_float(
+                        route_attention_entropy[index]
+                    )
+                else:
+                    attention_prob = (
+                        sample_camera_weights.clamp_min(1e-8)
+                    )
+                    attention_entropy = -(
+                        attention_prob
+                        * attention_prob.log()
+                    ).sum(dim=-1)
+
+                    row["route_attention_entropy"] = _safe_mean(
+                        attention_entropy
+                        / math.log(float(len(camera_names)))
+                    )
+
+                if visual_record is not None:
+                    visual_record[
+                        "route_camera_mean_weights"
+                    ] = mean_camera_weights.numpy().tolist()
+
+                    visual_record[
+                        "route_attention_dominant_camera"
+                    ] = row[
+                        "route_attention_dominant_camera"
+                    ]
+
+                    visual_record[
+                        "route_attention_entropy"
+                    ] = row[
+                        "route_attention_entropy"
                     ]
 
         return row, visual_record
@@ -521,6 +628,65 @@ class LocalValidationMetricsCallback(pl.Callback):
             stem = f"{source}_{record_index:03d}"
             fig.savefig(epoch_dir / f"{stem}.png", dpi=160)
             plt.close(fig)
+
+            # 单独保存六视角注意力柱状图，
+            # 不修改原有轨迹可视化布局。
+            if "route_camera_mean_weights" in record:
+                camera_names = (
+                    "front",
+                    "front_left",
+                    "front_right",
+                    "rear",
+                    "rear_left",
+                    "rear_right",
+                )
+
+                camera_weights = np.asarray(
+                    record["route_camera_mean_weights"],
+                    dtype=np.float32,
+                )
+
+                attention_fig = plt.figure(
+                    figsize=(8.0, 4.5)
+                )
+                attention_axis = attention_fig.add_subplot(
+                    1,
+                    1,
+                    1,
+                )
+
+                attention_axis.bar(
+                    camera_names,
+                    camera_weights,
+                )
+                attention_axis.set_ylim(0.0, 1.0)
+                attention_axis.set_ylabel(
+                    "Mean route-guided attention"
+                )
+                attention_axis.set_xlabel("Camera")
+                attention_axis.grid(
+                    True,
+                    axis="y",
+                )
+                attention_axis.tick_params(
+                    axis="x",
+                    rotation=25,
+                )
+
+                attention_axis.set_title(
+                    "Dominant camera: "
+                    f"{record['route_attention_dominant_camera']} | "
+                    "Normalized entropy: "
+                    f"{record['route_attention_entropy']:.3f}"
+                )
+
+                attention_fig.tight_layout()
+                attention_fig.savefig(
+                    epoch_dir
+                    / f"{stem}_camera_attention.png",
+                    dpi=160,
+                )
+                plt.close(attention_fig)
 
             metadata = {
                 key: value
