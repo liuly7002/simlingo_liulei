@@ -21,16 +21,17 @@ class LingoInternVLModel(nn.Module):
         
         
         
-        
-        
-        # 一、加载 InternVL2 预训练视觉语言模型(这一行是整个类最核心的初始化操作,用于从 variant 指定的位置加载 InternVL2 模型)
+
+
+        ############################################## 🏖️ 加载 InternVL2 预训练视觉语言模型 🏖️ ##############################################
         self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
+        # 这是整个类最核心的初始化操作,用于从 variant 指定的位置加载 InternVL2 模型
         # trust_remote_code=True 表示允许 HuggingFace 执行模型仓库里自定义的 Python 代码
         
         
         
         
-        # 二、语言模型原始词表一共有多少 token embedding
+        ############################################## 🏖️ 语言模型原始词表一共有多少 token embedding 🏖️ ##############################################
         # self.model.language_model 用于访问语言模型
         try:
             self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings  # num_embeddings:语言模型原始 embedding 表中一共有多少行
@@ -41,44 +42,60 @@ class LingoInternVLModel(nn.Module):
         
         
         
-        # 三、两个预留接口 
-        self.use_global_img = None  # 预留接口
+        ############################################## 🏖️ 两个预留接口 🏖️ ##############################################
+        self.use_global_img = None  # 预留接口 
         self.processor = None       # 预留接口
 
 
-        # 六视角视觉token压缩配置。
+
+
+
+
+        ############################################## 🏖️ 六视角视觉 token 压缩配置 🏖️ ##############################################
         # 每个相机有2个patch，每个patch的256个token排列为16×16。
         # 将每个patch池化为4×8，共32个token；
         # 因而每个相机保留64个token，六个相机共384个token。
         self.num_cameras = 6                 # 相机的数量
         self.num_patches_per_camera = 2      # 每张图像(相机)被分为几个patch
-        self.visual_pool_height = 4          # 每个patch的高
-        self.visual_pool_width = 8           # 每个patch的宽
-        self.num_visual_tokens_per_patch = ( # 每个patch的token数
+        self.visual_pool_height = 4          # 规定每个 patch 的视觉 token 网格在高度方向池化到 4
+        self.visual_pool_width = 8           # 规定每个 patch 的视觉 token 网格在宽度方向池化到 8
+        self.num_visual_tokens_per_patch = ( # 每个patch池化以后保留的视觉token数
             self.visual_pool_height
             * self.visual_pool_width
         )
+        """
+        这里讲一下为什么池化的时候不是池化成4x4或者8x8这种正方形的网格:
+        这是因为对于驾驶图像来讲,横向通常需要区分左侧区域、道路中心区域、右侧区域,
+        因此使用宽>高的网格可以在压缩token的同时保留更多的横向空间信息
+        """
 
 
-
-        ############################################## 相机身份 embedding ##############################################
+        ############################################## 🏖️ 定义六个相机的身份 embedding 🏖️ ##############################################
         # 六个相机使用独立的可学习身份embedding，固定顺序为：
         # front、front_left、front_right、rear、rear_left、rear_right。
-        self.visual_feature_dim = int(
-            self.model.language_model.config.hidden_size
-        )
-        self.camera_identity_embedding = nn.Embedding(
-            self.num_cameras,
-            self.visual_feature_dim,
-        )
+
+        # 获取语言模型的隐藏特征维度
+        self.visual_feature_dim = int(self.model.language_model.config.hidden_size)
+
+        # 创建一个可学习的 embedding 表,其权重形状为[6, visual_feature_dim],
+        # 每一行代表一个可以通过反向传播学习的相机身份向量
+        self.camera_identity_embedding = nn.Embedding(self.num_cameras, self.visual_feature_dim,)
+        
+        # 手动初始化相机身份 embedding 的权重
         nn.init.normal_(
             self.camera_identity_embedding.weight,  # 这部分权重代表模型能够学习六个相机之间的差异
-            mean=0.0,
-            std=0.02,
+            mean=0.0,  # 初始化分布均值为0
+            std=0.02,  # 初始化标准差为0.02
         )
+        """
+        设计原理:
+        在没有相机身份embedding时,六个相机的视觉token最终会进入同一语言embedding空间。
+        模型只能依赖token在序列中的位置和图像本身内容来间接判断某个视觉token来自哪个相机。
+        加入相机身份embedding之后每个视觉token都会显式携带身份信息,如:"我来自前视相机"、"我来自前左相机"
+        """
 
 
-        ############################################## 路径注意力 ##############################################
+        ############################################## 🏖️ 定义参考路径引导的六视角注意力 🏖️ ##############################################
         # route分支的前20个query分别对应20个参考路径位置。
         # 每个query分别查询六个相机级特征，得到逐路径位置的多视角上下文。
         self.num_route_queries = 20
