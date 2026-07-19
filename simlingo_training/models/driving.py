@@ -565,6 +565,131 @@ class DrivingModel(pl.LightningModule):
         )
 
         if per_sample:
+            # LocalValidationMetricsCallback需要保存每个样本真正参与
+            # 当前前向传播的<TARGET_POINT>坐标。
+            #
+            # 这里根据language token序列判断当前prompt是否实际包含
+            # <TARGET_POINT>，而不是仅根据placeholder_values中是否存在该值判断。
+            # 因此，无论placeholder_values是否预先保存了目标点，
+            # 只有prompt真正使用<TARGET_POINT>时has_target_point才为True。
+            language_ids = adaptor_dict.get(
+                "language__ids"
+            )
+
+            if not isinstance(language_ids, torch.Tensor):
+                raise RuntimeError(
+                    "language__ids is required to save "
+                    "<TARGET_POINT> coordinates."
+                )
+
+            target_point_token_id = getattr(
+                image_encoder,
+                "target_point_token_id",
+                None,
+            )
+
+            if target_point_token_id is None:
+                raise RuntimeError(
+                    "target_point_token_id was not initialized by "
+                    "the InternVL2 image encoder."
+                )
+
+            target_point_token_id = int(
+                target_point_token_id
+            )
+
+            # [B]，表示每个样本的当前prompt中是否真正使用了
+            # <TARGET_POINT>。
+            has_target_point = (
+                language_ids == target_point_token_id
+            ).any(dim=1)
+
+            batch_size = int(language_ids.shape[0])
+
+            # 当前<TARGET_POINT>实际包含两个二维导航点：
+            # 第一个是target_point，第二个是target_point_next。
+            # 因此batch内的保存形状为[B, 2, 2]。
+            target_point_coordinates = torch.full(
+                (
+                    batch_size,
+                    2,
+                    2,
+                ),
+                float("nan"),
+                device=language_ids.device,
+                dtype=torch.float32,
+            )
+
+            placeholder_values = (
+                example.driving_input.prompt.placeholder_values
+            )
+
+            if len(placeholder_values) != batch_size:
+                raise RuntimeError(
+                    "The number of placeholder value dictionaries "
+                    "does not match the batch size: "
+                    f"{len(placeholder_values)} vs {batch_size}"
+                )
+
+            # 从原始placeholder_values中读取未经embedding编码的
+            # <TARGET_POINT>自车坐标，最终保存形状为[B, 2]。
+            for sample_index in range(batch_size):
+                if not bool(
+                    has_target_point[sample_index].item()
+                ):
+                    continue
+
+                sample_placeholder_values = (
+                    placeholder_values[sample_index]
+                )
+
+                if (
+                    target_point_token_id
+                    not in sample_placeholder_values
+                ):
+                    raise KeyError(
+                        "The prompt contains <TARGET_POINT>, but "
+                        "its coordinate is missing from "
+                        "placeholder_values."
+                    )
+
+                sample_target_points = torch.as_tensor(
+                    sample_placeholder_values[
+                        target_point_token_id
+                    ],
+                    device=language_ids.device,
+                    dtype=torch.float32,
+                )
+
+                # 一个导航条件包含两个二维点：
+                # [
+                #     [target_point_x, target_point_y],
+                #     [next_target_point_x, next_target_point_y],
+                # ]
+                if sample_target_points.numel() != 4:
+                    raise ValueError(
+                        "<TARGET_POINT> must contain two 2D "
+                        "coordinates, but received shape "
+                        f"{tuple(sample_target_points.shape)} with "
+                        f"{sample_target_points.numel()} values."
+                    )
+
+                sample_target_points = (
+                    sample_target_points.reshape(2, 2)
+                )
+
+                target_point_coordinates[
+                    sample_index
+                ] = sample_target_points
+
+            pred_labels[
+                "target_point_coordinates"
+            ] = target_point_coordinates
+
+            pred_labels[
+                "has_target_point"
+            ] = has_target_point
+
             return loss_dict_only_losses, pred_labels
 
         return summarise_losses(loss_dict_only_losses), loss_logs

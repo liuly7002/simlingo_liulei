@@ -303,6 +303,123 @@ class LocalValidationMetricsCallback(pl.Callback):
             "route_attention_entropy"
         )
 
+        target_point_coordinates = predictions.get(
+            "target_point_coordinates"
+        )
+        has_target_point = predictions.get(
+            "has_target_point"
+        )
+
+        sample_has_target_point = False
+
+        # 当前导航条件包含两个二维点。
+        sample_target_points_xy = None
+        sample_target_point_xy = None
+        sample_next_target_point_xy = None
+
+        if isinstance(has_target_point, torch.Tensor):
+            sample_has_target_point = bool(
+                has_target_point[index]
+                .detach()
+                .cpu()
+                .item()
+            )
+
+        row["has_target_point"] = (
+            sample_has_target_point
+        )
+
+        if (
+            sample_has_target_point
+            and isinstance(
+                target_point_coordinates,
+                torch.Tensor,
+            )
+        ):
+            sample_target_points = (
+                target_point_coordinates[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+
+            if sample_target_points.numel() != 4:
+                raise ValueError(
+                    "Saved <TARGET_POINT> coordinates must contain "
+                    "two 2D points, but received shape "
+                    f"{tuple(sample_target_points.shape)} with "
+                    f"{sample_target_points.numel()} values."
+                )
+
+            sample_target_points = (
+                sample_target_points.reshape(2, 2)
+            )
+
+            target_point_x = _to_float(
+                sample_target_points[0, 0]
+            )
+            target_point_y = _to_float(
+                sample_target_points[0, 1]
+            )
+
+            next_target_point_x = _to_float(
+                sample_target_points[1, 0]
+            )
+            next_target_point_y = _to_float(
+                sample_target_points[1, 1]
+            )
+
+            sample_target_point_xy = [
+                target_point_x,
+                target_point_y,
+            ]
+
+            sample_next_target_point_xy = [
+                next_target_point_x,
+                next_target_point_y,
+            ]
+
+            sample_target_points_xy = [
+                sample_target_point_xy,
+                sample_next_target_point_xy,
+            ]
+
+            # 完整保存两个导航目标点。
+            row["target_points_xy_m"] = (
+                sample_target_points_xy
+            )
+
+            # 分别保存第一个和第二个目标点，
+            # 方便后续直接筛选与统计。
+            row["target_point_xy_m"] = (
+                sample_target_point_xy
+            )
+            row["next_target_point_xy_m"] = (
+                sample_next_target_point_xy
+            )
+
+            row["target_point_x_m"] = (
+                target_point_x
+            )
+            row["target_point_y_m"] = (
+                target_point_y
+            )
+            row["target_point_distance_m"] = math.hypot(
+                target_point_x,
+                target_point_y,
+            )
+
+            row["next_target_point_x_m"] = (
+                next_target_point_x
+            )
+            row["next_target_point_y_m"] = (
+                next_target_point_y
+            )
+            row["next_target_point_distance_m"] = math.hypot(
+                next_target_point_x,
+                next_target_point_y,
+            )
+
         visual_record: Optional[Dict[str, Any]] = None
 
         if isinstance(speed_prediction, torch.Tensor):
@@ -313,9 +430,26 @@ class LocalValidationMetricsCallback(pl.Callback):
             gt_wps = gt_wps[:common]
 
             if common > 0:
-                displacement = torch.linalg.norm(pred_wps - gt_wps, dim=-1)
-                row["waypoint_ade_m"] = _safe_mean(displacement)
-                row["waypoint_fde_m"] = _to_float(displacement[-1])
+                # 保存20个route query最终对应的实际路径坐标。
+                # 这样完整[20,6]注意力矩阵中的第q行，
+                # 就能够和pred_route_points_xy_m中的第q个路径点对应。
+                row["pred_route_points_xy_m"] = (
+                    pred_route.numpy().tolist()
+                )
+                row["gt_route_points_xy_m"] = (
+                    gt_route.numpy().tolist()
+                )
+
+                route_displacement = torch.linalg.norm(
+                    pred_route - gt_route,
+                    dim=-1,
+                )
+                row["route_ade_m"] = _safe_mean(
+                    route_displacement
+                )
+                row["route_fde_m"] = _to_float(
+                    route_displacement[-1]
+                )
                 row["waypoint_longitudinal_mae_m"] = _safe_mean(
                     torch.abs(pred_wps[:, 0] - gt_wps[:, 0])
                 )
@@ -410,6 +544,44 @@ class LocalValidationMetricsCallback(pl.Callback):
                 and sample_camera_weights.shape[-1]
                 == len(camera_names)
             ):
+                if (
+                    sample_camera_weights.shape[0]
+                    != 20
+                ):
+                    raise ValueError(
+                        "Expected 20 route-query attention rows, "
+                        "but received "
+                        f"{sample_camera_weights.shape[0]}."
+                    )
+
+                # 保存完整的[20,6]注意力矩阵。
+                #
+                # 行：
+                # route query 0～19，对应预测route的20个路径位置。
+                #
+                # 列：
+                # front、front_left、front_right、
+                # rear、rear_left、rear_right。
+                route_camera_attention_20x6 = (
+                    sample_camera_weights.numpy().tolist()
+                )
+
+                row[
+                    "route_camera_attention_20x6"
+                ] = route_camera_attention_20x6
+
+                row[
+                    "route_camera_attention_camera_order"
+                ] = list(camera_names)
+
+                row[
+                    "route_query_indices"
+                ] = list(
+                    range(
+                        sample_camera_weights.shape[0]
+                    )
+                )
+
                 # 对20个参考路径位置求平均，得到该样本的六相机权重。
                 mean_camera_weights = (
                     sample_camera_weights.mean(dim=0)
@@ -460,6 +632,15 @@ class LocalValidationMetricsCallback(pl.Callback):
                         "route_camera_mean_weights"
                     ] = mean_camera_weights.numpy().tolist()
 
+                    # 保存完整[20,6]注意力，供热力图使用。
+                    visual_record[
+                        "route_camera_attention_20x6"
+                    ] = route_camera_attention_20x6
+
+                    visual_record[
+                        "route_camera_attention_camera_order"
+                    ] = list(camera_names)
+
                     visual_record[
                         "route_attention_dominant_camera"
                     ] = row[
@@ -471,6 +652,25 @@ class LocalValidationMetricsCallback(pl.Callback):
                     ] = row[
                         "route_attention_entropy"
                     ]
+
+        # 将当前样本实际使用的<TARGET_POINT>加入可视化记录。
+        if visual_record is not None:
+            visual_record[
+                "has_target_point"
+            ] = sample_has_target_point
+
+            if sample_target_points_xy is not None:
+                visual_record[
+                    "target_points_xy_m"
+                ] = sample_target_points_xy
+
+                visual_record[
+                    "target_point_xy_m"
+                ] = sample_target_point_xy
+
+                visual_record[
+                    "next_target_point_xy_m"
+                ] = sample_next_target_point_xy
 
         return row, visual_record
 
@@ -687,6 +887,132 @@ class LocalValidationMetricsCallback(pl.Callback):
                     dpi=160,
                 )
                 plt.close(attention_fig)
+
+            # 保存完整[20,6]路径位置—相机注意力热力图。
+            if "route_camera_attention_20x6" in record:
+                route_camera_attention = np.asarray(
+                    record[
+                        "route_camera_attention_20x6"
+                    ],
+                    dtype=np.float32,
+                )
+
+                camera_names = tuple(
+                    record.get(
+                        "route_camera_attention_camera_order",
+                        (
+                            "front",
+                            "front_left",
+                            "front_right",
+                            "rear",
+                            "rear_left",
+                            "rear_right",
+                        ),
+                    )
+                )
+
+                if route_camera_attention.shape != (
+                    20,
+                    6,
+                ):
+                    raise ValueError(
+                        "Expected route camera attention shape "
+                        f"(20, 6), but received "
+                        f"{route_camera_attention.shape}."
+                    )
+
+                heatmap_fig = plt.figure(
+                    figsize=(10.0, 5.0)
+                )
+                heatmap_axis = heatmap_fig.add_subplot(
+                    1,
+                    1,
+                    1,
+                )
+
+                # 转置为[6,20]：
+                # 纵轴是六个相机，横轴是20个route query。
+                heatmap_image = heatmap_axis.imshow(
+                    route_camera_attention.T,
+                    aspect="auto",
+                    origin="lower",
+                )
+
+                heatmap_axis.set_yticks(
+                    np.arange(len(camera_names))
+                )
+                heatmap_axis.set_yticklabels(
+                    camera_names
+                )
+
+                heatmap_axis.set_xticks(
+                    np.arange(
+                        route_camera_attention.shape[0]
+                    )
+                )
+                heatmap_axis.set_xticklabels(
+                    np.arange(
+                        1,
+                        route_camera_attention.shape[0] + 1,
+                    ),
+                    fontsize=8,
+                )
+
+                heatmap_axis.set_xlabel(
+                    "Route query / path position"
+                )
+                heatmap_axis.set_ylabel(
+                    "Camera"
+                )
+
+                if "target_points_xy_m" in record:
+                    target_point_x = (
+                        record["target_points_xy_m"][0][0]
+                    )
+                    target_point_y = (
+                        record["target_points_xy_m"][0][1]
+                    )
+
+                    next_target_point_x = (
+                        record["target_points_xy_m"][1][0]
+                    )
+                    next_target_point_y = (
+                        record["target_points_xy_m"][1][1]
+                    )
+
+                    target_point_text = (
+                        "TARGET_POINT_1="
+                        f"({target_point_x:.3f}, "
+                        f"{target_point_y:.3f}) m | "
+                        "TARGET_POINT_2="
+                        f"({next_target_point_x:.3f}, "
+                        f"{next_target_point_y:.3f}) m"
+                    )
+                else:
+                    target_point_text = (
+                        "TARGET_POINT not used"
+                    )
+
+                heatmap_axis.set_title(
+                    "Route-position camera attention | "
+                    f"{target_point_text}"
+                )
+
+                heatmap_colorbar = heatmap_fig.colorbar(
+                    heatmap_image,
+                    ax=heatmap_axis,
+                )
+                heatmap_colorbar.set_label(
+                    "Attention weight"
+                )
+
+                heatmap_fig.tight_layout()
+                heatmap_fig.savefig(
+                    epoch_dir
+                    / f"{stem}_camera_attention_20x6.png",
+                    dpi=160,
+                )
+                plt.close(heatmap_fig)
 
             metadata = {
                 key: value

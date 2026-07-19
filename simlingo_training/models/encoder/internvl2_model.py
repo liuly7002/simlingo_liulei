@@ -10,7 +10,7 @@ class LingoInternVLModel(nn.Module):
     
     
     def __init__(self, variant, *args, **kwargs):  
-        # variant  表示需要加载的 Hugging Face InternVL2 模型名称或者 InternVL2 本地模型目录
+        # variant  表示需要加载的 Hugging Face 模型名称或者本地模型目录
         # *args    表示接收额外的位置参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
         # **kwargs 表示接收额外的关键字参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
         
@@ -25,14 +25,17 @@ class LingoInternVLModel(nn.Module):
 
         ############################################## 🏖️ 加载 InternVL2 预训练视觉语言模型 🏖️ ##############################################
         self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
-        # 这是整个类最核心的初始化操作,用于从 variant 指定的位置加载 InternVL2 模型
-        # trust_remote_code=True 表示允许 HuggingFace 执行模型仓库里自定义的 Python 代码
-        
+        """
+        AutoModel 是 Hugging Face Transformers 提供的自动模型加载接口,它会读取模型目录中的 config.json,根据配置判断应该实例化哪一种模型结构
+        from_pretrained 表示从 Hugging Face 或本地加载模型
+        trust_remote_code=True 表示允许执行模型仓库里自定义的 Python 代码
+        这是整个类最核心的初始化操作,用于从 variant 指定的位置加载 InternVL2 模型
+        加载完成之后 self.model 就是完整的 InternVL2 模型
+        """
         
         
         
         ############################################## 🏖️ 语言模型原始词表一共有多少 token embedding 🏖️ ##############################################
-        # self.model.language_model 用于访问语言模型
         try:
             self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings  # num_embeddings:语言模型原始 embedding 表中一共有多少行
         except:
