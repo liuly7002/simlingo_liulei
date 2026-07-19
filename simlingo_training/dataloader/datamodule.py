@@ -44,11 +44,10 @@ class DataModule(LightningDataModule):
         
         self.printed = False
 
-        self.NUM_CAMERAS = 6
+        self.NUM_CAMERAS = 6   # 相机数量(前、左前、右前、后、左后、右后)
         self.NUM_IMAGE_PATCHES = 2             # 一张原始输入图像会被拆成2个patch
-        # front-forward image, other images are not supported
         self.IMAGES_TO_CONSIDER = ['image_surround'] # 六视角图像，顺序由DatasetOutput.camera_order固定
-        self.NUM_IMAGE_PATCHES_TOTAL = self.NUM_CAMERAS * self.NUM_IMAGE_PATCHES  # 12=2x6
+        self.NUM_IMAGE_PATCHES_TOTAL = self.NUM_CAMERAS * self.NUM_IMAGE_PATCHES  # 总计12=2x6个patch
 
         # 每个原始视觉patch包含256个token，池化后保留32个token。
         # 因此每个相机保留2×32=64个token，六个相机共384个token。
@@ -666,22 +665,22 @@ class DataModule(LightningDataModule):
                 prompt_inference=prompt_question_languagelabel,         # 推理用 prompt 包含问题但不包含答案
             )
 
-        if not self.printed:
-            print("========================================")
-            print("[Six-view datamodule check]")
-            print("camera_images:", driving_input.camera_images.shape)
-            print("image_sizes:", driving_input.image_sizes.shape)
-            print("camera_intrinsics:", driving_input.camera_intrinsics.shape)
-            print("camera_extrinsics:", driving_input.camera_extrinsics.shape)
-            print("num_image_tokens_per_patch:", self.num_image_tokens_per_patch)
-            print(
-                "num_image_tokens_per_patch_after_pool:",
-                self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL,
-            )
-            print("num_image_tokens_total:", self.num_image_tokens_total)
-            print("camera_order:", data[0].camera_order)
-            print("========================================")
-            self.printed = True
+        # if not self.printed:
+        #     print("========================================")
+        #     print("[Six-view datamodule check]")
+        #     print("camera_images:", driving_input.camera_images.shape)
+        #     print("image_sizes:", driving_input.image_sizes.shape)
+        #     print("camera_intrinsics:", driving_input.camera_intrinsics.shape)
+        #     print("camera_extrinsics:", driving_input.camera_extrinsics.shape)
+        #     print("num_image_tokens_per_patch:", self.num_image_tokens_per_patch)
+        #     print(
+        #         "num_image_tokens_per_patch_after_pool:",
+        #         self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL,
+        #     )
+        #     print("num_image_tokens_total:", self.num_image_tokens_total)
+        #     print("camera_order:", data[0].camera_order)
+        #     print("========================================")
+        #     self.printed = True
 
         # 整个 batch 的监督信号对象
         driving_label=DrivingLabel(

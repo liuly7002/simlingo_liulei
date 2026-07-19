@@ -31,7 +31,6 @@ class LingoInternVLModel(nn.Module):
         
         
         
-        
         # 三、两个预留接口 
         self.use_global_img = None  # 预留接口
         self.processor = None       # 预留接口
@@ -48,41 +47,6 @@ class LingoInternVLModel(nn.Module):
         self.num_visual_tokens_per_patch = (
             self.visual_pool_height
             * self.visual_pool_width
-        )
-
-        # 六个相机使用独立的可学习身份embedding，固定顺序为：
-        # front、front_left、front_right、rear、rear_left、rear_right。
-        self.visual_feature_dim = int(
-            self.model.language_model.config.hidden_size
-        )
-        self.camera_identity_embedding = nn.Embedding(
-            self.num_cameras,
-            self.visual_feature_dim,
-        )
-        nn.init.normal_(
-            self.camera_identity_embedding.weight,
-            mean=0.0,
-            std=0.02,
-        )
-
-        # route分支的前20个query用于预测参考路径。
-        # 这里使用这些参考路径query对六个相机的全局特征计算注意力，
-        # 再以残差缩放的方式增强与当前参考路径更相关的相机视觉token。
-        self.num_route_queries = 20
-        self.route_attention_query = nn.Linear(
-            self.visual_feature_dim,
-            self.visual_feature_dim,
-            bias=False,
-        )
-        self.route_attention_key = nn.Linear(
-            self.visual_feature_dim,
-            self.visual_feature_dim,
-            bias=False,
-        )
-        nn.init.eye_(self.route_attention_query.weight)
-        nn.init.eye_(self.route_attention_key.weight)
-        self.route_camera_attention_gate = nn.Parameter(
-            torch.tensor(0.1)
         )
         
     
@@ -123,14 +87,6 @@ class LingoInternVLModel(nn.Module):
         IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
         img_context_token_id = self.tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
         self.img_context_token_id = img_context_token_id
-
-        # 获取<TARGET_POINT> token的id，用于将导航目标信息加入参考路径引导。
-        TARGET_POINT_TOKEN = '<TARGET_POINT>'
-        target_point_token_id = self.tokenizer.convert_tokens_to_ids(
-            TARGET_POINT_TOKEN
-        )
-        self.target_point_token_id = target_point_token_id
-        
         
         
         
@@ -159,9 +115,7 @@ class LingoInternVLModel(nn.Module):
             
             
             
-            
             input_ids = adaptor_dict['language__ids']        # ❤️ 对应的   token id,  形状为[B,L] 其中B是batch size, L是文本长度
-            
             
             
             
@@ -261,6 +215,7 @@ class LingoInternVLModel(nn.Module):
 
 
 
+
                     image_features = self.model.extract_feature(pixel_values_tmp)  # 视觉网络
                     # image_features:
                     # [BS * NP, 256, C_embed]
@@ -320,117 +275,6 @@ class LingoInternVLModel(nn.Module):
                     image_features = image_features.flatten(2)
                     image_features = image_features.transpose(1, 2).contiguous()
 
-                    # 按固定顺序恢复每个样本、相机、patch的视觉token：
-                    # [BS*12, 32, C_embed]
-                    # → [BS, 6, 2, 32, C_embed]
-                    image_features = image_features.reshape(
-                        BS,
-                        self.num_cameras,
-                        self.num_patches_per_camera,
-                        self.num_visual_tokens_per_patch,
-                        C_embed,
-                    )
-
-                    # 为六个相机加入身份embedding，使模型能够显式区分
-                    # front、front_left、front_right、rear、rear_left、rear_right。
-                    camera_ids = torch.arange(
-                        self.num_cameras,
-                        device=image_features.device,
-                    )
-                    camera_identity = self.camera_identity_embedding(
-                        camera_ids
-                    ).to(dtype=image_features.dtype)
-                    image_features = image_features + camera_identity.view(
-                        1,
-                        self.num_cameras,
-                        1,
-                        1,
-                        C_embed,
-                    )
-
-                    # 每个相机的2×32个视觉token取均值，得到六个相机级特征。
-                    camera_features = image_features.mean(dim=(2, 3))
-
-                    # route分支的前20个query受到参考路径监督，
-                    # 因此使用其汇总特征查询六个相机级特征，得到路径引导的视角权重。
-                    if 'driving_inputs' in adaptor_dict:
-                        driving_inputs = adaptor_dict['driving_inputs']
-                        assert driving_inputs.shape[1] >= self.num_route_queries, (
-                            f"Expected at least {self.num_route_queries} driving queries, "
-                            f"but received {driving_inputs.shape[1]}"
-                        )
-
-                        route_queries = driving_inputs[
-                            :, :self.num_route_queries
-                        ].to(dtype=camera_features.dtype)
-                        route_guidance = route_queries.mean(dim=1)
-
-                        # 当prompt中包含<TARGET_POINT>时，将已经经过wp_encoder编码的
-                        # 导航目标特征加入route query，使六视角注意力随当前参考方向变化。
-                        target_point_mask = (
-                            input_ids == self.target_point_token_id
-                        )
-                        target_point_count = target_point_mask.sum(
-                            dim=1,
-                            keepdim=True,
-                        ).clamp_min(1)
-                        target_point_guidance = (
-                            inputs_embeds
-                            * target_point_mask.unsqueeze(-1).to(
-                                dtype=inputs_embeds.dtype
-                            )
-                        ).sum(dim=1) / target_point_count.to(
-                            dtype=inputs_embeds.dtype
-                        )
-                        has_target_point = target_point_mask.any(
-                            dim=1,
-                            keepdim=True,
-                        )
-                        route_guidance = route_guidance + (
-                            target_point_guidance.to(
-                                dtype=route_guidance.dtype
-                            )
-                            * has_target_point.to(
-                                dtype=route_guidance.dtype
-                            )
-                        )
-
-                        route_query = self.route_attention_query(
-                            route_guidance
-                        )
-                        camera_keys = self.route_attention_key(
-                            camera_features
-                        )
-                        route_camera_scores = torch.sum(
-                            camera_keys * route_query.unsqueeze(1),
-                            dim=-1,
-                        ) * (C_embed ** -0.5)
-                        route_camera_weights = torch.softmax(
-                            route_camera_scores,
-                            dim=-1,
-                        )
-
-                        # softmax权重乘以相机数量后均值为1，
-                        # 再通过可学习gate以残差形式调整各相机视觉token强度。
-                        route_camera_weights = (
-                            route_camera_weights * self.num_cameras
-                        )
-                        attention_gate = torch.tanh(
-                            self.route_camera_attention_gate
-                        ).to(dtype=image_features.dtype)
-                        camera_scale = 1.0 + attention_gate * (
-                            route_camera_weights.to(
-                                dtype=image_features.dtype
-                            ) - 1.0
-                        )
-                        image_features = image_features * camera_scale.view(
-                            BS,
-                            self.num_cameras,
-                            1,
-                            1,
-                            1,
-                        )
-
                     # 按固定顺序恢复每个样本的视觉token：
                     # front、front_left、front_right、rear、rear_left、rear_right。
                     # 每个样本最终得到12×32=384个视觉token。
@@ -441,6 +285,8 @@ class LingoInternVLModel(nn.Module):
                     )
 
                     all_image_features.append(image_features)  # 因为可能未来有多路图像输入，所以先存列表，最后再拼接起来
+
+
 
 
 

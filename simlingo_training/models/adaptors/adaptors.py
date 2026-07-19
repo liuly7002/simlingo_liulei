@@ -541,11 +541,7 @@ class AdaptorList(nn.Module):
 
 
 
-        features_by_adaptor = self.split_outputs_by_adaptor(
-            input_dict,
-            features,
-        )
-
+        features_by_adaptor = self.split_outputs_by_adaptor(input_dict, features,)
         # Driving分支不需要logits；
         # 语言分支将在有效答案位置根据hidden features局部计算logits。
         if logits is None:
