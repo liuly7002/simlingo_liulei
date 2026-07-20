@@ -38,6 +38,8 @@ from .language import (
     describe_waypoint_shape_en,
     describe_driving_intent_name,
 )
+#修改20260720：生成由LG主要因果对象投影得到的六视角相机注意力软监督目标。
+from .camera_attention_target import build_camera_attention_supervision
 from .visualizer import save_bev_debug, save_rgb_waypoints_debug_image
 
 
@@ -1052,6 +1054,14 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     intents = infer_intents(factor, cfg)
     language = build_language_annotation(frame_name, factor, selected, scored, response_supervision=response_supervision)
 
+    #修改20260720：只使用反事实验证通过的主要因果对象计算六视角软标签；无有效对象时返回valid=false。
+    visual_grounding = build_camera_attention_supervision(
+        route_dir=route_dir,
+        frame_name=frame_name,
+        cfg=cfg,
+        causal_analysis=causal_analysis,
+    )
+
     debug_paths = {}
     if bool(cfg.debug.save_bev_debug):
         debug_path = route_dir / cfg.paths.debug_folder / f"{frame_name}_bev_waypoints.png"
@@ -1106,6 +1116,9 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         debug_paths=debug_paths,
     )
 
+    #修改20260720：将机器可读的视觉定位与相机注意力目标写入每帧LG公开标签。
+    public_out["visual_grounding"] = visual_grounding
+
     output_path = route_dir / cfg.paths.output_folder / f"{frame_name}.json.gz"
     save_json_gz(output_path, public_out)
 
@@ -1114,6 +1127,8 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         full_folder = str(_cfg_get(output_cfg, "full_debug_output_folder", "language_grounded_waypoints_full_debug"))
         full_path = route_dir / full_folder / f"{frame_name}.json.gz"
         full_out = build_full_debug_output(frame_name, mpp, ego_center, temporal_bundle, factor, current_actors, scored, selected_idx, selected_info, selected_rollout, selected, reference_route, expert_future, language, causal_analysis, response_supervision, reference_rollout, cfg)
+        #修改20260720：完整调试标签中同步保存同一份六视角注意力监督，便于核查。
+        full_out["visual_grounding"] = visual_grounding
         save_json_gz(full_path, full_out)
 
     if bool(cfg.run.verbose):

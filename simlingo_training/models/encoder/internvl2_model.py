@@ -262,14 +262,13 @@ class LingoInternVLModel(nn.Module):
             # 获取额外添加的特殊token id列表中的第一个id
             smallest_added_id = self.tokenizer.additional_special_tokens_ids[0]
 
-            # 筛选出当前batch中的出现的特殊token的id,形状为[k]
+            # 筛选出当前batch中的出现的特殊token的id,形状为[k],例如:[92544,92545],这两个就是当前batch中出现的特殊token id
             special_ids = torch.tensor(list(set(input_ids[(input_ids >= smallest_added_id)].tolist())), device=input_ids.device)
             
+            # 形状为[K,1,1] 其中K是这个batch里出现过的特殊token的种类数
+            special_ids = special_ids.view(-1, 1, 1)
             
-            special_ids = special_ids.view(-1, 1, 1)  # ❤️ 形状为[K,1,1] 其中K是这个batch里出现过的特殊token的种类数
-            # print(f"Batch has special token ids: {special_ids.squeeze().tolist()}")  # 打印这个batch里出现过的特殊token的id
-            
-            
+            # 获取 batch size 和语言序列长度,实际上就是 B L
             batch_size, seq_len = input_ids.shape
 
             if special_ids.size(0) > 0 and len(placeholder_values) > 0:
@@ -281,16 +280,16 @@ class LingoInternVLModel(nn.Module):
                 然后从 placeholder_values 中取出这个 token 对应的坐标序列，送入 wp_encoder 得到向量序列，再把这段向量序列写回 inputs_embeds 的对应位置。
                 """
                 
-                # 后面创建坐标张量时，要让它的数据类型和 wp_encoder 的参数类型一致
+                # 确定wp_encoder使用的数据类型
                 wp_encoder_dtype = wp_encoder.mlp[0].weight.dtype
 
-                # Create a mask where the special_ids are located
-                mask = input_ids == special_ids  # ❤️ mask.shape = [K, B, L]  mask 是一个中间产物
+                # 生成特殊token位置mask
+                mask = input_ids == special_ids  # ❤️ mask.shape = [K, B, L]  mask 是一个中间产物,表示第B个样本第L个位置的token id 等于第K类特殊token id
 
-                # Convert the mask to float and use torch.cumsum to get cumulative sum along the sequence length dimension
-                cumsum_mask = torch.cumsum(mask.float(), dim=2)  # ❤️
+                # 计算特殊token的累计出现次数
+                cumsum_mask = torch.cumsum(mask.float(), dim=2)
 
-                # Create a mask to get the first occurrence by checking where cumsum is 1
+                # 只保留第一次出现的位置
                 first_occurrence_mask = (cumsum_mask == 1) & mask  # ❤️ 构造“只保留第一次出现位置”的 mask  形状为 [K, B, L] 其中 K 是特殊 token 的种类数, B 是 batch size, L 是文本长度
 
                 # Use torch.argmax to get the indices of the first occurrence
@@ -304,11 +303,18 @@ class LingoInternVLModel(nn.Module):
                 # key_id是特殊id的索引, b_di是本batch内样本的索引
                 coords = [torch.tensor(placeholder_values[b_id][special_ids[key_id].item()], device=input_ids.device, dtype=wp_encoder_dtype) for key_id, b_id in zip(special_token_pos[:, 1], special_token_pos[:, 0])]  # 形状为 [N, coord_len] 其中 N 是这个 batch 里所有特殊 token 的总出现次数, coord_len 是这个特殊 token 对应的坐标序列的长度. 注意这里我们把坐标序列都放在一个列表里了, 因为不同的特殊 token 可能对应不同长度的坐标序列.
                 # print("哈哈哈哈哈哈哈哈", coords)  # 是一个点[x,y]
+                
                 coords_length_org = [len(coord) for coord in coords]      # coords_length_org=[2], 形状为 [N] 其中 N 是这个 batch 里所有特殊 token 的总出现次数, 每个元素是对应的坐标序列的长度. 这个列表后面会用来把 wp_encoder 的输出拆开.
                 # print("哈哈哈哈", coords_length_org)  # 2
+                
                 coords = torch.cat(coords)                                # 先拼接起来
+               
+                
+                
+                # 这是重点：这里将坐标数值送入wp_encoder,得到了embedding
                 wp_embeds = wp_encoder(coords.unsqueeze(0)).squeeze(0)    # 放入 wp_encoder 得到向量表示
                 # print("呵呵呵",wp_embeds.shape)   # shape [2,289]
+                
                 wp_embeds = torch.split(wp_embeds, coords_length_org)     # 再拆开
                 # print("wp_embeds shape after split:", [embed.shape for embed in wp_embeds])  # 每个元素的形状都是 [coord_len, token_embedding_dim]
                 # wp_embeds shape after split: [torch.Size([2, 896])]

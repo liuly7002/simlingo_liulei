@@ -8,9 +8,9 @@ conda activate simlingo
 
 ### 1. 生成cost map
 ```
-python lg_waypoint_planner_project/lg_waypoint_planner_project/tools_bev/generate_costmap_from_masks.py
+python lg_waypoint_planner_project/tools_bev/generate_costmap_from_masks.py
 ```
 ### 2. 生成语言标签
 ```
-python lg_waypoint_planner_project/lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_planner.py
+python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_planner.py
 ```
