@@ -424,6 +424,34 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]]
         }
         """
+
+
+
+
+        # 导航类型由route_as配置唯一确定，不再从多种导航表达中随机选择。
+        #
+        # route_as=target_point：
+        #     Target waypoint: <TARGET_POINT><TARGET_POINT>.
+        #
+        # route_as=command：
+        #     使用HLC命令。
+        #
+        # route_as=none：
+        #     不加入导航条件。
+        navigation_text = (
+            target_options[0]
+            if len(target_options) > 0
+            else ""
+        )
+
+        prompt_prefix = (
+            f"Current speed: {speed_rounded} m/s."
+        )
+
+        if navigation_text:
+            prompt_prefix = (
+                f"{prompt_prefix} {navigation_text}"
+            )
         
         
         
@@ -443,13 +471,20 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             # 子模式A: 20% 让模型“根据 commentary 预测轨迹”
             # 意思是把 commentary 当作语言条件输入,模型要生成轨迹
             # 这其实是 language-conditioned driving
+            # if random.random() < 0.2: # 20% of the time we give commentary as prompt
+            #     if random.random() < 0.5:
+            #         # 提示词
+            #         prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} {commentary} Predict the waypoints."
+            #     else:
+            #         prompt = f"Current speed: {speed_rounded} m/s. Command: {commentary} Predict the waypoints."
+            #     answer = f"Waypoints:"
             if random.random() < 0.2: # 20% of the time we give commentary as prompt
-                if random.random() < 0.5:
-                    # 提示词
-                    prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} {commentary} Predict the waypoints."
-                else:
-                    prompt = f"Current speed: {speed_rounded} m/s. Command: {commentary} Predict the waypoints."
+                prompt = (
+                    f"{prompt_prefix} "
+                    f"{commentary} Predict the waypoints."
+                )
                 answer = f"Waypoints:"
+
             # 子模式B：80% 让模型“根据场景生成 commentary，再接轨迹”
             # 用户问：接下来该怎么做？
             # 模型答：先输出 commentary，再输出轨迹
@@ -458,7 +493,11 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
             # 不是只学控制，还学语言解释。
             else:
                 # 80% of the time we want to predict commentary
-                prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} What should the ego do next?"
+                # prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} What should the ego do next?"
+                prompt = (
+                    f"{prompt_prefix} "
+                    "What should the ego do next?"
+                )
                 answer = f"{commentary} Waypoints:"
             self.num_sampled_per_type['commentary'] += 1
         
@@ -466,14 +505,20 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         elif self.use_qa and qa_exists and prompt_random < (self.prompt_probabilities['qa'] + self.prompt_probabilities['commentary']):
             # 标准 VQA 风格
             # 也就是说此时样本不是预测轨迹，而是回答场景问答
-            prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Q: {qa_question}"
+            # prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Q: {qa_question}"
+            prompt = (
+                f"{prompt_prefix} Q: {qa_question}"
+            )
             answer = f"A: {qa_answer}"
             self.num_sampled_per_type['qa'] += 1
         
         # 任务三: driving任务
         else:
             # 标准的驾驶轨迹预测样本
-            prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Predict the waypoints."
+            # prompt = f"Current speed: {speed_rounded} m/s. {random.choice(target_options)} Predict the waypoints."
+            prompt = (
+                f"{prompt_prefix} Predict the waypoints."
+            )
             answer = f"Waypoints:"
             self.num_sampled_per_type['driving'] += 1
 

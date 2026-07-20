@@ -296,11 +296,11 @@ class LocalValidationMetricsCallback(pl.Callback):
         speed_prediction = predictions.get("speed_wps_prediction")
         route_prediction = predictions.get("route_prediction")
 
-        route_camera_weights = predictions.get(
-            "route_camera_weights"
+        target_point_camera_weights = predictions.get(
+            "target_point_camera_weights"
         )
-        route_attention_entropy = predictions.get(
-            "route_attention_entropy"
+        target_point_attention_entropy = predictions.get(
+            "target_point_attention_entropy"
         )
 
         target_point_coordinates = predictions.get(
@@ -577,15 +577,6 @@ class LocalValidationMetricsCallback(pl.Callback):
             gt_route = gt_route[:common]
 
             if common > 0:
-                # 保存20个route query最终对应的实际路径坐标。
-                # route_camera_attention_20x6中的第q行，
-                # 与pred_route_points_xy_m中的第q个点相对应。
-                row["pred_route_points_xy_m"] = (
-                    pred_route.numpy().tolist()
-                )
-                row["gt_route_points_xy_m"] = (
-                    gt_route.numpy().tolist()
-                )
 
                 route_displacement = torch.linalg.norm(
                     pred_route - gt_route,
@@ -639,129 +630,113 @@ class LocalValidationMetricsCallback(pl.Callback):
             "rear_right",
         )
 
-        if isinstance(route_camera_weights, torch.Tensor):
-            # 当前样本：
-            # [20, 6]，分别对应20个route query和6个相机。
+        if isinstance(
+            target_point_camera_weights,
+            torch.Tensor,
+        ):
+            # 当前样本直接对应一组六相机权重：[6]。
             sample_camera_weights = (
-                route_camera_weights[index]
+                target_point_camera_weights[index]
                 .detach()
                 .float()
                 .cpu()
+                .reshape(-1)
             )
 
-            if (
-                sample_camera_weights.ndim == 2
-                and sample_camera_weights.shape[-1]
-                == len(camera_names)
+            if sample_camera_weights.numel() != len(
+                camera_names
             ):
-                if (
-                    sample_camera_weights.shape[0]
-                    != 20
-                ):
-                    raise ValueError(
-                        "Expected 20 route-query attention rows, "
-                        "but received "
-                        f"{sample_camera_weights.shape[0]}."
-                    )
+                raise ValueError(
+                    "Expected six target-point camera "
+                    "attention weights, but received "
+                    f"{sample_camera_weights.numel()}."
+                )
 
-                # 保存完整的[20,6]注意力矩阵。
-                #
-                # 行：
-                # route query 0～19，对应预测route的20个路径位置。
-                #
-                # 列：
-                # front、front_left、front_right、
-                # rear、rear_left、rear_right。
-                route_camera_attention_20x6 = (
-                    sample_camera_weights.numpy().tolist()
+            row[
+                "target_point_camera_weights"
+            ] = sample_camera_weights.numpy().tolist()
+
+            row[
+                "target_point_attention_camera_order"
+            ] = list(camera_names)
+
+            for camera_name, camera_weight in zip(
+                camera_names,
+                sample_camera_weights,
+            ):
+                row[
+                    f"target_point_attention_"
+                    f"{camera_name}"
+                ] = _to_float(camera_weight)
+
+            dominant_camera_index = int(
+                sample_camera_weights.argmax().item()
+            )
+
+            row[
+                "target_point_attention_dominant_camera"
+            ] = camera_names[
+                dominant_camera_index
+            ]
+
+            row[
+                "target_point_attention_max_camera_weight"
+            ] = _to_float(
+                sample_camera_weights.max()
+            )
+
+            if isinstance(
+                target_point_attention_entropy,
+                torch.Tensor,
+            ):
+                row[
+                    "target_point_attention_entropy"
+                ] = _to_float(
+                    target_point_attention_entropy[index]
+                )
+            else:
+                attention_prob = (
+                    sample_camera_weights.clamp_min(
+                        1e-8
+                    )
                 )
 
                 row[
-                    "route_camera_attention_20x6"
-                ] = route_camera_attention_20x6
-
-                row[
-                    "route_camera_attention_camera_order"
-                ] = list(camera_names)
-
-                row[
-                    "route_query_indices"
-                ] = list(
-                    range(
-                        sample_camera_weights.shape[0]
-                    )
-                )
-
-                # 对20个参考路径位置求平均，得到该样本的六相机权重。
-                mean_camera_weights = (
-                    sample_camera_weights.mean(dim=0)
-                )
-
-                for camera_name, camera_weight in zip(
-                    camera_names,
-                    mean_camera_weights,
-                ):
-                    row[
-                        f"route_attention_{camera_name}"
-                    ] = _to_float(camera_weight)
-
-                dominant_camera_index = int(
-                    mean_camera_weights.argmax().item()
-                )
-
-                row["route_attention_dominant_camera"] = (
-                    camera_names[dominant_camera_index]
-                )
-                row["route_attention_max_camera_weight"] = (
-                    _to_float(mean_camera_weights.max())
-                )
-
-                if isinstance(
-                    route_attention_entropy,
-                    torch.Tensor,
-                ):
-                    row["route_attention_entropy"] = _to_float(
-                        route_attention_entropy[index]
-                    )
-                else:
-                    attention_prob = (
-                        sample_camera_weights.clamp_min(1e-8)
-                    )
-                    attention_entropy = -(
+                    "target_point_attention_entropy"
+                ] = _to_float(
+                    -(
                         attention_prob
                         * attention_prob.log()
-                    ).sum(dim=-1)
-
-                    row["route_attention_entropy"] = _safe_mean(
-                        attention_entropy
-                        / math.log(float(len(camera_names)))
+                    ).sum()
+                    / math.log(
+                        float(len(camera_names))
                     )
+                )
 
-                if visual_record is not None:
-                    visual_record[
-                        "route_camera_mean_weights"
-                    ] = mean_camera_weights.numpy().tolist()
+            if visual_record is not None:
+                visual_record[
+                    "target_point_camera_weights"
+                ] = (
+                    sample_camera_weights
+                    .numpy()
+                    .tolist()
+                )
 
-                    # 保存完整[20,6]注意力，供热力图使用。
-                    visual_record[
-                        "route_camera_attention_20x6"
-                    ] = route_camera_attention_20x6
+                visual_record[
+                    "target_point_attention_camera_order"
+                ] = list(camera_names)
 
-                    visual_record[
-                        "route_camera_attention_camera_order"
-                    ] = list(camera_names)
+                visual_record[
+                    "target_point_attention_dominant_camera"
+                ] = row[
+                    "target_point_attention_dominant_camera"
+                ]
 
-                    visual_record[
-                        "route_attention_dominant_camera"
-                    ] = row[
-                        "route_attention_dominant_camera"
-                    ]
-
-                    visual_record[
-                        "route_attention_entropy"
-                    ] = row[
-                        "route_attention_entropy"
-                    ]
+                visual_record[
+                    "target_point_attention_entropy"
+                ] = row[
+                    "target_point_attention_entropy"
+                ]
 
         # 将当前样本实际使用的<TARGET_POINT>加入可视化记录。
         if visual_record is not None:
@@ -939,77 +914,12 @@ class LocalValidationMetricsCallback(pl.Callback):
             fig.savefig(epoch_dir / f"{stem}.png", dpi=160)
             plt.close(fig)
 
-            # 单独保存六视角注意力柱状图，
-            # 不修改原有轨迹可视化布局。
-            if "route_camera_mean_weights" in record:
-                camera_names = (
-                    "front",
-                    "front_left",
-                    "front_right",
-                    "rear",
-                    "rear_left",
-                    "rear_right",
-                )
 
-                camera_weights = np.asarray(
-                    record["route_camera_mean_weights"],
-                    dtype=np.float32,
-                )
-
-                attention_fig = plt.figure(
-                    figsize=(8.0, 4.5)
-                )
-                attention_axis = attention_fig.add_subplot(
-                    1,
-                    1,
-                    1,
-                )
-
-                attention_axis.bar(
-                    camera_names,
-                    camera_weights,
-                )
-                attention_axis.set_ylim(0.0, 1.0)
-                attention_axis.set_ylabel(
-                    "Mean route-guided attention"
-                )
-                attention_axis.set_xlabel("Camera")
-                attention_axis.grid(
-                    True,
-                    axis="y",
-                )
-                attention_axis.tick_params(
-                    axis="x",
-                    rotation=25,
-                )
-
-                attention_axis.set_title(
-                    "Dominant camera: "
-                    f"{record['route_attention_dominant_camera']} | "
-                    "Normalized entropy: "
-                    f"{record['route_attention_entropy']:.3f}"
-                )
-
-                attention_fig.tight_layout()
-                attention_fig.savefig(
-                    epoch_dir
-                    / f"{stem}_camera_attention.png",
-                    dpi=160,
-                )
-                plt.close(attention_fig)
-
-            # 保存完整[20,6]路径位置—相机注意力热力图。
-            if "route_camera_attention_20x6" in record:
-                route_camera_attention = np.asarray(
-                    record[
-                        "route_camera_attention_20x6"
-                    ],
-                    dtype=np.float32,
-                )
-
+            # 单独保存目标点引导的六视角注意力柱状图。
+            if "target_point_camera_weights" in record:
                 camera_names = tuple(
                     record.get(
-                        "route_camera_attention_camera_order",
+                        "target_point_attention_camera_order",
                         (
                             "front",
                             "front_left",
@@ -1021,108 +931,87 @@ class LocalValidationMetricsCallback(pl.Callback):
                     )
                 )
 
-                if route_camera_attention.shape != (
-                    20,
-                    6,
-                ):
-                    raise ValueError(
-                        "Expected route camera attention shape "
-                        f"(20, 6), but received "
-                        f"{route_camera_attention.shape}."
-                    )
-
-                heatmap_fig = plt.figure(
-                    figsize=(10.0, 5.0)
-                )
-                heatmap_axis = heatmap_fig.add_subplot(
-                    1,
-                    1,
-                    1,
+                camera_weights = np.asarray(
+                    record[
+                        "target_point_camera_weights"
+                    ],
+                    dtype=np.float32,
                 )
 
-                # 转置为[6,20]：
-                # 纵轴是六个相机，横轴是20个route query。
-                heatmap_image = heatmap_axis.imshow(
-                    route_camera_attention.T,
-                    aspect="auto",
-                    origin="lower",
+                attention_fig = plt.figure(
+                    figsize=(8.0, 4.5)
                 )
-
-                heatmap_axis.set_yticks(
-                    np.arange(len(camera_names))
-                )
-                heatmap_axis.set_yticklabels(
-                    camera_names
-                )
-
-                heatmap_axis.set_xticks(
-                    np.arange(
-                        route_camera_attention.shape[0]
-                    )
-                )
-                heatmap_axis.set_xticklabels(
-                    np.arange(
+                attention_axis = (
+                    attention_fig.add_subplot(
                         1,
-                        route_camera_attention.shape[0] + 1,
-                    ),
-                    fontsize=8,
+                        1,
+                        1,
+                    )
                 )
 
-                heatmap_axis.set_xlabel(
-                    "Route query / path position"
+                attention_axis.bar(
+                    camera_names,
+                    camera_weights,
                 )
-                heatmap_axis.set_ylabel(
+                attention_axis.set_ylim(
+                    0.0,
+                    1.0,
+                )
+                attention_axis.set_ylabel(
+                    "Target-point-guided attention"
+                )
+                attention_axis.set_xlabel(
                     "Camera"
                 )
+                attention_axis.grid(
+                    True,
+                    axis="y",
+                )
+                attention_axis.tick_params(
+                    axis="x",
+                    rotation=25,
+                )
 
+                target_point_text = ""
                 if "target_points_xy_m" in record:
-                    target_point_x = (
-                        record["target_points_xy_m"][0][0]
+                    target_point_1 = (
+                        record[
+                            "target_points_xy_m"
+                        ][0]
                     )
-                    target_point_y = (
-                        record["target_points_xy_m"][0][1]
-                    )
-
-                    next_target_point_x = (
-                        record["target_points_xy_m"][1][0]
-                    )
-                    next_target_point_y = (
-                        record["target_points_xy_m"][1][1]
+                    target_point_2 = (
+                        record[
+                            "target_points_xy_m"
+                        ][1]
                     )
 
                     target_point_text = (
-                        "TARGET_POINT_1="
-                        f"({target_point_x:.3f}, "
-                        f"{target_point_y:.3f}) m | "
-                        "TARGET_POINT_2="
-                        f"({next_target_point_x:.3f}, "
-                        f"{next_target_point_y:.3f}) m"
-                    )
-                else:
-                    target_point_text = (
-                        "TARGET_POINT not used"
+                        "\nTP1="
+                        f"({target_point_1[0]:.2f}, "
+                        f"{target_point_1[1]:.2f}) m | "
+                        "TP2="
+                        f"({target_point_2[0]:.2f}, "
+                        f"{target_point_2[1]:.2f}) m"
                     )
 
-                heatmap_axis.set_title(
-                    "Route-position camera attention | "
+                attention_axis.set_title(
+                    "Dominant camera: "
+                    f"{record['target_point_attention_dominant_camera']} | "
+                    "Normalized entropy: "
+                    f"{record['target_point_attention_entropy']:.3f}"
                     f"{target_point_text}"
                 )
 
-                heatmap_colorbar = heatmap_fig.colorbar(
-                    heatmap_image,
-                    ax=heatmap_axis,
-                )
-                heatmap_colorbar.set_label(
-                    "Attention weight"
-                )
-
-                heatmap_fig.tight_layout()
-                heatmap_fig.savefig(
+                attention_fig.tight_layout()
+                attention_fig.savefig(
                     epoch_dir
-                    / f"{stem}_camera_attention_20x6.png",
+                    / (
+                        f"{stem}_"
+                        "target_point_camera_attention.png"
+                    ),
                     dpi=160,
                 )
-                plt.close(heatmap_fig)
+                plt.close(attention_fig)
 
             metadata = {
                 key: value

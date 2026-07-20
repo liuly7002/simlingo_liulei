@@ -19,8 +19,15 @@ class VLMEncoderModel(nn.Module):
         
         self.token_size = self.embed_dim
 
+        # if 'internvl2' in self.variant.lower():
+        #     self.image_encoder = LingoInternVLModel(self.variant, *cfg)
         if 'internvl2' in self.variant.lower():
-            self.image_encoder = LingoInternVLModel(self.variant, *cfg)
+            self.image_encoder = LingoInternVLModel(
+                self.variant,
+                use_target_point_camera_attention=(
+                    self.use_target_point_camera_attention
+                ),
+            )
         else:
             raise ValueError(f"Unknown variant {self.variant}")
         

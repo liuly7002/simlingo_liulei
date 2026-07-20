@@ -557,7 +557,12 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             #     if self.split == "train"
             #     else target_options[0]
             # )
-            navigation_text = random.choice(target_options)
+            # navigation_text = random.choice(target_options)
+            # prefix = f"{prefix} {navigation_text}"
+            
+            # 导航类型由route_as唯一确定，
+            # LG训练和验证均不再随机切换导航表达。
+            navigation_text = target_options[0]
             prefix = f"{prefix} {navigation_text}"
 
         prompt, answer = self._build_language_text(

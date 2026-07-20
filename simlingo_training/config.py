@@ -11,6 +11,9 @@ class VLMEncoderConfig:
     embed_dim: int = 512
     freeze: bool = False
 
+    # 是否启用目标点引导的六视角相机注意力。
+    use_target_point_camera_attention: bool = True
+
     _target_: str = "simlingo_training.models.encoder.vlm.VLMEncoderModel"
 
 
@@ -72,7 +75,7 @@ class DatasetBaseConfig:
 
     num_route_points: int = 20
 
-    route_as: str = 'target_point_command'  # target_point_command, target_point, command
+    route_as: str = 'target_point_command'  # none, target_point, command, target_point_command
     use_lmdrive_commands: bool = True
 
 

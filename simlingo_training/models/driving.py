@@ -387,11 +387,12 @@ class DrivingModel(pl.LightningModule):
 
     
 
+
     ########################################### 训练/验证阶段内部使用的注意力日志函数 ###########################################
 
-    def log_route_camera_attention(self, mode: str) -> None:
+    def log_target_point_camera_attention(self, mode: str,) -> None:
         """
-        将参考路径引导的六视角注意力记录到W&B。
+        将目标点引导的六视角相机注意力记录到W&B。
 
         mode:
             train 或 val
@@ -399,16 +400,18 @@ class DrivingModel(pl.LightningModule):
 
         image_encoder = self.vision_model.image_encoder
 
-        route_camera_weights = getattr(
+        target_point_camera_weights = getattr(
             image_encoder,
-            "latest_route_camera_weights",
+            "latest_target_point_camera_weights",
             None,
         )
 
-        if not isinstance(route_camera_weights, torch.Tensor):
+        if not isinstance(
+            target_point_camera_weights,
+            torch.Tensor,
+        ):
             return
 
-        # 固定顺序必须和六视角数据读取顺序保持一致。
         camera_names = (
             "front",
             "front_left",
@@ -418,18 +421,23 @@ class DrivingModel(pl.LightningModule):
             "rear_right",
         )
 
-        assert route_camera_weights.shape[-1] == len(camera_names), (
-            "The number of route camera attention weights does not "
-            f"match the camera order: "
-            f"{route_camera_weights.shape[-1]} vs {len(camera_names)}"
+        assert (
+            target_point_camera_weights.ndim == 2
+            and target_point_camera_weights.shape[-1]
+            == len(camera_names)
+        ), (
+            "Target-point camera attention must have shape "
+            f"[B,6], but received "
+            f"{tuple(target_point_camera_weights.shape)}."
         )
 
-        # 对batch和20个route query取平均，得到当前batch的六相机权重。
-        mean_camera_weights = route_camera_weights.mean(
-            dim=(0, 1)
+        mean_camera_weights = (
+            target_point_camera_weights.mean(dim=0)
         )
 
-        batch_size = int(route_camera_weights.shape[0])
+        batch_size = int(
+            target_point_camera_weights.shape[0]
+        )
         on_step = mode == "train"
 
         for camera_name, camera_weight in zip(
@@ -437,7 +445,8 @@ class DrivingModel(pl.LightningModule):
             mean_camera_weights,
         ):
             self.log(
-                f"{mode}_route_attention/{camera_name}",
+                f"{mode}_target_point_attention/"
+                f"{camera_name}",
                 camera_weight,
                 on_step=on_step,
                 on_epoch=True,
@@ -447,16 +456,20 @@ class DrivingModel(pl.LightningModule):
                 sync_dist=True,
             )
 
-        route_attention_entropy = getattr(
+        target_point_attention_entropy = getattr(
             image_encoder,
-            "latest_route_attention_entropy",
+            "latest_target_point_attention_entropy",
             None,
         )
 
-        if isinstance(route_attention_entropy, torch.Tensor):
+        if isinstance(
+            target_point_attention_entropy,
+            torch.Tensor,
+        ):
             self.log(
-                f"{mode}_route_attention/normalized_entropy",
-                route_attention_entropy.mean(),
+                f"{mode}_target_point_attention/"
+                "normalized_entropy",
+                target_point_attention_entropy.mean(),
                 on_step=on_step,
                 on_epoch=True,
                 prog_bar=False,
@@ -465,15 +478,20 @@ class DrivingModel(pl.LightningModule):
                 sync_dist=True,
             )
 
-        # 记录真正作用于网络的gate值，而不是未经tanh的原始参数。
-        if hasattr(image_encoder, "route_query_fusion_gate"):
-            route_query_fusion_gate = torch.tanh(
-                image_encoder.route_query_fusion_gate.detach()
+        if hasattr(
+            image_encoder,
+            "target_point_camera_attention_gate",
+        ):
+            attention_gate = torch.tanh(
+                image_encoder
+                .target_point_camera_attention_gate
+                .detach()
             ).float()
 
             self.log(
-                f"{mode}_route_attention/query_fusion_gate",
-                route_query_fusion_gate,
+                f"{mode}_target_point_attention/"
+                "camera_scaling_gate",
+                attention_gate,
                 on_step=on_step,
                 on_epoch=True,
                 prog_bar=False,
@@ -481,23 +499,6 @@ class DrivingModel(pl.LightningModule):
                 batch_size=batch_size,
                 sync_dist=True,
             )
-
-        if hasattr(image_encoder, "route_camera_attention_gate"):
-            route_camera_attention_gate = torch.tanh(
-                image_encoder.route_camera_attention_gate.detach()
-            ).float()
-
-            self.log(
-                f"{mode}_route_attention/camera_scaling_gate",
-                route_camera_attention_gate,
-                on_step=on_step,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=batch_size,
-                sync_dist=True,
-            )
-
 
     
     ########################################### 训练/验证阶段内部使用的“前向 + 算损失”函数 ###########################################
@@ -535,32 +536,36 @@ class DrivingModel(pl.LightningModule):
 
         image_encoder = self.vision_model.image_encoder
 
-        # 将六视角注意力加入per-sample验证输出，
-        # 供LocalValidationMetricsCallback保存和可视化。
-        route_camera_weights = getattr(
+        target_point_camera_weights = getattr(
             image_encoder,
-            "latest_route_camera_weights",
+            "latest_target_point_camera_weights",
             None,
         )
 
-        if isinstance(route_camera_weights, torch.Tensor):
-            pred_labels["route_camera_weights"] = (
-                route_camera_weights
-            )
+        if isinstance(
+            target_point_camera_weights,
+            torch.Tensor,
+        ):
+            pred_labels[
+                "target_point_camera_weights"
+            ] = target_point_camera_weights
 
-        route_attention_entropy = getattr(
+        target_point_attention_entropy = getattr(
             image_encoder,
-            "latest_route_attention_entropy",
+            "latest_target_point_attention_entropy",
             None,
         )
 
-        if isinstance(route_attention_entropy, torch.Tensor):
-            pred_labels["route_attention_entropy"] = (
-                route_attention_entropy
-            )
+        if isinstance(
+            target_point_attention_entropy,
+            torch.Tensor,
+        ):
+            pred_labels[
+                "target_point_attention_entropy"
+            ] = target_point_attention_entropy
 
         # 训练和验证都记录六视角注意力统计。
-        self.log_route_camera_attention(
+        self.log_target_point_camera_attention(
             "train" if self.training else "val"
         )
 

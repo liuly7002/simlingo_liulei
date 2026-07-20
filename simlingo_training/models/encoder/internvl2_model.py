@@ -9,15 +9,35 @@ import torch.nn.functional as F
 class LingoInternVLModel(nn.Module):
     
     
-    def __init__(self, variant, *args, **kwargs):  
+    # def __init__(self, variant, *args, **kwargs):  
         # variant  表示需要加载的 Hugging Face 模型名称或者本地模型目录
         # *args    表示接收额外的位置参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
         # **kwargs 表示接收额外的关键字参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
+
+
+    def __init__(
+        self,
+        variant,
+        use_target_point_camera_attention=True,
+        *args,
+        **kwargs,
+    ):
         
         
         
         # 调用父类nn.Module 的构造函数
         super().__init__()
+
+
+
+
+
+        # 消融实验开关：
+        # True  ：TARGET_POINT + 六视角注意力
+        # False ：不使用六视角注意力
+        self.use_target_point_camera_attention = bool(
+            use_target_point_camera_attention
+        )
         
         
         
@@ -99,52 +119,98 @@ class LingoInternVLModel(nn.Module):
         """
 
 
-        ############################################## 🏖️ 定义参考路径引导的六视角注意力 🏖️ ##############################################
-        # route分支的前20个query分别对应20个参考路径位置。
-        # 每个query分别查询六个相机级特征，得到逐路径位置的多视角上下文。
-        self.num_route_queries = 20  # 表示从adaptor_dict['driving_inputs']中取前20个query作为参考路径query
+        # ############################################## 🏖️ 定义参考路径引导的六视角注意力 🏖️ ##############################################
+        # # route分支的前20个query分别对应20个参考路径位置。
+        # # 每个query分别查询六个相机级特征，得到逐路径位置的多视角上下文。
+        # self.num_route_queries = 20  # 表示从adaptor_dict['driving_inputs']中取前20个query作为参考路径query
         
-        # 使用较低维度计算六视角注意力，减少额外参数量和计算量。
-        # 表示注意力计算不直接在完整的视觉特征维度 256 上进行，而是先降维到 128 维
-        # 较高的维度特征承担更多的任务,较低的维度可以使得模型专注于学习"某个路径位置应该关注哪个相机"
-        self.route_attention_dim = 128  
+        # # 使用较低维度计算六视角注意力，减少额外参数量和计算量。
+        # # 表示注意力计算不直接在完整的视觉特征维度 256 上进行，而是先降维到 128 维
+        # # 较高的维度特征承担更多的任务,较低的维度可以使得模型专注于学习"某个路径位置应该关注哪个相机"
+        # self.route_attention_dim = 128  
         
-        # 注意力中的 Query 投影层,输入是每个路径的query[B,20,D]
-        self.route_attention_query = nn.Linear(
-            self.visual_feature_dim,
-            self.route_attention_dim,
-            bias=False,
-        )
+        # # 注意力中的 Query 投影层,输入是每个路径的query[B,20,D]
+        # self.route_attention_query = nn.Linear(
+        #     self.visual_feature_dim,
+        #     self.route_attention_dim,
+        #     bias=False,
+        # )
 
-        # 注意力中的 Key 投影层,输入是六个相机级特征[B,6,D]
-        self.route_attention_key = nn.Linear(
-            self.visual_feature_dim,
-            self.route_attention_dim,
-            bias=False,
-        )
+        # # 注意力中的 Key 投影层,输入是六个相机级特征[B,6,D]
+        # self.route_attention_key = nn.Linear(
+        #     self.visual_feature_dim,
+        #     self.route_attention_dim,
+        #     bias=False,
+        # )
 
-        # 两个线性层的 Xavier 初始化
-        nn.init.xavier_uniform_(
-            self.route_attention_query.weight  # 路径注意力
-        )
-        nn.init.xavier_uniform_(
-            self.route_attention_key.weight    # 路径注意力
-        )
+        # # 两个线性层的 Xavier 初始化
+        # nn.init.xavier_uniform_(
+        #     self.route_attention_query.weight  # 路径注意力
+        # )
+        # nn.init.xavier_uniform_(
+        #     self.route_attention_key.weight    # 路径注意力
+        # )
 
-        # 控制六视角上下文写入route query的强度。
-        self.route_query_fusion_gate = nn.Parameter(
-            torch.tensor(0.1)
-        )
-        # 控制路径注意力对原始视觉token的残差增强强度。
-        self.route_camera_attention_gate = nn.Parameter(
-            torch.tensor(0.1)
-        )
+        # # 控制六视角上下文写入route query的强度。
+        # self.route_query_fusion_gate = nn.Parameter(
+        #     torch.tensor(0.1)
+        # )
+        # # 控制路径注意力对原始视觉token的残差增强强度。
+        # self.route_camera_attention_gate = nn.Parameter(
+        #     torch.tensor(0.1)
+        # )
 
-        # 保存最近一次前向传播中的六视角注意力统计，
-        # 用于W&B日志和本地验证结果记录。
-        # 前向传播时会进行detach，不参与损失计算。
-        self.latest_route_camera_weights = None
-        self.latest_route_attention_entropy = None
+        # # 保存最近一次前向传播中的六视角注意力统计，
+        # # 用于W&B日志和本地验证结果记录。
+        # # 前向传播时会进行detach，不参与损失计算。
+        # self.latest_route_camera_weights = None
+        # self.latest_route_attention_entropy = None
+
+
+
+
+        ############################################## 🏖️ 定义目标点引导的六视角相机注意力 🏖️ ##############################################
+        # 使用两个<TARGET_POINT> token的embedding共同描述当前导航方向：
+        #
+        # [B, 2, D]
+        # → [B, 2D]
+        # → [B, attention_dim]
+        #
+        # 这里不再使用20个route query计算相机注意力。
+        if self.use_target_point_camera_attention:
+            self.target_point_attention_dim = 128
+
+            # 两个目标点embedding按顺序拼接，
+            # 保留近端目标点和远端目标点之间的方向变化。
+            self.target_point_attention_query = nn.Linear(
+                self.visual_feature_dim * 2,
+                self.target_point_attention_dim,
+                bias=False,
+            )
+
+            # 将六个相机级视觉特征映射到注意力空间。
+            self.target_point_attention_key = nn.Linear(
+                self.visual_feature_dim,
+                self.target_point_attention_dim,
+                bias=False,
+            )
+
+            nn.init.xavier_uniform_(
+                self.target_point_attention_query.weight
+            )
+            nn.init.xavier_uniform_(
+                self.target_point_attention_key.weight
+            )
+
+            # 控制目标点注意力对六视角视觉token的残差调节强度。
+            self.target_point_camera_attention_gate = nn.Parameter(
+                torch.tensor(0.1)
+            )
+
+        # 保存最近一次前向传播的[B,6]六视角注意力，
+        # 用于W&B日志与本地验证。
+        self.latest_target_point_camera_weights = None
+        self.latest_target_point_attention_entropy = None
         
     
     
@@ -167,6 +233,12 @@ class LingoInternVLModel(nn.Module):
             第二种:<IMG_CONTEXT> token
                 这是图像上下文占位token,后面会被视觉编码器输出的image feature替换
         """
+
+
+        # 每次前向传播开始时清空上一个batch保存的注意力结果。
+        # 防止关闭注意力、纯文本样本或异常分支误用旧缓存。
+        self.latest_target_point_camera_weights = None
+        self.latest_target_point_attention_entropy = None
         
         
         
@@ -408,243 +480,137 @@ class LingoInternVLModel(nn.Module):
                         C_embed,
                     )
 
-                    # # 每个相机的2×32个视觉token取均值，得到六个相机级特征。
-                    # camera_features = image_features.mean(dim=(2, 3))
 
-                    # # route分支的前20个query受到参考路径监督，
-                    # # 因此使用其汇总特征查询六个相机级特征，得到路径引导的视角权重。
-                    # if 'driving_inputs' in adaptor_dict:
-                    #     driving_inputs = adaptor_dict['driving_inputs']
-                    #     assert driving_inputs.shape[1] >= self.num_route_queries, (
-                    #         f"Expected at least {self.num_route_queries} driving queries, "
-                    #         f"but received {driving_inputs.shape[1]}"
-                    #     )
 
-                    #     route_queries = driving_inputs[
-                    #         :, :self.num_route_queries
-                    #     ].to(dtype=camera_features.dtype)
-                    #     route_guidance = route_queries.mean(dim=1)
 
-                    #     # 当prompt中包含<TARGET_POINT>时，将已经经过wp_encoder编码的
-                    #     # 导航目标特征加入route query，使六视角注意力随当前参考方向变化。
-                    #     target_point_mask = (
-                    #         input_ids == self.target_point_token_id
-                    #     )
-                    #     target_point_count = target_point_mask.sum(
-                    #         dim=1,
-                    #         keepdim=True,
-                    #     ).clamp_min(1)
-                    #     target_point_guidance = (
-                    #         inputs_embeds
-                    #         * target_point_mask.unsqueeze(-1).to(
-                    #             dtype=inputs_embeds.dtype
-                    #         )
-                    #     ).sum(dim=1) / target_point_count.to(
-                    #         dtype=inputs_embeds.dtype
-                    #     )
-                    #     has_target_point = target_point_mask.any(
-                    #         dim=1,
-                    #         keepdim=True,
-                    #     )
-                    #     route_guidance = route_guidance + (
-                    #         target_point_guidance.to(
-                    #             dtype=route_guidance.dtype
-                    #         )
-                    #         * has_target_point.to(
-                    #             dtype=route_guidance.dtype
-                    #         )
-                    #     )
 
-                    #     route_query = self.route_attention_query(
-                    #         route_guidance
-                    #     )
-                    #     camera_keys = self.route_attention_key(
-                    #         camera_features
-                    #     )
-                    #     route_camera_scores = torch.sum(
-                    #         camera_keys * route_query.unsqueeze(1),
-                    #         dim=-1,
-                    #     ) * (C_embed ** -0.5)
-                    #     route_camera_weights = torch.softmax(
-                    #         route_camera_scores,
-                    #         dim=-1,
-                    #     )
 
-                    #     # softmax权重乘以相机数量后均值为1，
-                    #     # 再通过可学习gate以残差形式调整各相机视觉token强度。
-                    #     route_camera_weights = (
-                    #         route_camera_weights * self.num_cameras
-                    #     )
-                    #     attention_gate = torch.tanh(
-                    #         self.route_camera_attention_gate
-                    #     ).to(dtype=image_features.dtype)
-                    #     camera_scale = 1.0 + attention_gate * (
-                    #         route_camera_weights.to(
-                    #             dtype=image_features.dtype
-                    #         ) - 1.0
-                    #     )
-                    #     image_features = image_features * camera_scale.view(
-                    #         BS,
-                    #         self.num_cameras,
-                    #         1,
-                    #         1,
-                    #         1,
-                    #     )
 
-                    # 每个相机的2×32个视觉token取均值，得到六个相机级特征。
-                    camera_features = image_features.mean(dim=(2, 3))
-
-                    # route分支的前20个query分别查询六个相机级特征。
-                    # 不再先对20个query求均值，从而保留不同参考路径位置的差异。
-                    if 'driving_inputs' in adaptor_dict:
-                        driving_inputs = adaptor_dict['driving_inputs']
-
-                        assert driving_inputs.shape[1] >= self.num_route_queries, (
-                            f"Expected at least {self.num_route_queries} driving queries, "
-                            f"but received {driving_inputs.shape[1]}"
+                    if self.use_target_point_camera_attention:
+                        # 每个相机的2×32个视觉token取均值，
+                        # 得到六个相机级特征：[B,6,D]。
+                        camera_features = image_features.mean(
+                            dim=(2, 3)
                         )
 
-                        # [BS, 20, C_embed]
-                        route_queries = driving_inputs[
-                            :, :self.num_route_queries
-                        ].to(dtype=camera_features.dtype)
-
-                        # 默认使用20个可学习route query进行视角查询。
-                        route_queries_for_attention = route_queries
-
-                        # 当prompt中包含<TARGET_POINT>时，将经过wp_encoder编码的
-                        # 导航目标特征加入每一个route query，使注意力能够随当前
-                        # 导航方向变化。
                         target_point_mask = (
-                            input_ids == self.target_point_token_id
+                            input_ids
+                            == self.target_point_token_id
                         )
 
-                        target_point_count = target_point_mask.sum(
-                            dim=1,
-                            keepdim=True,
-                        ).clamp_min(1)
+                        target_point_count = (
+                            target_point_mask.sum(dim=1)
+                        )
 
-                        target_point_guidance = (
-                            inputs_embeds
-                            * target_point_mask.unsqueeze(-1).to(
-                                dtype=inputs_embeds.dtype
+                        # 完整模型要求每个样本固定包含两个目标点。
+                        if not torch.all(
+                            target_point_count == 2
+                        ):
+                            raise RuntimeError(
+                                "Target-point-guided camera attention "
+                                "requires exactly two <TARGET_POINT> "
+                                "tokens in every sample, but received "
+                                f"counts={target_point_count.tolist()}."
                             )
-                        ).sum(dim=1) / target_point_count.to(
-                            dtype=inputs_embeds.dtype
+
+                        # 按batch恢复两个目标点的embedding：
+                        # [B*2,D] → [B,2,D]。
+                        target_point_embeddings = (
+                            inputs_embeds[
+                                target_point_mask
+                            ].reshape(
+                                BS,
+                                2,
+                                C_embed,
+                            )
                         )
 
-                        has_target_point = target_point_mask.any(
-                            dim=1,
-                            keepdim=True,
+                        # 保留两个目标点的先后顺序：
+                        # [B,2,D] → [B,2D]。
+                        target_point_guidance = (
+                            target_point_embeddings.reshape(
+                                BS,
+                                2 * C_embed,
+                            )
                         )
 
-                        route_queries_for_attention = (
-                            route_queries_for_attention
-                            + target_point_guidance.to(
-                                dtype=route_queries.dtype
-                            ).unsqueeze(1)
-                            * has_target_point.to(
-                                dtype=route_queries.dtype
-                            ).unsqueeze(-1)
+                        # Query：[B,attention_dim]。
+                        target_point_query_features = (
+                            self.target_point_attention_query(
+                                target_point_guidance
+                            )
                         )
 
-                        # route_query_features: [BS, 20, attention_dim]
-                        route_query_features = self.route_attention_query(
-                            route_queries_for_attention
+                        # Key：[B,6,attention_dim]。
+                        camera_key_features = (
+                            self.target_point_attention_key(
+                                camera_features
+                            )
                         )
 
-                        # camera_key_features: [BS, 6, attention_dim]
-                        camera_key_features = self.route_attention_key(
-                            camera_features
+                        # 每个样本只产生一组六相机权重：[B,6]。
+                        target_point_camera_scores = (
+                            torch.einsum(
+                                "bd,bcd->bc",
+                                target_point_query_features,
+                                camera_key_features,
+                            )
+                            * (
+                                self.target_point_attention_dim
+                                ** -0.5
+                            )
                         )
 
-                        # 每一个route query分别对六个相机计算注意力。
-                        # route_camera_scores: [BS, 20, 6]
-                        route_camera_scores = torch.einsum(
-                            "bqd,bcd->bqc",
-                            route_query_features,
-                            camera_key_features,
-                        ) * (self.route_attention_dim ** -0.5)
-
-                        route_camera_weights = torch.softmax(
-                            route_camera_scores,
-                            dim=-1,
+                        target_point_camera_weights = (
+                            torch.softmax(
+                                target_point_camera_scores.float(),
+                                dim=-1,
+                            ).to(
+                                dtype=camera_features.dtype
+                            )
                         )
 
-                        # 保存最近一次前向传播的逐路径位置六视角注意力。
-                        # detach避免日志记录保留反向传播计算图。
-                        route_camera_weights_detached = (
-                            route_camera_weights.detach().float()
+                        target_point_camera_weights_detached = (
+                            target_point_camera_weights
+                            .detach()
+                            .float()
                         )
 
-                        self.latest_route_camera_weights = (
-                            route_camera_weights_detached
+                        self.latest_target_point_camera_weights = (
+                            target_point_camera_weights_detached
                         )
 
-                        # 计算每个route query对应的注意力熵。
-                        route_attention_prob = (
-                            route_camera_weights_detached.clamp_min(1e-8)
+                        attention_prob = (
+                            target_point_camera_weights_detached
+                            .clamp_min(1e-8)
                         )
 
-                        route_attention_entropy = -(
-                            route_attention_prob
-                            * route_attention_prob.log()
-                        ).sum(dim=-1)
-
-                        # 使用log(6)归一化到[0,1]。
-                        # 越接近1表示六视角权重越均匀；
-                        # 越接近0表示模型集中关注少数相机。
-                        self.latest_route_attention_entropy = (
-                            route_attention_entropy
-                            / math.log(float(self.num_cameras))
-                        ).mean(dim=1)
-
-                        # 按照每个路径query对应的六相机权重融合视觉信息。
-                        # route_context: [BS, 20, C_embed]
-                        route_context = torch.einsum(
-                            "bqc,bcd->bqd",
-                            route_camera_weights,
-                            camera_features,
+                        self.latest_target_point_attention_entropy = (
+                            -(
+                                attention_prob
+                                * attention_prob.log()
+                            ).sum(dim=-1)
+                            / math.log(
+                                float(self.num_cameras)
+                            )
                         )
 
-                        # 将六视角上下文直接写入20个route query。
-                        # route loss可以通过该分支直接监督六视角注意力。
-                        route_query_fusion_gate = torch.tanh(
-                            self.route_query_fusion_gate
-                        ).to(dtype=route_context.dtype)
-
-                        fused_route_queries = (
-                            route_queries
-                            + route_query_fusion_gate * route_context
-                        )
-
-                        # 不使用原地赋值，避免破坏query参数的梯度计算图。
-                        adaptor_dict['driving_inputs'] = torch.cat(
-                            (
-                                fused_route_queries.to(
-                                    dtype=driving_inputs.dtype
-                                ),
-                                driving_inputs[
-                                    :, self.num_route_queries:
-                                ],
-                            ),
-                            dim=1,
-                        )
-
-                        # 将20个路径位置的注意力取均值，
-                        # 得到整体六相机权重，用于残差增强视觉token。
+                        # softmax权重乘以相机数后，
+                        # 完全均匀时每个相机的缩放基准为1。
                         camera_attention_weights = (
-                            route_camera_weights.mean(dim=1)
+                            target_point_camera_weights
                             * self.num_cameras
                         )
 
-                        route_camera_attention_gate = torch.tanh(
-                            self.route_camera_attention_gate
-                        ).to(dtype=image_features.dtype)
+                        attention_gate = torch.tanh(
+                            self.target_point_camera_attention_gate
+                        ).to(
+                            dtype=image_features.dtype
+                        )
 
                         camera_scale = (
                             1.0
-                            + route_camera_attention_gate
+                            + attention_gate
                             * (
                                 camera_attention_weights.to(
                                     dtype=image_features.dtype
@@ -653,6 +619,7 @@ class LingoInternVLModel(nn.Module):
                             )
                         )
 
+                        # 同一相机的全部视觉token使用同一个目标点条件权重。
                         image_features = (
                             image_features
                             * camera_scale.view(
@@ -663,6 +630,9 @@ class LingoInternVLModel(nn.Module):
                                 1,
                             )
                         )
+
+
+
 
 
                     # 按固定顺序恢复每个样本的视觉token：
@@ -768,28 +738,6 @@ class LingoInternVLModel(nn.Module):
             
             for b, i in enumerate(start_id):
                 adaptor_dict['inputs'][b][:len(adaptor_dict['language_inputs'][b])-i] = inputs_embeds[b][i:]
-
-            # route query经过六视角注意力融合后，
-            # 重新按照原始language + driving顺序构造完整输入，
-            # 再根据原有perm恢复当前Transformer使用的token顺序。
-            if 'driving_inputs' in adaptor_dict:
-                inputs_original_order = torch.cat(
-                    (
-                        adaptor_dict['language_inputs'],
-                        adaptor_dict['driving_inputs'],
-                    ),
-                    dim=1,
-                )
-
-                batch_indices = torch.arange(
-                    inputs_original_order.size(0),
-                    device=inputs_original_order.device,
-                )[:, None]
-
-                adaptor_dict['inputs'] = inputs_original_order[
-                    batch_indices,
-                    adaptor_dict['perm'],
-                ]
-            
+     
         return adaptor_dict
             
