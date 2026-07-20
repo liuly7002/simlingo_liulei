@@ -423,16 +423,163 @@ class LocalValidationMetricsCallback(pl.Callback):
         visual_record: Optional[Dict[str, Any]] = None
 
         if isinstance(speed_prediction, torch.Tensor):
-            pred_wps = speed_prediction[index].detach().float().cpu()
-            gt_wps = batch.driving_label.waypoints[index].detach().float().cpu()
-            common = min(pred_wps.shape[0], gt_wps.shape[0])
+            pred_wps = (
+                speed_prediction[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+            gt_wps = (
+                batch.driving_label.waypoints[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+
+            common = min(
+                pred_wps.shape[0],
+                gt_wps.shape[0],
+            )
             pred_wps = pred_wps[:common]
             gt_wps = gt_wps[:common]
 
             if common > 0:
+                # 计算预测waypoints与GT waypoints之间的位移误差。
+                displacement = torch.linalg.norm(
+                    pred_wps - gt_wps,
+                    dim=-1,
+                )
+
+                row["waypoint_ade_m"] = _safe_mean(
+                    displacement
+                )
+                row["waypoint_fde_m"] = _to_float(
+                    displacement[-1]
+                )
+
+                row["waypoint_longitudinal_mae_m"] = (
+                    _safe_mean(
+                        torch.abs(
+                            pred_wps[:, 0]
+                            - gt_wps[:, 0]
+                        )
+                    )
+                )
+
+                row["waypoint_lateral_mae_m"] = (
+                    _safe_mean(
+                        torch.abs(
+                            pred_wps[:, 1]
+                            - gt_wps[:, 1]
+                        )
+                    )
+                )
+
+                if self.log_per_horizon_error:
+                    for horizon_index, error in enumerate(
+                        displacement,
+                        start=1,
+                    ):
+                        horizon = (
+                            horizon_index
+                            * self.waypoint_interval_s
+                        )
+
+                        row[
+                            f"waypoint_de_{horizon:.2f}s_m"
+                        ] = _to_float(error)
+
+                pred_speeds = _trajectory_speeds(
+                    pred_wps,
+                    self.waypoint_interval_s,
+                )
+                gt_speeds = _trajectory_speeds(
+                    gt_wps,
+                    self.waypoint_interval_s,
+                )
+
+                row["pred_mean_speed_mps"] = (
+                    _safe_mean(pred_speeds)
+                )
+                row["gt_mean_speed_mps"] = (
+                    _safe_mean(gt_speeds)
+                )
+
+                row["mean_speed_mae_mps"] = abs(
+                    row["pred_mean_speed_mps"]
+                    - row["gt_mean_speed_mps"]
+                )
+
+                row["pred_final_speed_mps"] = (
+                    _to_float(pred_speeds[-1])
+                )
+                row["gt_final_speed_mps"] = (
+                    _to_float(gt_speeds[-1])
+                )
+
+                row["final_speed_mae_mps"] = abs(
+                    row["pred_final_speed_mps"]
+                    - row["gt_final_speed_mps"]
+                )
+
+                pred_stop = (
+                    row["pred_final_speed_mps"]
+                    < self.stop_speed_threshold_mps
+                )
+                gt_stop = (
+                    row["gt_final_speed_mps"]
+                    < self.stop_speed_threshold_mps
+                )
+
+                row["pred_stop"] = float(pred_stop)
+                row["gt_stop"] = float(gt_stop)
+                row["false_stop"] = float(
+                    pred_stop and not gt_stop
+                )
+                row["missed_stop"] = float(
+                    gt_stop and not pred_stop
+                )
+
+                visual_record = {
+                    "source": source,
+                    "measurement_path": run_id,
+                    "prompt": prompt,
+                    "answer": answer,
+                    "pred_waypoints": pred_wps.numpy(),
+                    "gt_waypoints": gt_wps.numpy(),
+                    "waypoint_ade_m": row[
+                        "waypoint_ade_m"
+                    ],
+                    "waypoint_fde_m": row[
+                        "waypoint_fde_m"
+                    ],
+                }
+
+        if isinstance(route_prediction, torch.Tensor):
+            pred_route = (
+                route_prediction[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+            gt_route = (
+                batch.driving_label.path[index]
+                .detach()
+                .float()
+                .cpu()
+            )
+
+            common = min(
+                pred_route.shape[0],
+                gt_route.shape[0],
+            )
+            pred_route = pred_route[:common]
+            gt_route = gt_route[:common]
+
+            if common > 0:
                 # 保存20个route query最终对应的实际路径坐标。
-                # 这样完整[20,6]注意力矩阵中的第q行，
-                # 就能够和pred_route_points_xy_m中的第q个路径点对应。
+                # route_camera_attention_20x6中的第q行，
+                # 与pred_route_points_xy_m中的第q个点相对应。
                 row["pred_route_points_xy_m"] = (
                     pred_route.numpy().tolist()
                 )
@@ -444,79 +591,42 @@ class LocalValidationMetricsCallback(pl.Callback):
                     pred_route - gt_route,
                     dim=-1,
                 )
+
                 row["route_ade_m"] = _safe_mean(
                     route_displacement
                 )
                 row["route_fde_m"] = _to_float(
                     route_displacement[-1]
                 )
-                row["waypoint_longitudinal_mae_m"] = _safe_mean(
-                    torch.abs(pred_wps[:, 0] - gt_wps[:, 0])
-                )
-                row["waypoint_lateral_mae_m"] = _safe_mean(
-                    torch.abs(pred_wps[:, 1] - gt_wps[:, 1])
-                )
-
-                if self.log_per_horizon_error:
-                    for horizon_index, error in enumerate(displacement, start=1):
-                        horizon = horizon_index * self.waypoint_interval_s
-                        row[f"waypoint_de_{horizon:.2f}s_m"] = _to_float(error)
-
-                pred_speeds = _trajectory_speeds(pred_wps, self.waypoint_interval_s)
-                gt_speeds = _trajectory_speeds(gt_wps, self.waypoint_interval_s)
-                row["pred_mean_speed_mps"] = _safe_mean(pred_speeds)
-                row["gt_mean_speed_mps"] = _safe_mean(gt_speeds)
-                row["mean_speed_mae_mps"] = abs(
-                    row["pred_mean_speed_mps"] - row["gt_mean_speed_mps"]
-                )
-                row["pred_final_speed_mps"] = _to_float(pred_speeds[-1])
-                row["gt_final_speed_mps"] = _to_float(gt_speeds[-1])
-                row["final_speed_mae_mps"] = abs(
-                    row["pred_final_speed_mps"] - row["gt_final_speed_mps"]
-                )
-
-                pred_stop = row["pred_final_speed_mps"] < self.stop_speed_threshold_mps
-                gt_stop = row["gt_final_speed_mps"] < self.stop_speed_threshold_mps
-                row["pred_stop"] = float(pred_stop)
-                row["gt_stop"] = float(gt_stop)
-                row["false_stop"] = float(pred_stop and not gt_stop)
-                row["missed_stop"] = float(gt_stop and not pred_stop)
-
-                visual_record = {
-                    "source": source,
-                    "measurement_path": run_id,
-                    "prompt": prompt,
-                    "answer": answer,
-                    "pred_waypoints": pred_wps.numpy(),
-                    "gt_waypoints": gt_wps.numpy(),
-                    "waypoint_ade_m": row["waypoint_ade_m"],
-                    "waypoint_fde_m": row["waypoint_fde_m"],
-                }
-
-        if isinstance(route_prediction, torch.Tensor):
-            pred_route = route_prediction[index].detach().float().cpu()
-            gt_route = batch.driving_label.path[index].detach().float().cpu()
-            common = min(pred_route.shape[0], gt_route.shape[0])
-            pred_route = pred_route[:common]
-            gt_route = gt_route[:common]
-
-            if common > 0:
-                route_displacement = torch.linalg.norm(pred_route - gt_route, dim=-1)
-                row["route_ade_m"] = _safe_mean(route_displacement)
-                row["route_fde_m"] = _to_float(route_displacement[-1])
 
                 if visual_record is not None:
-                    pred_wps_tensor = torch.from_numpy(visual_record["pred_waypoints"])
+                    pred_wps_tensor = torch.from_numpy(
+                        visual_record["pred_waypoints"]
+                    )
+
                     point_to_route = torch.cdist(
                         pred_wps_tensor.unsqueeze(0),
                         gt_route.unsqueeze(0),
                     ).squeeze(0)
-                    row["waypoint_to_route_error_m"] = _safe_mean(
-                        point_to_route.min(dim=-1).values
+
+                    row["waypoint_to_route_error_m"] = (
+                        _safe_mean(
+                            point_to_route.min(
+                                dim=-1
+                            ).values
+                        )
                     )
-                    visual_record["pred_route"] = pred_route.numpy()
-                    visual_record["gt_route"] = gt_route.numpy()
-                    visual_record["waypoint_to_route_error_m"] = row[
+
+                    visual_record["pred_route"] = (
+                        pred_route.numpy()
+                    )
+                    visual_record["gt_route"] = (
+                        gt_route.numpy()
+                    )
+
+                    visual_record[
+                        "waypoint_to_route_error_m"
+                    ] = row[
                         "waypoint_to_route_error_m"
                     ]
 

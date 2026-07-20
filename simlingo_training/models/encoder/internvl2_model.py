@@ -55,9 +55,6 @@ class LingoInternVLModel(nn.Module):
 
 
         ############################################## 🏖️ 六视角视觉 token 压缩配置 🏖️ ##############################################
-        # 每个相机有2个patch，每个patch的256个token排列为16×16。
-        # 将每个patch池化为4×8，共32个token；
-        # 因而每个相机保留64个token，六个相机共384个token。
         self.num_cameras = 6                 # 相机的数量
         self.num_patches_per_camera = 2      # 每张图像(相机)被分为几个patch
         self.visual_pool_height = 4          # 规定每个 patch 的视觉 token 网格在高度方向池化到 4
@@ -70,6 +67,10 @@ class LingoInternVLModel(nn.Module):
         这里讲一下为什么池化的时候不是池化成4x4或者8x8这种正方形的网格:
         这是因为对于驾驶图像来讲,横向通常需要区分左侧区域、道路中心区域、右侧区域,
         因此使用宽>高的网格可以在压缩token的同时保留更多的横向空间信息
+
+        每个相机有2个patch，每个patch的256个token排列为16×16。
+        将每个patch池化为4×8，共32个token；
+        因而每个相机保留64个token，六个相机共384个token。
         """
 
 
@@ -101,25 +102,35 @@ class LingoInternVLModel(nn.Module):
         ############################################## 🏖️ 定义参考路径引导的六视角注意力 🏖️ ##############################################
         # route分支的前20个query分别对应20个参考路径位置。
         # 每个query分别查询六个相机级特征，得到逐路径位置的多视角上下文。
-        self.num_route_queries = 20
+        self.num_route_queries = 20  # 表示从adaptor_dict['driving_inputs']中取前20个query作为参考路径query
+        
         # 使用较低维度计算六视角注意力，减少额外参数量和计算量。
-        self.route_attention_dim = 128
+        # 表示注意力计算不直接在完整的视觉特征维度 256 上进行，而是先降维到 128 维
+        # 较高的维度特征承担更多的任务,较低的维度可以使得模型专注于学习"某个路径位置应该关注哪个相机"
+        self.route_attention_dim = 128  
+        
+        # 注意力中的 Query 投影层,输入是每个路径的query[B,20,D]
         self.route_attention_query = nn.Linear(
             self.visual_feature_dim,
             self.route_attention_dim,
             bias=False,
         )
+
+        # 注意力中的 Key 投影层,输入是六个相机级特征[B,6,D]
         self.route_attention_key = nn.Linear(
             self.visual_feature_dim,
             self.route_attention_dim,
             bias=False,
         )
+
+        # 两个线性层的 Xavier 初始化
         nn.init.xavier_uniform_(
             self.route_attention_query.weight  # 路径注意力
         )
         nn.init.xavier_uniform_(
             self.route_attention_key.weight    # 路径注意力
         )
+
         # 控制六视角上下文写入route query的强度。
         self.route_query_fusion_gate = nn.Parameter(
             torch.tensor(0.1)
@@ -146,8 +157,7 @@ class LingoInternVLModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         placeholder_values: Optional[List[dict]] = None,
-        wp_encoder: Optional[nn.Module] = None,
-    ):
+        wp_encoder: Optional[nn.Module] = None,):
         """
         函数功能:
             替换占位token
