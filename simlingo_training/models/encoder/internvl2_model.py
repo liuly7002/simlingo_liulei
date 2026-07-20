@@ -10,19 +10,13 @@ class LingoInternVLModel(nn.Module):
     
     
     # def __init__(self, variant, *args, **kwargs):  
+
+
+
+    def __init__(self, variant, use_target_point_camera_attention=False, *args, **kwargs,):
         # variant  表示需要加载的 Hugging Face 模型名称或者本地模型目录
         # *args    表示接收额外的位置参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
         # **kwargs 表示接收额外的关键字参数,但是当前函数中并未使用该参数,它主要起接口兼容作用
-
-
-    def __init__(
-        self,
-        variant,
-        use_target_point_camera_attention=True,
-        *args,
-        **kwargs,
-    ):
-        
         
         
         # 调用父类nn.Module 的构造函数
@@ -119,56 +113,6 @@ class LingoInternVLModel(nn.Module):
         """
 
 
-        # ############################################## 🏖️ 定义参考路径引导的六视角注意力 🏖️ ##############################################
-        # # route分支的前20个query分别对应20个参考路径位置。
-        # # 每个query分别查询六个相机级特征，得到逐路径位置的多视角上下文。
-        # self.num_route_queries = 20  # 表示从adaptor_dict['driving_inputs']中取前20个query作为参考路径query
-        
-        # # 使用较低维度计算六视角注意力，减少额外参数量和计算量。
-        # # 表示注意力计算不直接在完整的视觉特征维度 256 上进行，而是先降维到 128 维
-        # # 较高的维度特征承担更多的任务,较低的维度可以使得模型专注于学习"某个路径位置应该关注哪个相机"
-        # self.route_attention_dim = 128  
-        
-        # # 注意力中的 Query 投影层,输入是每个路径的query[B,20,D]
-        # self.route_attention_query = nn.Linear(
-        #     self.visual_feature_dim,
-        #     self.route_attention_dim,
-        #     bias=False,
-        # )
-
-        # # 注意力中的 Key 投影层,输入是六个相机级特征[B,6,D]
-        # self.route_attention_key = nn.Linear(
-        #     self.visual_feature_dim,
-        #     self.route_attention_dim,
-        #     bias=False,
-        # )
-
-        # # 两个线性层的 Xavier 初始化
-        # nn.init.xavier_uniform_(
-        #     self.route_attention_query.weight  # 路径注意力
-        # )
-        # nn.init.xavier_uniform_(
-        #     self.route_attention_key.weight    # 路径注意力
-        # )
-
-        # # 控制六视角上下文写入route query的强度。
-        # self.route_query_fusion_gate = nn.Parameter(
-        #     torch.tensor(0.1)
-        # )
-        # # 控制路径注意力对原始视觉token的残差增强强度。
-        # self.route_camera_attention_gate = nn.Parameter(
-        #     torch.tensor(0.1)
-        # )
-
-        # # 保存最近一次前向传播中的六视角注意力统计，
-        # # 用于W&B日志和本地验证结果记录。
-        # # 前向传播时会进行detach，不参与损失计算。
-        # self.latest_route_camera_weights = None
-        # self.latest_route_attention_entropy = None
-
-
-
-
         ############################################## 🏖️ 定义目标点引导的六视角相机注意力 🏖️ ##############################################
         # 使用两个<TARGET_POINT> token的embedding共同描述当前导航方向：
         #
@@ -217,13 +161,13 @@ class LingoInternVLModel(nn.Module):
     def replace_placeholder_tokens(
         self,
         adaptor_dict: torch.LongTensor = None,
-        pixel_values: torch.FloatTensor = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        placeholder_values: Optional[List[dict]] = None,
-        wp_encoder: Optional[nn.Module] = None,):
+        pixel_values: torch.FloatTensor = None,            # 六视角图像输入,形状为[B,T,NP,C,H,W],T=1表示时间帧数,NP=12表示图像总的patch数
+        inputs_embeds: Optional[torch.FloatTensor] = None, # 外部已经准备好的输入embedding,当前函数只有在inputs_embeds是None的时候才执行placeholder和图像特征替换
+        output_attentions: Optional[bool] = None,          # 是否要求模型输出注意力
+        output_hidden_states: Optional[bool] = None,       # 是否要求模型输出中间隐藏状态
+        return_dict: Optional[bool] = None,                # 是否以字典式模型输出返回结果
+        placeholder_values: Optional[List[dict]] = None,   # 一个列表,通常每个batch样本对应一个字典placeholder_values[b],字典内部根据特殊 token ID 保存结构化数值,例如目标点坐标
+        wp_encoder: Optional[nn.Module] = None,):  # 将结构化数值,例如目标点坐标,编码到语言embedding空间的网络
         """
         函数功能:
             替换占位token
@@ -237,12 +181,12 @@ class LingoInternVLModel(nn.Module):
 
         # 每次前向传播开始时清空上一个batch保存的注意力结果。
         # 防止关闭注意力、纯文本样本或异常分支误用旧缓存。
-        self.latest_target_point_camera_weights = None
-        self.latest_target_point_attention_entropy = None
+        self.latest_target_point_camera_weights = None     # 用于保存当前batch的六相机注意力权重 
+        self.latest_target_point_attention_entropy = None  # 用于保存当前batch的注意力熵
         
         
         
-        # 一、获取tokenizer
+        ############################################## 🏖️ 获取tokenizer 🏖️ ##############################################
         if 'tokenizer' in self.processor.__dict__:
             self.tokenizer = self.processor.tokenizer
         else:
@@ -251,59 +195,81 @@ class LingoInternVLModel(nn.Module):
         
         
         
-        # 二、获取<IMG_CONTEXT> token的id
+
+        ############################################## 🏖️ 获取<IMG_CONTEXT> token的id 🏖️ ##############################################
         IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
         img_context_token_id = self.tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
         self.img_context_token_id = img_context_token_id
 
-        # 获取<TARGET_POINT> token的id，用于将导航目标信息加入参考路径引导。
+
+
+
+
+
+        ############################################## 🏖️ 获取<TARGET_POINT> token的id 🏖️ ##############################################
         TARGET_POINT_TOKEN = '<TARGET_POINT>'
-        target_point_token_id = self.tokenizer.convert_tokens_to_ids(
-            TARGET_POINT_TOKEN
-        )
+        target_point_token_id = self.tokenizer.convert_tokens_to_ids(TARGET_POINT_TOKEN)
         self.target_point_token_id = target_point_token_id
         
         
         
         
         
-        # 三、处理输入参数
+        ############################################## 🏖️ 补全三个可选参数 🏖️ ##############################################
+        # 如果调用函数时明确传入了 output_attentions/output_hidden_states/return_dict,就使用传入值;否则使用模型配置中的默认值
+        # 不过,当前函数后面没有实际使用这三个变量,因此它们目前没有影响 placeholder 替换和视觉处理结果
         output_attentions = output_attentions if output_attentions is not None else self.model.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.model.config.output_hidden_states
-        )
+        output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.model.config.output_hidden_states)
         return_dict = return_dict if return_dict is not None else self.model.config.use_return_dict
 
         
         
         
-        # 四、输入embeding是空
+
+        ############################################## 🏖️ 执行替换 🏖️ ##############################################
+
+        # 如果外部没有直接给出 embedding, 则从 adaptor_dict 中读取原始语言 embedding, 并进行后面的替换
         if inputs_embeds is None:
+            """
+            当前执行逻辑:
+
+                inputs_embeds为None
+                    → 执行结构化placeholder替换
+                    → 执行图像特征替换
+                    → 更新adaptor_dict
+
+                inputs_embeds不为None
+                    → 跳过上述操作
+                    → 直接返回adaptor_dict
+            """
 
 
+            
+            # 从 adaptor_dict['language_inputs'] 中取出原始语言 token embedding 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
+            inputs_embeds = adaptor_dict['language_inputs'].clone()
+            
+            
+            # 读取与 inputs_embeds 一一对应的 token id 形状为[B,L] 其中B是batch size, L是文本长度
+            input_ids = adaptor_dict['language__ids']
+            
+            
+            
+            
+            
+            
+            ################# 🏖️ 找出当前 batch 中出现的特殊 token 🏖️ #################
+            
+            # 获取额外添加的特殊token id列表中的第一个id
+            smallest_added_id = self.tokenizer.additional_special_tokens_ids[0]
 
-
-            # inputs_embeds = adaptor_dict['language_inputs']  # ❤️ 初始文本 embedding, 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
-            
-            # clone后得到非叶子张量，允许后续结构化placeholder替换参与正常梯度传播
-            inputs_embeds = adaptor_dict['language_inputs'].clone()  # ❤️ 初始文本 embedding, 形状为[B,L,D] 其中B是batch size, L是文本长度, D是embedding维度
-            
-            
-            
-            
-            
-            input_ids = adaptor_dict['language__ids']        # ❤️ 对应的   token id,  形状为[B,L] 其中B是batch size, L是文本长度
-            
-            
-            
-            
-            
-            # 2a replace placeholder
-            # 这一步的目的就是对input_ids进行处理,找到出现的所有的特殊id(为什么称之为特殊id,是因为它们是special token的映射),然后去掉重复的,最终赋值给special_ids
-            smallest_added_id = self.tokenizer.additional_special_tokens_ids[0]  # 表示tokenizer中额外添加的特殊token的id列表的第一个id
+            # 筛选出当前batch中的出现的特殊token的id,形状为[k]
             special_ids = torch.tensor(list(set(input_ids[(input_ids >= smallest_added_id)].tolist())), device=input_ids.device)
+            
+            
             special_ids = special_ids.view(-1, 1, 1)  # ❤️ 形状为[K,1,1] 其中K是这个batch里出现过的特殊token的种类数
             # print(f"Batch has special token ids: {special_ids.squeeze().tolist()}")  # 打印这个batch里出现过的特殊token的id
+            
+            
             batch_size, seq_len = input_ids.shape
 
             if special_ids.size(0) > 0 and len(placeholder_values) > 0:

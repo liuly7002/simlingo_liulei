@@ -16,8 +16,8 @@ model:
     lora_dropout: 0.1
   vision_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
-    # 完整模型启用目标点引导的六视角相机注意力。
-    use_target_point_camera_attention: true
+    
+    use_target_point_camera_attention: true  # 目标点引导的六视角相机注意力
 
 data_module:
   batch_size: 6
@@ -38,10 +38,12 @@ data_module:
     img_shift_augmentation: true
     img_shift_augmentation_prob: 0.5
     hist_len: 1
+    
     # 所有训练与验证样本固定使用两个TARGET_POINT，
     # 不再在TP、HLC和LMDrive命令之间随机选择。
-    route_as: target_point
+    route_as: target_point                    # none command target_point
     use_lmdrive_commands: false
+    
     use_old_towns: true
     use_town13: true
     use_safety_flag: false
@@ -58,7 +60,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_full_seed_9876
+name: simlingo_lg_target_point_attention_seed_9876
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.
