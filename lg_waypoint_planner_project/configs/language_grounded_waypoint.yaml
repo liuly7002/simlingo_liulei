@@ -9,7 +9,7 @@ run:
   # false: treat input as one route folder.
   # recursive: true
 
-  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo/lb1_split/routes_training/ControlLoss/Town05_Rep0_Town05_Scenario1_45_route0_07_18_00_34_06
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo/lb1_split/routes_training/noScenarios/Town04_Rep0_Town04_lr_28_route0_07_17_23_31_57
   recursive: false
 
   frame: null
@@ -427,10 +427,10 @@ debug:
   # Save lightweight reference-route stitching diagnostics into the main
   # generated json.gz.  When false, the entire reference_route_debug block is
   # omitted and the normal output format stays unchanged.
-  save_reference_stitch_debug: true
+  save_reference_stitch_debug: false
 
   rgb:
-    save_rgb_debug: false  # 是否保存可视化图
+    save_rgb_debug: true  # 是否保存可视化图
     rgb_folder: rgb
     rgb_debug_folder: language_grounded_waypoints_rgb_debug
 

@@ -1,34 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-generate_costmap_from_masks.py
-
-Simplified BEV collision-map generator.
-
-This version intentionally removes the previous hand-crafted continuous cost
-calculation. It converts saved BEV masks into a simple binary-style map for
-collision/occupancy checking:
-
-    free area      -> free_value
-    blocked area   -> blocked_value
-
-Blocked area is defined by dynamic actors and non-road regions. Lane markings
-are intentionally NOT written into the ordinary cost map because the saved BEV
-lane mask is low resolution and should not behave like a wide obstacle.
-
-Solid lane markings are saved separately as a thin centerline-style constraint.
-The waypoint evaluator uses that map only to detect whether the planned ego
-center trajectory crosses a solid boundary. Broken lane markings remain
-traversable.
-
-Usage:
-    1. Edit configs/simple_bev_collision_map.yaml
-    2. Run:
-       python tools_bev/generate_costmap_from_masks.py
-
-No argparse is used. The optional first positional argument may be a config path,
-but the normal workflow is to edit the YAML file directly.
-"""
 
 from __future__ import annotations
 
