@@ -542,6 +542,12 @@ class LingoInternVLModel(nn.Module):
                             )
                         )
 
+                        #修改20260720：保存未detach的[B,6]权重，
+                        # 专门用于LG相机注意力辅助损失。
+                        adaptor_dict[
+                            "target_point_camera_weights_for_loss"
+                        ] = target_point_camera_weights
+
                         target_point_camera_weights_detached = (
                             target_point_camera_weights
                             .detach()

@@ -628,11 +628,82 @@ class DataModule(LightningDataModule):
         else:
             waypoints = torch.tensor(np.asarray([data[i].waypoints for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         
+
+
+
+
         
         
+        #修改20260720：把LG单样本的六视角注意力标签组成batch。
+        # 普通Driving样本和无有效因果actor的LG样本保持valid=False。
+        camera_attention_target = torch.zeros(
+            (BS, self.NUM_CAMERAS),
+            dtype=torch.float32,
+        )
+        camera_attention_valid = torch.zeros(
+            (BS,),
+            dtype=torch.bool,
+        )
+
+        for sample_index, sample in enumerate(data):
+            sample_valid = getattr(
+                sample,
+                "camera_attention_valid",
+                None,
+            )
+            if not bool(sample_valid):
+                continue
+
+            sample_target = np.asarray(
+                getattr(
+                    sample,
+                    "camera_attention_target",
+                    None,
+                ),
+                dtype=np.float32,
+            )
+
+            if sample_target.shape != (
+                self.NUM_CAMERAS,
+            ):
+                raise ValueError(
+                    "LG camera_attention_target must have "
+                    f"shape ({self.NUM_CAMERAS},), but received "
+                    f"{tuple(sample_target.shape)}."
+                )
+
+            if (
+                not np.isfinite(sample_target).all()
+                or np.any(sample_target < 0.0)
+            ):
+                raise ValueError(
+                    "LG camera_attention_target contains "
+                    "non-finite or negative values."
+                )
+
+            target_sum = float(sample_target.sum())
+            if target_sum <= 0.0:
+                raise ValueError(
+                    "Valid LG camera_attention_target must "
+                    "have a positive sum."
+                )
+
+            camera_attention_target[
+                sample_index
+            ] = torch.from_numpy(
+                sample_target / target_sum
+            )
+            camera_attention_valid[
+                sample_index
+            ] = True
+
+
         
         
-        
+
+
+
+
         
         ################################################### 🦺 6.额外信息(预测/评估模式才有) 🦺 ###################################################
         
@@ -689,6 +760,14 @@ class DataModule(LightningDataModule):
                 answer=answer_label,        # 文本答案监督
                 image_ff_org=image_ff_org,  # 没有经过裁剪的原始图像
                 eval_infos=eval_infos,      # 预测模式下的额外评估信息
+                
+                #修改20260720：batch级六视角注意力监督。
+                camera_attention_target=(
+                    camera_attention_target
+                ),
+                camera_attention_valid=(
+                    camera_attention_valid
+                ),
             )
             
         return DrivingExample(

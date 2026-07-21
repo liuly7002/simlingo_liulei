@@ -8,6 +8,11 @@ model:
   lr: 3e-5
   predict_route_as_wps: true
   speed_wps_mode: 2d
+  
+  #修改20260720：使用LG因果actor投影结果监督六视角注意力。
+  use_lg_camera_attention_supervision: true
+  lg_camera_attention_loss_weight: 0.05
+
   language_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 语言模型的位置
     lora: true
@@ -60,7 +65,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_target_point_attention_seed_9876
+name: simlingo_lg_target_point_attention_lg_supervision_seed_9876
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

@@ -521,6 +521,164 @@ class DrivingModel(pl.LightningModule):
         adaptor_features, adaptor_logits = self.forward_model(example.driving_input, adaptor_dict, driving_labels=example.driving_label)
         loss_dict = self.adaptors.compute_loss(adaptor_features, adaptor_logits, adaptor_dict, example)
 
+
+
+
+
+        #修改20260720：使用LG因果actor投影得到的六维软标签，
+        # 显式监督目标点引导的六视角相机注意力。
+        if bool(
+            getattr(
+                self,
+                "use_lg_camera_attention_supervision",
+                False,
+            )
+        ):
+            predicted_camera_weights = adaptor_dict.get(
+                "target_point_camera_weights_for_loss",
+                None,
+            )
+            camera_attention_target = (
+                example
+                .driving_label
+                .camera_attention_target
+            )
+            camera_attention_valid = (
+                example
+                .driving_label
+                .camera_attention_valid
+            )
+
+            if not isinstance(
+                predicted_camera_weights,
+                torch.Tensor,
+            ):
+                raise RuntimeError(
+                    "LG camera attention supervision is "
+                    "enabled, but target-point camera "
+                    "attention weights were not produced. "
+                    "Set model.vision_model."
+                    "use_target_point_camera_attention=true."
+                )
+
+            if (
+                not isinstance(
+                    camera_attention_target,
+                    torch.Tensor,
+                )
+                or not isinstance(
+                    camera_attention_valid,
+                    torch.Tensor,
+                )
+            ):
+                raise RuntimeError(
+                    "LG camera attention supervision is "
+                    "enabled, but the batch does not contain "
+                    "camera attention labels."
+                )
+
+            predicted_camera_weights = (
+                predicted_camera_weights.float()
+            )
+            camera_attention_target = (
+                camera_attention_target.to(
+                    device=(
+                        predicted_camera_weights.device
+                    ),
+                    dtype=torch.float32,
+                )
+            )
+            camera_attention_valid = (
+                camera_attention_valid.to(
+                    device=(
+                        predicted_camera_weights.device
+                    ),
+                    dtype=torch.bool,
+                )
+            )
+
+            if (
+                predicted_camera_weights.ndim != 2
+                or predicted_camera_weights.shape[-1] != 6
+            ):
+                raise RuntimeError(
+                    "Predicted camera attention must have "
+                    "shape [B,6], but received "
+                    f"{tuple(predicted_camera_weights.shape)}."
+                )
+
+            if (
+                camera_attention_target.shape
+                != predicted_camera_weights.shape
+            ):
+                raise RuntimeError(
+                    "LG camera attention target shape does "
+                    "not match prediction shape: "
+                    f"{tuple(camera_attention_target.shape)} "
+                    "vs "
+                    f"{tuple(predicted_camera_weights.shape)}."
+                )
+
+            if camera_attention_valid.shape != (
+                predicted_camera_weights.shape[0],
+            ):
+                raise RuntimeError(
+                    "LG camera attention valid mask must "
+                    "have shape [B], but received "
+                    f"{tuple(camera_attention_valid.shape)}."
+                )
+
+            target_sum = (
+                camera_attention_target.sum(dim=-1)
+            )
+
+            invalid_valid_target = (
+                camera_attention_valid
+                & (target_sum <= 0.0)
+            )
+            if bool(
+                invalid_valid_target.any().item()
+            ):
+                raise RuntimeError(
+                    "A valid LG camera attention target has "
+                    "a non-positive probability sum."
+                )
+
+            # 无效样本保持全零，不参与该损失。
+            normalized_target = torch.where(
+                camera_attention_valid.unsqueeze(-1),
+                camera_attention_target
+                / target_sum.clamp_min(1e-8).unsqueeze(-1),
+                torch.zeros_like(
+                    camera_attention_target
+                ),
+            )
+
+            # 软标签交叉熵，每个样本得到一个标量。
+            per_sample_camera_attention_loss = -(
+                normalized_target
+                * predicted_camera_weights
+                .clamp_min(1e-8)
+                .log()
+            ).sum(dim=-1)
+
+            camera_attention_loss_count = (
+                camera_attention_valid.float()
+            )
+
+            loss_dict[
+                "lg_camera_attention_loss"
+            ] = (
+                per_sample_camera_attention_loss
+                * camera_attention_loss_count,
+                camera_attention_loss_count,
+            )
+
+
+
+
+
+
         loss_dict_only_losses = {k:v for k, v in loss_dict.items() if k.endswith("loss")}
         loss_logs = {k:v for k, v in loss_dict.items() if k.endswith("log")}
         
@@ -697,7 +855,32 @@ class DrivingModel(pl.LightningModule):
 
             return loss_dict_only_losses, pred_labels
 
-        return summarise_losses(loss_dict_only_losses), loss_logs
+        # return summarise_losses(loss_dict_only_losses), loss_logs
+        
+        #修改20260720：只对LG相机注意力损失单独设置辅助权重，
+        # 原有语言、waypoint和route损失权重保持不变。
+        loss_weights = None
+        if bool(
+            getattr(
+                self,
+                "use_lg_camera_attention_supervision",
+                False,
+            )
+        ):
+            loss_weights = {
+                "lg_camera_attention_loss": float(
+                    getattr(
+                        self,
+                        "lg_camera_attention_loss_weight",
+                        0.05,
+                    )
+                )
+            }
+
+        return summarise_losses(
+            loss_dict_only_losses,
+            weights=loss_weights,
+        ), loss_logs
 
     
     

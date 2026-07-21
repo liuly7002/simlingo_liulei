@@ -41,6 +41,12 @@ class DrivingModelConfig:
     speed_wps_mode: str = '2d'
     predict_route_as_wps: bool = True
 
+    #修改20260720：是否使用LG生成的六视角相机注意力软标签。
+    use_lg_camera_attention_supervision: bool = False
+
+    #修改20260720：LG相机注意力辅助损失在总损失中的权重。
+    lg_camera_attention_loss_weight: float = 0.05
+
     _target_: str = "simlingo_training.models.driving.DrivingModel"
 
 

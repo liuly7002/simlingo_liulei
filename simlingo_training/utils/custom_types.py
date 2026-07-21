@@ -25,6 +25,10 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     image_surround_org_size: Optional[Tensor] = None
     camera_order: Optional[Tuple[str, ...]] = None
 
+    #修改20260720：LG单样本的六视角注意力监督。
+    camera_attention_target: Optional[Tensor] = None
+    camera_attention_valid: Optional[bool] = None
+
 
 class LanguageLabel(NamedTuple):
     phrase_ids: Tensor  # [B, max(len(tokens))] int64
@@ -68,6 +72,10 @@ class DrivingLabel(NamedTuple):
     answer: LanguageLabel
     image_ff_org: Tensor
     eval_infos: Optional[Dict] = None
+
+    #修改20260720：batch级LG六视角注意力监督。
+    camera_attention_target: Optional[Tensor] = None
+    camera_attention_valid: Optional[Tensor] = None
 
 
 class DrivingExample(NamedTuple):

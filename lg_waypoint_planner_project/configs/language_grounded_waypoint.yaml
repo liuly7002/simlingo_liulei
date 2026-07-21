@@ -4,18 +4,19 @@
 
 run:
   # Route directory or a parent data directory.
-  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
   # true: recursively find route folders under input.
   # false: treat input as one route folder.
-  # recursive: true
+  recursive: true
 
-  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo/lb1_split/routes_training/noScenarios/Town04_Rep0_Town04_lr_28_route0_07_17_23_31_57
-  recursive: false
+  # for debug
+  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo/lb1_split/routes_training/noScenarios/Town04_Rep0_Town04_lr_28_route0_07_17_23_31_57
+  # recursive: false
 
   frame: null
   verbose: true
   raise_on_error: false
-  save_log: false
+  save_log: false       # 是否保存log文件,一般不保存
 
 paths:
   measurements_folder: measurements
@@ -430,7 +431,7 @@ debug:
   save_reference_stitch_debug: false
 
   rgb:
-    save_rgb_debug: true  # 是否保存可视化图
+    save_rgb_debug: false  # 是否保存可视化图
     rgb_folder: rgb
     rgb_debug_folder: language_grounded_waypoints_rgb_debug
 

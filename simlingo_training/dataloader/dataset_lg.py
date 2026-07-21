@@ -179,6 +179,61 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
         path = self.equal_spacing_route(path)
         return np.asarray(path, dtype=np.float32)
 
+    #修改20260720：读取并检查LG生成的六视角相机注意力软标签。
+    @staticmethod
+    def _extract_camera_attention_supervision(
+        payload: Dict,
+    ) -> Tuple[np.ndarray, bool]:
+        empty_target = np.zeros((6,), dtype=np.float32)
+
+        visual_grounding = payload.get("visual_grounding", {})
+        if not isinstance(visual_grounding, dict):
+            return empty_target, False
+
+        if not bool(
+            visual_grounding.get(
+                "camera_attention_valid",
+                False,
+            )
+        ):
+            return empty_target, False
+
+        expected_camera_order = (
+            "front",
+            "front_left",
+            "front_right",
+            "rear",
+            "rear_left",
+            "rear_right",
+        )
+        camera_order = tuple(
+            visual_grounding.get("camera_order", [])
+        )
+        if camera_order != expected_camera_order:
+            return empty_target, False
+
+        target = np.asarray(
+            visual_grounding.get(
+                "camera_attention_target",
+                [],
+            ),
+            dtype=np.float32,
+        )
+
+        if target.shape != (6,):
+            return empty_target, False
+        if not np.isfinite(target).all():
+            return empty_target, False
+        if np.any(target < 0.0):
+            return empty_target, False
+
+        target_sum = float(target.sum())
+        if target_sum <= 0.0:
+            return empty_target, False
+
+        target = target / target_sum
+        return target.astype(np.float32), True
+
     def _validate_payload(self, payload: Dict) -> Tuple[bool, str]:
         supervision = payload.get("supervision", {})
         if not isinstance(supervision, dict):
@@ -518,6 +573,15 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 f"Invalid LG label at {lg_path}: {reason}"
             )
 
+        #修改20260720：无有效因果actor时返回全零目标和False掩码，
+        # 但不丢弃该LG语言/轨迹样本。
+        (
+            camera_attention_target,
+            camera_attention_valid,
+        ) = self._extract_camera_attention_supervision(
+            payload
+        )
+
         if bool(
             getattr(
                 self,
@@ -640,6 +704,13 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 data["rgb_surround_org_size"]
             ),
             camera_order=data["camera_order"],
+            #修改20260720：传递LG六视角注意力软标签。
+            camera_attention_target=(
+                camera_attention_target
+            ),
+            camera_attention_valid=(
+                camera_attention_valid
+            ),
         )
 
         if VIZ_DATA:
