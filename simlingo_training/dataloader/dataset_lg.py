@@ -314,6 +314,11 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
         valid_paths: List[str] = []
         reasons = Counter()
 
+        #修改20260721：统计真正进入当前LG数据集的样本中，
+        # 有效六视角注意力监督的数量及无效原因。
+        camera_attention_valid_count = 0
+        camera_attention_invalid_reasons = Counter()
+
         for index in range(len(self.images)):
             label_path = self._lg_path_for_index(index)
             if not label_path.is_file():
@@ -337,6 +342,39 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             if not valid:
                 reasons[reason] += 1
                 continue
+
+            #修改20260721：只在通过LG基础标签检查、真正保留的样本中，
+            # 统计六视角注意力标签是否有效。
+            (
+                _camera_attention_target,
+                camera_attention_valid,
+            ) = self._extract_camera_attention_supervision(
+                payload
+            )
+
+            if camera_attention_valid:
+                camera_attention_valid_count += 1
+            else:
+                visual_grounding = payload.get(
+                    "visual_grounding",
+                    {},
+                )
+
+                if isinstance(visual_grounding, dict):
+                    invalid_reason = str(
+                        visual_grounding.get(
+                            "invalid_reason",
+                            "unknown",
+                        )
+                    )
+                else:
+                    invalid_reason = (
+                        "missing_visual_grounding"
+                    )
+
+                camera_attention_invalid_reasons[
+                    invalid_reason
+                ] += 1
 
             valid_indices.append(index)
             valid_paths.append(str(label_path))
@@ -388,6 +426,37 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 f"[{self.split} LG samples]: kept "
                 f"{len(valid_indices)} samples; "
                 f"filtered={dict(reasons)}"
+            )
+
+            #修改20260721：输出六视角注意力标签的实际覆盖率。
+            kept_sample_count = len(valid_indices)
+            camera_attention_valid_ratio = (
+                camera_attention_valid_count
+                / kept_sample_count
+                if kept_sample_count > 0
+                else 0.0
+            )
+
+            bucket_name = str(
+                getattr(
+                    self,
+                    "bucket_name",
+                    "unknown",
+                )
+            )
+
+            print(
+                f"[{self.split} LG camera attention]"
+                f"[bucket={bucket_name}]: "
+                f"valid={camera_attention_valid_count}, "
+                f"invalid="
+                f"{kept_sample_count - camera_attention_valid_count}, "
+                f"total={kept_sample_count}, "
+                f"valid_ratio="
+                f"{camera_attention_valid_ratio:.4f} "
+                f"({camera_attention_valid_ratio * 100.0:.2f}%), "
+                f"invalid_reasons="
+                f"{dict(camera_attention_invalid_reasons)}"
             )
 
     @staticmethod

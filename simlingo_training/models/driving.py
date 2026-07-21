@@ -666,6 +666,55 @@ class DrivingModel(pl.LightningModule):
                 camera_attention_valid.float()
             )
 
+            #修改20260721：记录当前batch中真正参与
+            # LG相机注意力监督的样本数量和比例。
+            valid_attention_count = (
+                camera_attention_loss_count.sum()
+            )
+            valid_attention_ratio = (
+                valid_attention_count
+                / max(
+                    int(
+                        camera_attention_loss_count.numel()
+                    ),
+                    1,
+                )
+            )
+
+            attention_log_mode = (
+                "train"
+                if self.training
+                else "val"
+            )
+
+            self.log(
+                f"{attention_log_mode}_lg_camera_attention/"
+                "valid_sample_count",
+                valid_attention_count,
+                on_step=self.training,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+                batch_size=int(
+                    camera_attention_loss_count.numel()
+                ),
+                sync_dist=True,
+            )
+
+            self.log(
+                f"{attention_log_mode}_lg_camera_attention/"
+                "valid_sample_ratio",
+                valid_attention_ratio,
+                on_step=self.training,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+                batch_size=int(
+                    camera_attention_loss_count.numel()
+                ),
+                sync_dist=True,
+            )
+
             loss_dict[
                 "lg_camera_attention_loss"
             ] = (
@@ -856,7 +905,7 @@ class DrivingModel(pl.LightningModule):
             return loss_dict_only_losses, pred_labels
 
         # return summarise_losses(loss_dict_only_losses), loss_logs
-        
+
         #修改20260720：只对LG相机注意力损失单独设置辅助权重，
         # 原有语言、waypoint和route损失权重保持不变。
         loss_weights = None

@@ -28,7 +28,24 @@ def summarise_losses(
 
     loss_values = {k: v for k, (v, _) in loss_dict.items()}
     loss_counts = {k: n for k, (_, n) in loss_dict.items()}
-    loss_averages = {k: torch.where(n.sum() > 0, v.sum() / n.sum(), 0.0) for k, (v, n) in loss_dict.items()}
+    # loss_averages = {k: torch.where(n.sum() > 0, v.sum() / n.sum(), 0.0) for k, (v, n) in loss_dict.items()}
+    #修改20260721：避免某项监督在当前batch中没有有效样本时
+    # 计算0/0。先使用clamp后的安全分母，再显式将零计数项置零。
+    loss_averages = {}
+
+    for key, (loss_value, loss_count) in loss_dict.items():
+        total_count = loss_count.sum()
+        safe_average = (
+            loss_value.sum()
+            / total_count.clamp_min(1.0)
+        )
+
+        loss_averages[key] = (
+            safe_average
+            * (total_count > 0).to(
+                dtype=safe_average.dtype
+            )
+        )
     if weights is None:
         loss = torch.stack(list(loss_averages.values())).sum()
     else:
