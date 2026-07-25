@@ -10,7 +10,7 @@ model:
   speed_wps_mode: 2d
   
   #修改20260720：使用LG因果actor投影结果监督六视角注意力。
-  use_lg_camera_attention_supervision: true
+  use_lg_camera_attention_supervision: false
   lg_camera_attention_loss_weight: 0.05
 
   language_model:
@@ -22,15 +22,15 @@ model:
   vision_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
     
-    use_target_point_camera_attention: true  # 目标点引导的六视角相机注意力
+    use_target_point_camera_attention: false  # 目标点引导的六视角相机注意力
 
 data_module:
   batch_size: 6
   num_workers: 8
 
   base_dataset:
-    data_path: database/simlingo_v2_2026_07_17_23_23_22
-    bucket_path: database/simlingo_v2_2026_07_17_23_23_22/bucketsv2_simlingo
+    data_path: database/simlingo_v2_2026_07_21_16_16_03
+    bucket_path: database/simlingo_v2_2026_07_21_16_16_03/bucketsv2_simlingo
     pred_len: 11
     cut_bottom_quarter: true
 
@@ -46,7 +46,7 @@ data_module:
     
     # 所有训练与验证样本固定使用两个TARGET_POINT，
     # 不再在TP、HLC和LMDrive命令之间随机选择。
-    route_as: target_point                    # none command target_point
+    route_as: none                    # none command target_point
     use_lmdrive_commands: false
     
     use_old_towns: true
@@ -65,7 +65,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_target_point_attention_lg_supervision_seed_9876
+name: simlingo_lg_no_navigation_no_attention_seed_9876
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

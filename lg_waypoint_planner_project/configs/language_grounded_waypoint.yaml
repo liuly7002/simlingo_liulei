@@ -4,13 +4,13 @@
 
 run:
   # Route directory or a parent data directory.
-  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
   # true: recursively find route folders under input.
   # false: treat input as one route folder.
   recursive: true
 
   # for debug
-  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo/lb1_split/routes_training/noScenarios/Town04_Rep0_Town04_lr_28_route0_07_17_23_31_57
+  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo/lb1_split/routes_training/noScenarios/Town04_Rep0_Town04_lr_28_route0_07_17_23_31_57
   # recursive: false
 
   frame: null

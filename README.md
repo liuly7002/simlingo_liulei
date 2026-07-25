@@ -126,14 +126,23 @@ python dataset_generation/dreamer_data/dreamer_generator.py
 # 5.1 生成 cost map
 python lg_waypoint_planner_project/tools_bev/generate_costmap_from_masks.py
 
+# 备注：需要修改的内容为：lg_waypoint_planner_project/configs/simple_bev_collision_map.yaml
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
+
+
 # 5.2 生成语言标签
 python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_planner.py
+
+# 备注：需要修改的内容为：lg_waypoint_planner_project/configs/language_grounded_waypoint.yaml
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
+
 ```
 
 ## 四、关于 "训练"
 1. 开始训练
 ```
 cd simlingo_liulei
+export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
 ./train_simlingo_seed1.sh
 ```
 2. 网页查看训练结果
