@@ -1,14 +1,14 @@
 
 run:
   # Route directory or a parent data directory.
-  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
   # true: recursively find route folders under input.
   # false: treat input as one route folder.
-  # recursive: true
+  recursive: true
 
   # for Debug
-  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo/lb1_split/routes_training/ControlLoss/Town05_Rep0_Town05_Scenario1_45_route0_07_21_17_39_25
-  recursive: false
+  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo/lb1_split/routes_training/ControlLoss/Town05_Rep0_Town05_Scenario1_45_route0_07_21_17_39_25
+  # recursive: false
 
   # null: process all matched frames. Example: "0015" processes one frame.
   frame: null
@@ -111,7 +111,7 @@ output:
 
 debug:
   # Master switch for the 3x2 debug image.
-  save_debug: true
+  save_debug: false
 
   # Also save the four cropped and colorized channel images separately.
   save_individual_channels: false
@@ -120,7 +120,7 @@ debug:
   # bottom of every panel and makes each footprint visually larger.
   forward_m: 32.0
   rear_m: 6.0
-  side_m: 14.0
+  side_m: 20.0
 
   # Width of each displayed panel after nearest-neighbor enlargement.
   panel_width: 320
@@ -133,9 +133,9 @@ debug:
   panel_border_bgr: [170, 170, 170]
 
   # Compact labels are drawn after panel resizing, so their pixel size stays fixed.
-  show_corner_labels: true       # 是否展示每个小块左上角的文字
-  corner_label_font_scale: 1  # 角标字体缩放
-  corner_label_thickness: 2      # 角标粗细
+  show_corner_labels: true           # 是否展示每个小块左上角的文字
+  corner_label_font_scale: 1         # 角标字体缩放
+  corner_label_thickness: 2          # 角标粗细
   corner_label_outline_thickness: 3  # 角标外轮廓粗细
   corner_label_margin_x_px: 8        # 角标x边距
   corner_label_margin_y_px: 8        # 角标y边距

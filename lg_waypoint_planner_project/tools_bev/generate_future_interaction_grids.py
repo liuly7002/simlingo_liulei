@@ -633,8 +633,7 @@ def _save_debug_image(
     secondary_source: str,
     ego_center: Sequence[float],
     meters_per_pixel: float,
-    cfg,
-) -> None:
+    cfg,) -> None:
     del valid, invalid_reason, frame_name, primary_frames, secondary_frames, secondary_source
     debug_cfg = _cfg_get(cfg, "debug", {})
     background = _debug_background(debug_cfg)
@@ -981,11 +980,11 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
     grid = np.stack(
         [
-            route_mask,
-            ego_future_union,
-            primary_actor_union,
-            interaction_union,
-            secondary_actor_union,
+            route_mask,           # selected_reference_route 上的自车 footprint 占用
+            ego_future_union,     # 自车未来 10 帧的 footprint 占用
+            primary_actor_union,  # 主要因果 actor 未来 10 帧的 footprint 占用
+            interaction_union,    # 自车与主要因果 actor 逐帧对齐后的未来交互区域
+            secondary_actor_union,# 次要 actor 未来 10 帧的 footprint 占用
         ],
         axis=0,
     ).astype(np.float32)
