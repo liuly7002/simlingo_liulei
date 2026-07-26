@@ -1,0 +1,143 @@
+
+run:
+  # Route directory or a parent data directory.
+  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
+  # true: recursively find route folders under input.
+  # false: treat input as one route folder.
+  # recursive: true
+
+  # for Debug
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo/lb1_split/routes_training/ControlLoss/Town05_Rep0_Town05_Scenario1_45_route0_07_21_17_39_25
+  recursive: false
+
+  # null: process all matched frames. Example: "0015" processes one frame.
+  frame: null
+  verbose: true
+  raise_on_error: false
+  save_log: false
+
+paths:
+  measurements_folder: measurements
+  costmap_folder: costmap
+  bev_meta_folder: bev_meta
+  boxes_folder: boxes
+  lg_folder: language_grounded_waypoints
+
+  output_folder: future_interaction_grids
+  debug_folder: future_interaction_grids_debug
+  log_folder: future_interaction_grids_logs
+
+  # Used only when bev_meta does not provide meters_per_pixel/pixels_per_meter.
+  default_pixels_per_meter: 2.0
+
+horizon:
+  # Keep this identical to the model's ten future waypoint labels.
+  num_future_waypoints: 10
+  future_frame_stride: 1
+
+  # The selected LG reference route is resampled to 20 points at approximately
+  # 1 m spacing. Channel 0 rasterizes the full ego footprint at every point.
+  reference_route_points: 20
+  reference_route_spacing_m: 1.0
+
+vehicle:
+  # Current CARLA ego bounding-box half extents used by the LG planner.
+  ego_half_length_m: 2.44619083404541
+  ego_half_width_m: 0.9183566570281982
+
+actors:
+  dynamic_classes: [vehicle, pedestrian]
+  static_obstacle_classes: [traffic_cone, traffic_warning, barrier]
+  max_actor_distance_m: 70.0
+
+  default_vehicle_half_length_m: 2.25
+  default_vehicle_half_width_m: 1.00
+  default_vehicle_half_height_m: 0.80
+
+  default_ped_half_length_m: 0.35
+  default_ped_half_width_m: 0.35
+  default_ped_half_height_m: 0.90
+
+  default_cone_half_length_m: 0.25
+  default_cone_half_width_m: 0.25
+  default_cone_half_height_m: 0.50
+
+  default_warning_half_length_m: 0.75
+  default_warning_half_width_m: 0.30
+  default_warning_half_height_m: 0.75
+
+  default_barrier_half_length_m: 1.00
+  default_barrier_half_width_m: 0.35
+  default_barrier_half_height_m: 0.60
+
+grid:
+  # Additional margin around the ego footprint placed at each of the 20 selected
+  # reference-route points in channel 0.
+  reference_route_footprint_margin_m: 0.00
+
+  # Extra footprint margins used while rasterizing future ego/actor channels.
+  ego_footprint_margin_m: 0.00
+  actor_footprint_margin_m: 0.00
+
+  # Channel 2 intersects the physical actor footprint with an enlarged ego
+  # footprint at the same future step. This represents near-contact interaction
+  # without changing channel 1's physical actor occupancy.
+  interaction_margin_m: 0.35
+
+secondary_actor:
+  enabled: true
+
+  # Use an explicitly stored secondary_attention_actor first when a compatible
+  # LG label contains that field.
+  prefer_saved_secondary_attention_actor: true
+
+  # Current slim LG labels retain all counterfactual object tests. When the
+  # explicit secondary field is absent, choose the highest-scoring accepted
+  # non-primary actor test as channel 3's secondary actor.
+  fallback_to_causal_object_tests: true
+
+  # true avoids treating an arbitrary tested/distractor actor as secondary.
+  # Note: only the primary actor receives final post-selection revalidation, so
+  # this fallback is recorded in metadata as a secondary causal candidate source.
+  require_causal_accepted: true
+
+output:
+  # Save one compressed .npz label per frame under paths.output_folder.
+  save_npz: true
+
+  # Keep a one-to-one label file for invalid LG samples. The .npz then contains
+  # valid=0 and invalid_reason, allowing the later dataloader to mask its loss.
+  save_invalid_labels: true
+
+debug:
+  # Master switch for the 3x2 debug image.
+  save_debug: true
+
+  # Also save the four cropped and colorized channel images separately.
+  save_individual_channels: false
+
+  # Forward-looking crop in meters. A smaller rear range places ego near the
+  # bottom of every panel and makes each footprint visually larger.
+  forward_m: 32.0
+  rear_m: 6.0
+  side_m: 14.0
+
+  # Width of each displayed panel after nearest-neighbor enlargement.
+  panel_width: 320
+
+  # Horizontal gap between adjacent debug panels.
+  panel_gap_px: 12
+
+  # Border for every debug panel.
+  panel_border_px: 2
+  panel_border_bgr: [170, 170, 170]
+
+  # Compact labels are drawn after panel resizing, so their pixel size stays fixed.
+  show_corner_labels: true       # 是否展示每个小块左上角的文字
+  corner_label_font_scale: 1  # 角标字体缩放
+  corner_label_thickness: 2      # 角标粗细
+  corner_label_outline_thickness: 3  # 角标外轮廓粗细
+  corner_label_margin_x_px: 8        # 角标x边距
+  corner_label_margin_y_px: 8        # 角标y边距
+  corner_label_text_bgr: [240, 240, 240]  # 角标文本背景色
+  corner_label_outline_bgr: [35, 35, 35]  # 角标外轮廓背景色

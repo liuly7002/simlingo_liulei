@@ -40,13 +40,13 @@ data_module:
     use_qa: true
     qa_augmentation: true
 
-    img_shift_augmentation: true
+    img_shift_augmentation: true      # 是否进行图像增强(噪声、模糊等,不是几何增强)
     img_shift_augmentation_prob: 0.5
     hist_len: 1
     
     # 所有训练与验证样本固定使用两个TARGET_POINT，
     # 不再在TP、HLC和LMDrive命令之间随机选择。
-    route_as: none                    # none command target_point
+    route_as: command                    # none command target_point
     use_lmdrive_commands: false
     
     use_old_towns: true
@@ -65,7 +65,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_no_navigation_no_attention_seed_9876
+name: simlingo_lg_hlc_no_attention_seed_9876
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.
