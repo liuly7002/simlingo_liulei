@@ -102,6 +102,10 @@ class DreamerDatasetConfig:
     use_lg_supervision: bool = False
     lg_label_folder: str = "language_grounded_waypoints"
 
+    #修改20260726：LG五通道结构化未来世界标签配置。
+    lg_use_future_interaction_grid: bool = False
+    lg_future_interaction_grid_folder: str = "future_interaction_grids"
+
     # Main ablation switches.
     # True/True  : complete LG method (four-question language + LG waypoints)
     # False/True : LG-WP Only

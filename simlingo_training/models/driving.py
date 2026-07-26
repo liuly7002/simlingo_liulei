@@ -940,6 +940,26 @@ class DrivingModel(pl.LightningModule):
     
     ########################################### 1. 训练时每个batch的总入口 ###########################################
     def training_step(self, batch: DrivingExample, _batch_idx: int = 0):
+
+        #修改20260726：首次遇到结构化未来世界标签时检查batch形状。
+        # if (
+        #     not getattr(
+        #         self,
+        #         "_printed_future_interaction_grid",
+        #         False,
+        #     )
+        #     and batch.driving_label.future_interaction_grid is not None
+        # ):
+        #     print(
+        #         "future_interaction_grid:",
+        #         batch.driving_label.future_interaction_grid.shape,
+        #     )
+        #     print(
+        #         "future_interaction_valid:",
+        #         batch.driving_label.future_interaction_valid,
+        #     )
+        #     self._printed_future_interaction_grid = True
+
         output, loss_logs = self.forward_loss(batch)
         logs = output
         self.log_training_output(logs, "train")
@@ -948,7 +968,6 @@ class DrivingModel(pl.LightningModule):
         self.log("train/loss", output.loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         return {"loss": output.loss, "outputs": output}
-
 
     
     
