@@ -2,7 +2,7 @@
 
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import gzip
 import random
 
@@ -18,6 +18,15 @@ from simlingo_training.utils.custom_types import DatasetOutput
 
 
 VIZ_DATA = False
+
+#修改20260726：必须与generate_future_interaction_grids.py中的保存顺序一致。
+FUTURE_INTERACTION_CHANNEL_NAMES = (
+    "selected_route_ego_footprint_occupancy",
+    "future_ego_footprint_occupancy",
+    "primary_causal_actor_future_footprint_occupancy",
+    "time_aligned_primary_future_interaction",
+    "secondary_actor_future_footprint_occupancy",
+)
 
 
 class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
@@ -49,6 +58,21 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 self,
                 "lg_label_folder",
                 "language_grounded_waypoints",
+            )
+        )
+        #修改20260726：结构化未来世界标签读取配置。
+        self.lg_use_future_interaction_grid = bool(
+            getattr(
+                self,
+                "lg_use_future_interaction_grid",
+                False,
+            )
+        )
+        self.lg_future_interaction_grid_folder = str(
+            getattr(
+                self,
+                "lg_future_interaction_grid_folder",
+                "future_interaction_grids",
             )
         )
         self.lg_question_keys = tuple(
@@ -95,6 +119,20 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             / f"{frame_id:04d}.json.gz"
         )
 
+    #修改20260726：获得当前帧的结构化未来世界标签路径。
+    def _future_interaction_grid_path_for_index(
+        self,
+        index: int,
+    ) -> Path:
+        measurement_dir = self._measurement_dir_for_index(index)
+        route_dir = measurement_dir.parent
+        frame_id = self._current_frame_for_index(index)
+        return (
+            route_dir
+            / self.lg_future_interaction_grid_folder
+            / f"{frame_id:04d}.npz"
+        )
+
     @staticmethod
     def _load_gzip_json(path: Path) -> Dict:
         with gzip.open(path, "rt", encoding="utf-8") as file_obj:
@@ -102,6 +140,66 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
         if not isinstance(payload, dict):
             raise ValueError("LG label root must be a dictionary")
         return payload
+
+    #修改20260726：读取并检查五通道结构化未来世界标签。
+    @staticmethod
+    def _load_future_interaction_grid(
+        path: Path,
+    ) -> Tuple[Optional[np.ndarray], bool]:
+        if not path.is_file():
+            return None, False
+
+        with np.load(str(path), allow_pickle=False) as payload:
+            if "future_interaction_grid" not in payload.files:
+                raise ValueError(
+                    f"Missing future_interaction_grid in {path}"
+                )
+
+            grid = np.asarray(
+                payload["future_interaction_grid"],
+                dtype=np.float32,
+            )
+
+            valid = False
+            if "valid" in payload.files:
+                valid_array = np.asarray(
+                    payload["valid"]
+                ).reshape(-1)
+                if valid_array.size > 0:
+                    valid = bool(valid_array[0])
+
+            if "channel_names" in payload.files:
+                channel_names = tuple(
+                    str(item)
+                    for item in np.asarray(
+                        payload["channel_names"]
+                    ).reshape(-1).tolist()
+                )
+                if channel_names != FUTURE_INTERACTION_CHANNEL_NAMES:
+                    raise ValueError(
+                        "Unexpected future interaction channel order "
+                        f"in {path}: {channel_names}"
+                    )
+
+        if grid.ndim != 3 or grid.shape[0] != 5:
+            raise ValueError(
+                "future_interaction_grid must have shape "
+                f"[5, H, W], but received {tuple(grid.shape)} "
+                f"from {path}"
+            )
+
+        if not np.isfinite(grid).all():
+            raise ValueError(
+                f"future_interaction_grid contains non-finite values: {path}"
+            )
+
+        if np.any(grid < 0.0) or np.any(grid > 1.0):
+            raise ValueError(
+                "future_interaction_grid values must be within "
+                f"[0, 1]: {path}"
+            )
+
+        return grid.astype(np.float32), valid
 
     def _extract_questions(self, payload: Dict) -> List[Dict[str, str]]:
         questions: List[Dict[str, str]] = []
@@ -642,6 +740,21 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 f"Invalid LG label at {lg_path}: {reason}"
             )
 
+        #修改20260726：读取当前帧的五通道结构化未来世界标签。
+        future_interaction_grid = None
+        future_interaction_valid = False
+
+        if self.lg_use_future_interaction_grid:
+            future_interaction_path = (
+                self._future_interaction_grid_path_for_index(index)
+            )
+            (
+                future_interaction_grid,
+                future_interaction_valid,
+            ) = self._load_future_interaction_grid(
+                future_interaction_path
+            )
+
         #修改20260720：无有效因果actor时返回全零目标和False掩码，
         # 但不丢弃该LG语言/轨迹样本。
         (
@@ -779,6 +892,14 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             ),
             camera_attention_valid=(
                 camera_attention_valid
+            ),
+
+            #修改20260726：传递五通道结构化未来世界标签。
+            future_interaction_grid=(
+                future_interaction_grid
+            ),
+            future_interaction_valid=(
+                future_interaction_valid
             ),
         )
 

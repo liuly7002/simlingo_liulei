@@ -29,6 +29,10 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     camera_attention_target: Optional[Tensor] = None
     camera_attention_valid: Optional[bool] = None
 
+    #修改20260726：LG单样本的结构化未来世界监督。
+    future_interaction_grid: Optional[Tensor] = None
+    future_interaction_valid: Optional[bool] = None
+
 
 class LanguageLabel(NamedTuple):
     phrase_ids: Tensor  # [B, max(len(tokens))] int64
@@ -76,6 +80,10 @@ class DrivingLabel(NamedTuple):
     #修改20260720：batch级LG六视角注意力监督。
     camera_attention_target: Optional[Tensor] = None
     camera_attention_valid: Optional[Tensor] = None
+
+    #修改20260726：batch级LG结构化未来世界监督。
+    future_interaction_grid: Optional[Tensor] = None
+    future_interaction_valid: Optional[Tensor] = None
 
 
 class DrivingExample(NamedTuple):

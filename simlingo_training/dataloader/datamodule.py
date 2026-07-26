@@ -697,7 +697,81 @@ class DataModule(LightningDataModule):
                 sample_index
             ] = True
 
+        #修改20260726：把LG单样本的五通道结构化未来世界标签组成batch。
+        # 普通Driving样本或缺少该标签的样本保持valid=False。
+        future_interaction_grid = None
+        future_interaction_valid = torch.zeros(
+            (BS,),
+            dtype=torch.bool,
+        )
+        future_interaction_shape = None
 
+        for sample_index, sample in enumerate(data):
+            sample_grid = getattr(
+                sample,
+                "future_interaction_grid",
+                None,
+            )
+            if sample_grid is None:
+                continue
+
+            sample_grid = np.asarray(
+                sample_grid,
+                dtype=np.float32,
+            )
+
+            if sample_grid.ndim != 3 or sample_grid.shape[0] != 5:
+                raise ValueError(
+                    "LG future_interaction_grid must have shape "
+                    f"[5, H, W], but received "
+                    f"{tuple(sample_grid.shape)}."
+                )
+
+            if not np.isfinite(sample_grid).all():
+                raise ValueError(
+                    "LG future_interaction_grid contains "
+                    "non-finite values."
+                )
+
+            if np.any(sample_grid < 0.0) or np.any(
+                sample_grid > 1.0
+            ):
+                raise ValueError(
+                    "LG future_interaction_grid values must "
+                    "be within [0, 1]."
+                )
+
+            if future_interaction_grid is None:
+                future_interaction_shape = tuple(
+                    sample_grid.shape
+                )
+                future_interaction_grid = torch.zeros(
+                    (BS, *future_interaction_shape),
+                    dtype=torch.float32,
+                )
+            elif tuple(sample_grid.shape) != (
+                future_interaction_shape
+            ):
+                raise ValueError(
+                    "future_interaction_grid shape mismatch "
+                    "inside the batch: expected "
+                    f"{future_interaction_shape}, received "
+                    f"{tuple(sample_grid.shape)}."
+                )
+
+            future_interaction_grid[
+                sample_index
+            ] = torch.from_numpy(sample_grid)
+
+            future_interaction_valid[
+                sample_index
+            ] = bool(
+                getattr(
+                    sample,
+                    "future_interaction_valid",
+                    False,
+                )
+            )
         
         
 
@@ -767,6 +841,13 @@ class DataModule(LightningDataModule):
                 ),
                 camera_attention_valid=(
                     camera_attention_valid
+                ),
+                #修改20260726：batch级五通道结构化未来世界监督。
+                future_interaction_grid=(
+                    future_interaction_grid
+                ),
+                future_interaction_valid=(
+                    future_interaction_valid
                 ),
             )
             

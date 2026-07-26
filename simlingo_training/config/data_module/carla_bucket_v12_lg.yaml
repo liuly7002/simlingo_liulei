@@ -36,6 +36,10 @@ dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是
   use_lg_supervision: true   # 是否启用lg监督
   lg_label_folder: language_grounded_waypoints  # lg标签文件夹名称
 
+  #修改20260726：读取LG生成的五通道结构化未来世界标签。
+  lg_use_future_interaction_grid: true
+  lg_future_interaction_grid_folder: future_interaction_grids
+
   # Main experiment / ablation switches:
   # true / true   -> LG-Full
   # false / true  -> LG-WP Only
