@@ -6,17 +6,9 @@
 base_lg_config: ../../lg_waypoint_planner_project/configs/language_grounded_waypoint.yaml
 
 run:
-  # Route directory or a parent data directory.
   input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
-  # true: recursively find route folders under input.
-  # false: treat input as one route folder.
   recursive: true
-
-  # for debug
-  # input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo/lb1_split/routes_training/ControlLoss/Town05_Rep0_Town05_Scenario1_45_route0_07_21_17_39_25
-  # recursive: false
-
-  frame: null # 0015
+  frame: null
   verbose: true
   raise_on_error: false
   save_log: false
@@ -40,7 +32,7 @@ structured_world:
     fde_weight: 0.25
     speed_weight: 0.10
 
-    # A poor match makes the entire five-channel label invalid, because otherwise
+    # A poor match makes the entire four-channel label invalid, because otherwise
     # C2/C4 could describe a strategy that is not consistent with expert driving.
     max_ade_m: 3.0
     max_fde_m: 6.0
@@ -48,16 +40,37 @@ structured_world:
 
   secondary_actor:
     enabled: true
-    # Prefer the same causal acceptance criterion as the primary actor.
+
+    #修改20260727：C4不再直接选择第二高分actor，而要求其具有独立且足够强的
+    # 专家条件反事实影响。
     require_causal_accepted: true
-    # If no second accepted actor exists, optionally use the highest-scoring valid
-    # counterfactual actor test. Set false for the strictest C4 definition.
     fallback_to_valid_counterfactual_test: false
+
+    # 只保留达到完整物理因果阈值的次要actor，不接受仅凭很小route-follow
+    # release效应通过的对象。
+    min_causal_score: 0.60
+
+    # 次要actor的因果作用不能相对主要actor过弱。
+    min_score_ratio_to_primary: 0.35
+
+    # actor至少需要在未来10帧中的5帧被成功追踪。
+    min_future_frames_found: 5
+
+    # actor在某个时间对齐的未来时刻需位于专家轨迹中心10m范围内。
+    max_time_aligned_center_distance_m: 10.0
+
+    # 当另一个actor与primary产生完全相同的反事实意图、候选轨迹和作用指标时，
+    # 视为重复响应，不再作为独立C4监督。
+    reject_duplicate_primary_response: true
+
+    # 多个非主要actor若产生相同的反事实意图、候选变体和作用向量，说明当前证据
+    # 无法唯一归因；严格模式下整组拒绝，避免按遍历顺序任意选择C4。
+    reject_ambiguous_secondary_response_groups: true
+    duplicate_effect_l1_tolerance: 0.0001
 
   grid:
     reference_route_footprint_margin_m: 0.0
     ego_footprint_margin_m: 0.0
-    interaction_margin_m: 0.35
     actor_footprint_margin_m: 0.0
 
 output:

@@ -231,7 +231,6 @@ def build_grid(
     ego_half_w = float(cfg.vehicle.ego_half_width_m)
     route_margin = max(_cfg_float(grid_cfg, "reference_route_footprint_margin_m", 0.0), 0.0)
     ego_margin = max(_cfg_float(grid_cfg, "ego_footprint_margin_m", 0.0), 0.0)
-    interaction_margin = max(_cfg_float(grid_cfg, "interaction_margin_m", 0.35), 0.0)
     actor_margin = max(_cfg_float(grid_cfg, "actor_footprint_margin_m", 0.0), 0.0)
 
     route_mask = _draw_route_occupancy(
@@ -246,7 +245,6 @@ def build_grid(
 
     ego_union = np.zeros(shape, dtype=np.float32)
     primary_union = np.zeros(shape, dtype=np.float32)
-    interaction_union = np.zeros(shape, dtype=np.float32)
     secondary_union = np.zeros(shape, dtype=np.float32)
     primary_frames = 0
     secondary_frames = 0
@@ -283,20 +281,6 @@ def build_grid(
             )
             primary_union += primary_mask.astype(np.float32)
 
-            ego_interaction = np.zeros(shape, dtype=np.uint8)
-            _fill_obb(
-                ego_interaction,
-                waypoint,
-                yaw,
-                ego_half_l + ego_margin + interaction_margin,
-                ego_half_w + ego_margin + interaction_margin,
-                ego_center,
-                meters_per_pixel,
-            )
-            interaction_union += (
-                (ego_interaction > 0) & (primary_mask > 0)
-            ).astype(np.float32)
-
         secondary_future = _find_actor(actor_timelines.get(step, []), secondary_actor)
         if secondary_future is not None:
             secondary_frames += 1
@@ -315,11 +299,11 @@ def build_grid(
     if horizon > 0:
         ego_union = np.clip(ego_union / float(horizon), 0.0, 1.0)
         primary_union = np.clip(primary_union / float(horizon), 0.0, 1.0)
-        interaction_union = np.clip(interaction_union / float(horizon), 0.0, 1.0)
         secondary_union = np.clip(secondary_union / float(horizon), 0.0, 1.0)
 
+    #修改20260727：删除原C3交互通道，仅保存C0、C1、C2和C4。
     grid = np.stack(
-        [route_mask, ego_union, primary_union, interaction_union, secondary_union],
+        [route_mask, ego_union, primary_union, secondary_union],
         axis=0,
     ).astype(np.float32)
     return {
@@ -327,7 +311,6 @@ def build_grid(
         "route_mask": route_mask,
         "ego_future_mask": ego_union,
         "primary_actor_mask": primary_union,
-        "interaction_mask": interaction_union,
         "secondary_actor_mask": secondary_union,
         "primary_actor_future_frames_found": int(primary_frames),
         "secondary_actor_future_frames_found": int(secondary_frames),
@@ -345,6 +328,7 @@ def save_npz(
     secondary_actor: Optional[Dict],
     secondary_score: float,
     secondary_source: str,
+    secondary_selection: Dict,
     expert_match: Dict,
     reference_route_points_used: int,
     meters_per_pixel: float,
@@ -395,6 +379,22 @@ def save_npz(
         ),
         primary_causal_score=np.asarray(float(primary_score), dtype=np.float32),
         secondary_causal_score=np.asarray(float(secondary_score), dtype=np.float32),
+        secondary_selection_policy=np.asarray(
+            str(secondary_selection.get("selection_policy", "")), dtype="<U96"
+        ),
+        secondary_selection_reason=np.asarray(
+            str(secondary_selection.get("reason", "")), dtype="<U96"
+        ),
+        secondary_selection_eligible_candidate_count=np.asarray(
+            int(secondary_selection.get("eligible_candidate_count", 0)), dtype=np.int16
+        ),
+        secondary_selection_rejection_counts=np.asarray(
+            str(secondary_selection.get("rejection_counts", {})), dtype="<U512"
+        ),
+        structured_world_channel_count=np.asarray(len(CHANNEL_NAMES), dtype=np.int16),
+        removed_channel=np.asarray(
+            "time_aligned_primary_future_interaction", dtype="<U64"
+        ),
     )
 
 
@@ -440,20 +440,36 @@ def _label(image, text, cfg):
 
 def save_debug_image(path: Path, grid_result: Dict, ego_center, meters_per_pixel, cfg) -> None:
     debug_cfg = _cfg_get(cfg, "debug", {})
-    background = tuple(int(v) for v in _cfg_get(debug_cfg, "background_bgr", [54, 60, 66]))
+    background = tuple(
+        int(v) for v in _cfg_get(debug_cfg, "background_bgr", [54, 60, 66])
+    )
+    #修改20260727：Driving调试图删除C3，仅显示C0、C1、C2、C4及总叠加图。
     masks = [
         grid_result["route_mask"],
         grid_result["ego_future_mask"],
         grid_result["primary_actor_mask"],
-        grid_result["interaction_mask"],
         grid_result["secondary_actor_mask"],
     ]
-    colors = [(220, 145, 70), (95, 190, 95), (75, 165, 235), (200, 95, 215), (85, 205, 205)]
-    labels = ["C0 Expert Route", "C1 Expert Ego", "C2 Primary", "C3 Interaction", "C4 Secondary"]
-    panels = [_colorize(mask, color, background) for mask, color in zip(masks, colors)]
+    colors = [
+        (220, 145, 70),
+        (95, 190, 95),
+        (75, 165, 235),
+        (85, 205, 205),
+    ]
+    labels = [
+        "C0 Expert Route",
+        "C1 Expert Ego",
+        "C2 Primary",
+        "C4 Secondary",
+    ]
+    suffixes = ["c0", "c1", "c2", "c4"]
+    panels = [
+        _colorize(mask, color, background)
+        for mask, color in zip(masks, colors)
+    ]
 
     overlay = np.full((*masks[0].shape, 3), background, dtype=np.uint8)
-    for mask, color, alpha in zip(masks, colors, [0.78, 0.72, 0.90, 1.0, 0.85]):
+    for mask, color, alpha in zip(masks, colors, [0.78, 0.72, 0.90, 0.85]):
         strength = (_normalize(mask)[..., None] * alpha).clip(0.0, 1.0)
         overlay = np.rint(
             overlay.astype(np.float32) * (1.0 - strength)
@@ -461,16 +477,28 @@ def save_debug_image(path: Path, grid_result: Dict, ego_center, meters_per_pixel
         ).clip(0, 255).astype(np.uint8)
     panels.append(overlay)
     labels.append("Full")
+    suffixes.append("full")
 
     width = max(_cfg_int(debug_cfg, "panel_width", 320), 160)
     gap = max(_cfg_int(debug_cfg, "panel_gap_px", 12), 0)
     border = max(_cfg_int(debug_cfg, "panel_border_px", 2), 0)
-    border_color = tuple(int(v) for v in _cfg_get(debug_cfg, "panel_border_bgr", [160, 160, 160]))
+    border_color = tuple(
+        int(v)
+        for v in _cfg_get(
+            debug_cfg,
+            "panel_border_bgr",
+            [160, 160, 160],
+        )
+    )
     processed = []
     for panel, label in zip(panels, labels):
         panel = _crop(panel, ego_center, meters_per_pixel, debug_cfg)
         scale = width / float(max(panel.shape[1], 1))
-        panel = cv2.resize(panel, (width, max(1, int(round(panel.shape[0] * scale)))), interpolation=cv2.INTER_NEAREST)
+        panel = cv2.resize(
+            panel,
+            (width, max(1, int(round(panel.shape[0] * scale)))),
+            interpolation=cv2.INTER_NEAREST,
+        )
         panel = _label(panel, label, debug_cfg)
         processed.append(panel)
 
@@ -478,29 +506,64 @@ def save_debug_image(path: Path, grid_result: Dict, ego_center, meters_per_pixel
     normalized = []
     for panel in processed:
         panel = cv2.copyMakeBorder(
-            panel, 0, max_h - panel.shape[0], 0, 0,
-            borderType=cv2.BORDER_CONSTANT, value=background,
+            panel,
+            0,
+            max_h - panel.shape[0],
+            0,
+            0,
+            borderType=cv2.BORDER_CONSTANT,
+            value=background,
         )
         if border > 0:
-            panel = cv2.copyMakeBorder(panel, border, border, border, border, cv2.BORDER_CONSTANT, value=border_color)
+            panel = cv2.copyMakeBorder(
+                panel,
+                border,
+                border,
+                border,
+                border,
+                cv2.BORDER_CONSTANT,
+                value=border_color,
+            )
         normalized.append(panel)
 
+    # 五个panel按两列排列；最后一个Full位于左下，右下用空白占位。
+    blank = np.full_like(normalized[0], background, dtype=np.uint8)
+    normalized.append(blank)
     rows = []
-    spacer_h = np.full((normalized[0].shape[0], gap, 3), background, dtype=np.uint8) if gap else None
-    for start in (0, 2, 4):
+    spacer_h = (
+        np.full((normalized[0].shape[0], gap, 3), background, dtype=np.uint8)
+        if gap
+        else None
+    )
+    for start_index in range(0, len(normalized), 2):
+        pair = normalized[start_index:start_index + 2]
         row = np.concatenate(
-            [normalized[start], spacer_h, normalized[start + 1]] if spacer_h is not None else normalized[start:start + 2],
+            [pair[0], spacer_h, pair[1]]
+            if spacer_h is not None
+            else pair,
             axis=1,
         )
         rows.append(row)
-    spacer_v = np.full((gap, rows[0].shape[1], 3), background, dtype=np.uint8) if gap else None
-    composite = np.concatenate(
-        [rows[0], spacer_v, rows[1], spacer_v, rows[2]] if spacer_v is not None else rows,
-        axis=0,
+
+    spacer_v = (
+        np.full((gap, rows[0].shape[1], 3), background, dtype=np.uint8)
+        if gap
+        else None
     )
+    composite_parts = []
+    for row_index, row in enumerate(rows):
+        if row_index > 0 and spacer_v is not None:
+            composite_parts.append(spacer_v)
+        composite_parts.append(row)
+    composite = np.concatenate(composite_parts, axis=0)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), composite)
 
     if _cfg_bool(debug_cfg, "save_individual_channels", False):
-        for index, panel in enumerate(processed):
-            cv2.imwrite(str(path.with_name(f"{path.stem}_c{index}.png")), panel)
+        for suffix, panel in zip(suffixes, processed):
+            cv2.imwrite(
+                str(path.with_name(f"{path.stem}_{suffix}.png")),
+                panel,
+            )
+
