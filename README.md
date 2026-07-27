@@ -136,6 +136,36 @@ python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_plan
 # 备注：需要修改的内容为：lg_waypoint_planner_project/configs/language_grounded_waypoint.yaml
   input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_17_23_23_22/data/simlingo
 
+
+# 5.3 生成lg结构化世界标签
+python lg_waypoint_planner_project/tools_bev/generate_future_interaction_grids.py
+# 5.3 检查结构化世界标签质量以用于优化网络【网络优化阶段选择】
+python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
+# 备注：需要修改的内容为：
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo"),
+        help=(
+            "数据集根目录、单条 route 目录，或 future_interaction_grids 目录。"
+        ),
+    )
+
+
+# 5.4 生成driving结构化世界标签
+python driving_structured_world_project/tools_bev/generate_driving_structured_world.py
+# 5.4 检查结构化世界标签质量以用于优化网络【网络优化阶段选择】
+python driving_structured_world_project/tools_bev/analyze_future_interaction_grids.py
+# 备注：需要修改的内容为：
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo"),
+        help=(
+            "数据集根目录、单条 route 目录，或 future_interaction_grids 目录。"
+        ),
+    )
+
 ```
 
 ## 四、关于 "训练"
