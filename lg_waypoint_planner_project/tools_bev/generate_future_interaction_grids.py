@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Generate LG-derived five-channel future interaction grid labels.
+"""Generate LG-derived four-channel future interaction grid labels.
 
 The saved grid is aligned with the existing BEV and contains:
 
-    channel 0: equal-weight ego-footprint occupancy on 20 LG selected-route points
-    channel 1: equal-weight future ego-footprint occupancy over 10 frames
-    channel 2: equal-weight primary causal-actor footprint occupancy over 10 frames
-    channel 3: equal-weight time-aligned ego/primary-actor interaction over 10 frames
-    channel 4: equal-weight secondary-actor footprint occupancy over 10 frames
+    tensor index 0 (C0): equal-weight ego-footprint occupancy on 20 LG selected-route points
+    tensor index 1 (C1): equal-weight future ego-footprint occupancy over 10 frames
+    tensor index 2 (C2): equal-weight primary causal-actor footprint occupancy over 10 frames
+    tensor index 3 (C4): equal-weight secondary-actor footprint occupancy over 10 frames
 
 All route points and future frames use equal weights. No temporal attenuation is
 applied. Channel 4 first uses an explicitly saved ``secondary_attention_actor``
@@ -52,7 +51,6 @@ CHANNEL_NAMES = np.asarray(
         "selected_route_ego_footprint_occupancy",
         "future_ego_footprint_occupancy",
         "primary_causal_actor_future_footprint_occupancy",
-        "time_aligned_primary_future_interaction",
         "secondary_actor_future_footprint_occupancy",
     ],
     dtype="<U64",
@@ -391,7 +389,6 @@ def _empty_result(shape: Tuple[int, int]):
         np.zeros(shape, dtype=np.float32),  # selected route ego footprints
         np.zeros(shape, dtype=np.float32),  # future ego footprints
         np.zeros(shape, dtype=np.float32),  # primary actor future footprints
-        np.zeros(shape, dtype=np.float32),  # primary interaction
         np.zeros(shape, dtype=np.float32),  # secondary actor future footprints
     )
 
@@ -622,7 +619,6 @@ def _save_debug_image(
     save_path: Path,
     route_mask: np.ndarray,
     primary_actor_mask: np.ndarray,
-    interaction_mask: np.ndarray,
     secondary_actor_mask: np.ndarray,
     ego_future_mask: np.ndarray,
     valid: bool,
@@ -641,7 +637,6 @@ def _save_debug_image(
     route_panel = _colorize_mask(route_mask, (220, 145, 70), background, normalize_for_debug=True)
     ego_future_panel = _colorize_mask(ego_future_mask, (95, 190, 95), background, normalize_for_debug=True)
     primary_panel = _colorize_mask(primary_actor_mask, (75, 165, 235), background, normalize_for_debug=True)
-    interaction_panel = _colorize_mask(interaction_mask, (200, 95, 215), background, normalize_for_debug=True)
     secondary_panel = _colorize_mask(secondary_actor_mask, (85, 205, 205), background, normalize_for_debug=True)
 
     overlay = np.full((*route_mask.shape, 3), background, dtype=np.uint8)
@@ -649,14 +644,12 @@ def _save_debug_image(
     overlay = _blend_mask(overlay, ego_future_mask, (80, 190, 95), alpha=0.72)
     overlay = _blend_mask(overlay, primary_actor_mask, (55, 145, 235), alpha=0.90)
     overlay = _blend_mask(overlay, secondary_actor_mask, (65, 205, 205), alpha=0.85)
-    overlay = _blend_mask(overlay, interaction_mask, (235, 235, 235), alpha=1.00)
 
-    raw_panels = [route_panel, ego_future_panel, primary_panel, interaction_panel, secondary_panel, overlay]
+    raw_panels = [route_panel, ego_future_panel, primary_panel, secondary_panel, overlay]
     panel_labels = [
         "C0 Route",
         "C1 Ego",
         "C2 Primary",
-        "C3 Interaction",
         "C4 Secondary",
         "Full",
     ]
@@ -692,7 +685,8 @@ def _save_debug_image(
     panel_total_height = max(panel.shape[0] for panel in normalized)
     panel_total_width = max(panel.shape[1] for panel in normalized)
 
-    # 修改20260726：debug 图改为三行两列，最后一个面板作为 overlay。
+    #修改20260727：LG调试图删除C3。五个有效面板按两列排列，右下使用空白占位。
+    normalized.append(np.full_like(normalized[0], background, dtype=np.uint8))
     grid_rows = [normalized[0:2], normalized[2:4], normalized[4:6]]
     row_images = []
     h_spacer = np.full((panel_total_height, panel_gap, 3), background, dtype=np.uint8) if panel_gap > 0 else None
@@ -733,7 +727,6 @@ def _save_debug_image(
             ("c0_route_ego_footprints", route_mask, (220, 145, 70), "C0 Route"),
             ("c1_future_ego", ego_future_mask, (95, 190, 95), "C1 Ego"),
             ("c2_primary_actor", primary_actor_mask, (75, 165, 235), "C2 Primary"),
-            ("c3_primary_interaction", interaction_mask, (200, 95, 215), "C3 Interaction"),
             ("c4_secondary_actor", secondary_actor_mask, (85, 205, 205), "C4 Secondary"),
         ]
         for suffix, mask, color, panel_label in individual:
@@ -791,7 +784,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         route_mask,
         ego_future_union,
         primary_actor_union,
-        interaction_union,
         secondary_actor_union,
     ) = _empty_result(shape)
 
@@ -800,6 +792,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     primary_actor_frames_found = 0
     secondary_actor_frames_found = 0
     critical_actor_id = None
+    secondary_actor = None
     secondary_actor_id = None
     secondary_actor_source = "none"
 
@@ -831,7 +824,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         0.0,
     )
     ego_margin = max(_cfg_float(grid_cfg, "ego_footprint_margin_m", 0.0), 0.0)
-    interaction_margin = max(_cfg_float(grid_cfg, "interaction_margin_m", 0.35), 0.0)
     actor_margin = max(_cfg_float(grid_cfg, "actor_footprint_margin_m", 0.0), 0.0)
 
     if len(route_points) > 0:
@@ -854,11 +846,13 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             valid = False
             invalid_reason = invalid_reason or "causal_actor_without_id"
 
-    secondary_actor, secondary_actor_source = _select_secondary_actor(
-        lg_label=lg_label,
-        primary_actor_id=critical_actor_id,
-        cfg=cfg,
-    )
+    #修改20260727：C4以C2存在为前提；没有有效primary actor时不选择secondary actor。
+    if has_causal_actor and critical_actor_id is not None:
+        secondary_actor, secondary_actor_source = _select_secondary_actor(
+            lg_label=lg_label,
+            primary_actor_id=critical_actor_id,
+            cfg=cfg,
+        )
     has_secondary_actor = _actor_exists(secondary_actor)
     if has_secondary_actor:
         secondary_actor_id = secondary_actor.get("id", None)
@@ -916,23 +910,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
                     )
                     primary_actor_union += primary_mask.astype(np.float32)
 
-                    # Interaction is computed at the same future step before the
-                    # ten per-step interaction masks are merged. This avoids false
-                    # conflicts from intersecting independently aggregated paths.
-                    ego_interaction_mask = np.zeros(shape, dtype=np.uint8)
-                    _fill_obb(
-                        ego_interaction_mask,
-                        center_xy=waypoint,
-                        yaw_rad=yaw,
-                        half_length_m=ego_half_length + ego_margin + interaction_margin,
-                        half_width_m=ego_half_width + ego_margin + interaction_margin,
-                        ego_center=ego_center,
-                        meters_per_pixel=meters_per_pixel,
-                    )
-                    interaction_step = (
-                        (ego_interaction_mask > 0) & (primary_mask > 0)
-                    ).astype(np.uint8)
-                    interaction_union += interaction_step.astype(np.float32)
 
             if has_secondary_actor and secondary_actor_id is not None:
                 secondary_future_actor = _find_actor(
@@ -961,7 +938,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     # the remaining frames.
     if horizon > 0:
         primary_actor_union = np.clip(primary_actor_union / float(horizon), 0.0, 1.0)
-        interaction_union = np.clip(interaction_union / float(horizon), 0.0, 1.0)
         secondary_actor_union = np.clip(secondary_actor_union / float(horizon), 0.0, 1.0)
         ego_future_union = np.clip(ego_future_union / float(horizon), 0.0, 1.0)
 
@@ -978,13 +954,13 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     if has_secondary_actor and secondary_actor_frames_found == 0:
         secondary_actor_source = f"{secondary_actor_source}:missing_in_all_future_frames"
 
+    #修改20260727：删除原C3交互通道，仅保存C0、C1、C2和C4。
     grid = np.stack(
         [
-            route_mask,           # selected_reference_route 上的自车 footprint 占用
-            ego_future_union,     # 自车未来 10 帧的 footprint 占用
-            primary_actor_union,  # 主要因果 actor 未来 10 帧的 footprint 占用
-            interaction_union,    # 自车与主要因果 actor 逐帧对齐后的未来交互区域
-            secondary_actor_union,# 次要 actor 未来 10 帧的 footprint 占用
+            route_mask,            # selected_reference_route 上的自车 footprint 占用
+            ego_future_union,      # 自车未来 10 帧的 footprint 占用
+            primary_actor_union,   # 主要因果 actor 未来 10 帧的 footprint 占用
+            secondary_actor_union, # 次要 actor 未来 10 帧的 footprint 占用
         ],
         axis=0,
     ).astype(np.float32)
@@ -1024,7 +1000,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             save_path=debug_path,
             route_mask=route_mask,
             primary_actor_mask=primary_actor_union,
-            interaction_mask=interaction_union,
             secondary_actor_mask=secondary_actor_union,
             ego_future_mask=ego_future_union,
             valid=valid,
@@ -1046,7 +1021,6 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             f"secondary_source={secondary_actor_source} "
             f"route_mass={float(route_mask.sum()):.1f} "
             f"primary_mass={float(primary_actor_union.sum()):.1f} "
-            f"interaction_mass={float(interaction_union.sum()):.1f} "
             f"secondary_mass={float(secondary_actor_union.sum()):.1f} "
             f"reason={invalid_reason or 'none'}"
         )

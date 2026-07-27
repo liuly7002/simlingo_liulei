@@ -79,11 +79,6 @@ grid:
   ego_footprint_margin_m: 0.00
   actor_footprint_margin_m: 0.00
 
-  # Channel 2 intersects the physical actor footprint with an enlarged ego
-  # footprint at the same future step. This represents near-contact interaction
-  # without changing channel 1's physical actor occupancy.
-  interaction_margin_m: 0.35
-
 secondary_actor:
   enabled: true
 
@@ -93,7 +88,7 @@ secondary_actor:
 
   # Current slim LG labels retain all counterfactual object tests. When the
   # explicit secondary field is absent, choose the highest-scoring accepted
-  # non-primary actor test as channel 3's secondary actor.
+  # non-primary actor test as the C4 secondary actor.
   fallback_to_causal_object_tests: true
 
   # true avoids treating an arbitrary tested/distractor actor as secondary.

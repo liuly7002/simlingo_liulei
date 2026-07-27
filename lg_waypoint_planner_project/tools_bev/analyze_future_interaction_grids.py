@@ -2,22 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-统计 LG 五通道 future_interaction_grid 标签。
+统计 LG 四通道 future_interaction_grid 标签。
 
 支持检查：
 1. language_grounded_waypoints 与 future_interaction_grids 的文件覆盖率；
 2. .npz 是否可读取，shape、channel_names、数值范围是否合法；
 3. valid=True / valid=False 数量；
-4. 五个通道的非零样本比例、平均占用比例、均值和最大值；
+4. 四个通道的非零样本比例、平均占用比例、均值和最大值；
 5. actor 元数据与通道内容是否存在明显矛盾；
 6. 下采样到指定分辨率后，各通道是否变成全零；
 7. 保存 summary.json 和 per_file.csv，便于进一步分析。
 
-当前五通道顺序必须与 generate_future_interaction_grids.py 一致：
+当前四通道顺序必须与 generate_future_interaction_grids.py 一致：
 C0: selected route ego-footprint occupancy
 C1: future ego-footprint occupancy
 C2: primary causal actor future footprint occupancy
-C3: time-aligned primary future interaction
 C4: secondary actor future footprint occupancy
 """
 
@@ -39,7 +38,6 @@ EXPECTED_CHANNEL_NAMES: Tuple[str, ...] = (
     "selected_route_ego_footprint_occupancy",
     "future_ego_footprint_occupancy",
     "primary_causal_actor_future_footprint_occupancy",
-    "time_aligned_primary_future_interaction",
     "secondary_actor_future_footprint_occupancy",
 )
 
@@ -47,14 +45,13 @@ SHORT_CHANNEL_NAMES: Tuple[str, ...] = (
     "C0_route",
     "C1_ego_future",
     "C2_primary_actor",
-    "C3_interaction",
     "C4_secondary_actor",
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="统计 future_interaction_grids 五通道标签质量。"
+        description="统计 future_interaction_grids 四通道标签质量。"
     )
     parser.add_argument(
         "--input",
@@ -626,7 +623,7 @@ def main() -> int:
                 secondary_source or "<empty>"
             ] += 1
 
-            shape_ok = grid.ndim == 3 and grid.shape[0] == 5
+            shape_ok = grid.ndim == 3 and grid.shape[0] == 4
             channel_order_ok = (
                 channel_names == EXPECTED_CHANNEL_NAMES
             )
@@ -717,19 +714,18 @@ def main() -> int:
                     ] = resized_stats["max"]
 
             c2_nonzero = channel_file_stats[2]["nonzero"]
-            c3_nonzero = channel_file_stats[3]["nonzero"]
-            c4_nonzero = channel_file_stats[4]["nonzero"]
+            c4_nonzero = channel_file_stats[3]["nonzero"]
 
-            if (not has_causal_actor) and (c2_nonzero or c3_nonzero):
+            if (not has_causal_actor) and c2_nonzero:
                 problem_counts[
-                    "no_causal_actor_but_c2_or_c3_nonzero"
+                    "no_causal_actor_but_c2_nonzero"
                 ] += 1
                 row[
-                    "metadata_problem_no_causal_actor_but_c2_or_c3_nonzero"
+                    "metadata_problem_no_causal_actor_but_c2_nonzero"
                 ] = True
             else:
                 row[
-                    "metadata_problem_no_causal_actor_but_c2_or_c3_nonzero"
+                    "metadata_problem_no_causal_actor_but_c2_nonzero"
                 ] = False
 
             if (not has_secondary_actor) and c4_nonzero:
@@ -742,6 +738,30 @@ def main() -> int:
             else:
                 row[
                     "metadata_problem_no_secondary_actor_but_c4_nonzero"
+                ] = False
+
+            if has_secondary_actor and not has_causal_actor:
+                problem_counts[
+                    "secondary_actor_without_primary_actor"
+                ] += 1
+                row[
+                    "metadata_problem_secondary_actor_without_primary_actor"
+                ] = True
+            else:
+                row[
+                    "metadata_problem_secondary_actor_without_primary_actor"
+                ] = False
+
+            if c4_nonzero and not c2_nonzero:
+                problem_counts[
+                    "c4_nonzero_but_c2_zero"
+                ] += 1
+                row[
+                    "metadata_problem_c4_nonzero_but_c2_zero"
+                ] = True
+            else:
+                row[
+                    "metadata_problem_c4_nonzero_but_c2_zero"
                 ] = False
 
             if has_causal_actor and primary_frames == 0 and valid:

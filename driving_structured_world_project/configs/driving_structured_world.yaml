@@ -8,6 +8,7 @@ base_lg_config: ../../lg_waypoint_planner_project/configs/language_grounded_wayp
 run:
   input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
   recursive: true
+  
   frame: null
   verbose: true
   raise_on_error: false
