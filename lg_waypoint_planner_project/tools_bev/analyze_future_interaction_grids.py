@@ -60,7 +60,6 @@ def parse_args() -> argparse.Namespace:
         "--input",
         type=Path,
         default=Path("/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo"),
-        # required=True,
         help=(
             "数据集根目录、单条 route 目录，或 future_interaction_grids 目录。"
         ),

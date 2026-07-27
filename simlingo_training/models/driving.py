@@ -16,6 +16,12 @@ from hydra.utils import get_original_cwd
 
 
 from simlingo_training.models.adaptors.adaptors import DrivingAdaptor, LanguageAdaptor, WaypointInputAdaptor, AdaptorList
+#修改20260726：结构化未来世界预测分支。
+from simlingo_training.models.future_interaction import (
+    FUTURE_INTERACTION_CHANNEL_KEYS,
+    FutureInteractionDecoder,
+    compute_future_interaction_losses,
+)
 from simlingo_training.models.utils import summarise_losses
 from simlingo_training.utils.custom_types import (DrivingExample, DrivingInput,
                                                 DrivingLabel, DrivingOutput,
@@ -89,6 +95,34 @@ class DrivingModel(pl.LightningModule):
             language=LanguageAdaptor(self.language_model),
             driving=driving,
         )
+
+
+
+        #修改20260726：五通道结构化未来世界辅助预测头。
+        self.future_interaction_decoder = None
+
+        if bool(
+            getattr(
+                self,
+                "use_future_interaction_prediction",
+                False,
+            )
+        ):
+            self.future_interaction_decoder = (
+                FutureInteractionDecoder(
+                    hidden_size=(
+                        self.language_model.hidden_size
+                    ),
+                    output_channels=5,
+                    output_size=int(
+                        getattr(
+                            self,
+                            "future_interaction_output_size",
+                            128,
+                        )
+                    ),
+                )
+            )
 
 
 
@@ -525,6 +559,147 @@ class DrivingModel(pl.LightningModule):
 
 
 
+        #修改20260726：五通道结构化未来世界辅助预测。
+        if bool(
+            getattr(
+                self,
+                "use_future_interaction_prediction",
+                False,
+            )
+        ):
+            if self.future_interaction_decoder is None:
+                raise RuntimeError(
+                    "Future interaction prediction is enabled, "
+                    "but the decoder was not initialized."
+                )
+
+            # 恢复language和driving各自对应的Transformer输出。
+            features_by_adaptor = (
+                self.adaptors.split_outputs_by_adaptor(
+                    adaptor_dict,
+                    adaptor_features,
+                )
+            )
+
+            driving_features = features_by_adaptor.get(
+                "driving",
+                None,
+            )
+
+            if not isinstance(
+                driving_features,
+                torch.Tensor,
+            ):
+                raise RuntimeError(
+                    "Driving query features are required for "
+                    "future interaction prediction."
+                )
+
+            future_interaction_logits = (
+                self.future_interaction_decoder(
+                    driving_features
+                )
+            )
+
+            future_interaction_target = (
+                example
+                .driving_label
+                .future_interaction_grid
+            )
+
+            future_interaction_valid = (
+                example
+                .driving_label
+                .future_interaction_valid
+            )
+
+            batch_size = int(
+                future_interaction_logits.shape[0]
+            )
+
+            # 普通Driving独立batch没有future_interaction_grid。
+            # 为保持所有batch的loss键一致，构造零目标和零valid掩码。
+            if future_interaction_target is None:
+                if (
+                    isinstance(
+                        future_interaction_valid,
+                        torch.Tensor,
+                    )
+                    and bool(
+                        future_interaction_valid.any().item()
+                    )
+                ):
+                    raise RuntimeError(
+                        "future_interaction_valid contains True, "
+                        "but future_interaction_grid is None."
+                    )
+
+                future_interaction_target = torch.zeros(
+                    (
+                        batch_size,
+                        5,
+                        future_interaction_logits.shape[-2],
+                        future_interaction_logits.shape[-1],
+                    ),
+                    device=(
+                        future_interaction_logits.device
+                    ),
+                    dtype=torch.float32,
+                )
+
+                future_interaction_valid = torch.zeros(
+                    (batch_size,),
+                    device=(
+                        future_interaction_logits.device
+                    ),
+                    dtype=torch.bool,
+                )
+
+            elif not isinstance(
+                future_interaction_valid,
+                torch.Tensor,
+            ):
+                raise RuntimeError(
+                    "A future interaction target exists, but "
+                    "future_interaction_valid is missing."
+                )
+
+            future_interaction_loss_dict = (
+                compute_future_interaction_losses(
+                    prediction_logits=(
+                        future_interaction_logits
+                    ),
+                    target_grid=(
+                        future_interaction_target
+                    ),
+                    valid_mask=(
+                        future_interaction_valid
+                    ),
+                    positive_weights=tuple(
+                        float(value)
+                        for value in getattr(
+                            self,
+                            "future_interaction_positive_weights",
+                            (
+                                20.0,
+                                20.0,
+                                80.0,
+                                100.0,
+                                100.0,
+                            ),
+                        )
+                    ),
+                )
+            )
+
+            loss_dict.update(
+                future_interaction_loss_dict
+            )
+
+
+
+
+
         #修改20260720：使用LG因果actor投影得到的六维软标签，
         # 显式监督目标点引导的六视角相机注意力。
         if bool(
@@ -906,9 +1081,10 @@ class DrivingModel(pl.LightningModule):
 
         # return summarise_losses(loss_dict_only_losses), loss_logs
 
-        #修改20260720：只对LG相机注意力损失单独设置辅助权重，
-        # 原有语言、waypoint和route损失权重保持不变。
-        loss_weights = None
+        #修改20260726：统一整理所有辅助任务的损失权重。
+        # 原有语言、waypoint和route损失仍保持默认权重1.0。
+        loss_weights = {}
+
         if bool(
             getattr(
                 self,
@@ -916,15 +1092,83 @@ class DrivingModel(pl.LightningModule):
                 False,
             )
         ):
-            loss_weights = {
-                "lg_camera_attention_loss": float(
-                    getattr(
-                        self,
-                        "lg_camera_attention_loss_weight",
-                        0.05,
-                    )
+            loss_weights[
+                "lg_camera_attention_loss"
+            ] = float(
+                getattr(
+                    self,
+                    "lg_camera_attention_loss_weight",
+                    0.05,
                 )
-            }
+            )
+
+        if bool(
+            getattr(
+                self,
+                "use_future_interaction_prediction",
+                False,
+            )
+        ):
+            channel_weights = tuple(
+                float(value)
+                for value in getattr(
+                    self,
+                    "future_interaction_channel_weights",
+                    (
+                        1.0,
+                        1.0,
+                        2.0,
+                        4.0,
+                        4.0,
+                    ),
+                )
+            )
+
+            if len(channel_weights) != 5:
+                raise ValueError(
+                    "future_interaction_channel_weights "
+                    "must contain exactly 5 values."
+                )
+
+            future_interaction_loss_weight = float(
+                getattr(
+                    self,
+                    "future_interaction_loss_weight",
+                    0.05,
+                )
+            )
+
+            future_interaction_dice_loss_weight = float(
+                getattr(
+                    self,
+                    "future_interaction_dice_loss_weight",
+                    1.0,
+                )
+            )
+
+            for channel_key, channel_weight in zip(
+                FUTURE_INTERACTION_CHANNEL_KEYS,
+                channel_weights,
+            ):
+                loss_weights[
+                    f"future_interaction_"
+                    f"{channel_key}_bce_loss"
+                ] = (
+                    future_interaction_loss_weight
+                    * channel_weight
+                )
+
+                loss_weights[
+                    f"future_interaction_"
+                    f"{channel_key}_dice_loss"
+                ] = (
+                    future_interaction_loss_weight
+                    * channel_weight
+                    * future_interaction_dice_loss_weight
+                )
+
+        if len(loss_weights) == 0:
+            loss_weights = None
 
         return summarise_losses(
             loss_dict_only_losses,
@@ -940,26 +1184,6 @@ class DrivingModel(pl.LightningModule):
     
     ########################################### 1. 训练时每个batch的总入口 ###########################################
     def training_step(self, batch: DrivingExample, _batch_idx: int = 0):
-
-        #修改20260726：首次遇到结构化未来世界标签时检查batch形状。
-        # if (
-        #     not getattr(
-        #         self,
-        #         "_printed_future_interaction_grid",
-        #         False,
-        #     )
-        #     and batch.driving_label.future_interaction_grid is not None
-        # ):
-        #     print(
-        #         "future_interaction_grid:",
-        #         batch.driving_label.future_interaction_grid.shape,
-        #     )
-        #     print(
-        #         "future_interaction_valid:",
-        #         batch.driving_label.future_interaction_valid,
-        #     )
-        #     self._printed_future_interaction_grid = True
-
         output, loss_logs = self.forward_loss(batch)
         logs = output
         self.log_training_output(logs, "train")

@@ -18,4 +18,7 @@ python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_plan
 ### 3. 生成结构化世界标签
 ```
 python lg_waypoint_planner_project/tools_bev/generate_future_interaction_grids.py
+
+# 检查标签质量以用于优化网络
+python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
 ```
