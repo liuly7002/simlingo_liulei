@@ -3,15 +3,20 @@
 Six-view wrapper for the ordinary SimLingo driving dataset.
 
 The driving-language/task construction remains exactly in Data_Driving. This
-wrapper only makes the common visual input six synchronized camera views and
-returns them through DatasetOutput.
+wrapper adds the common six synchronized camera views and optionally attaches
+the ordinary-Driving four-channel structured future-world label.
 """
+
+from pathlib import Path
 
 from simlingo_training.dataloader.dataset_base_surround import (
     SurroundDatasetMixin,
 )
 from simlingo_training.dataloader.dataset_driving import (
     Data_Driving,
+)
+from simlingo_training.dataloader.dataset_lg import (
+    Data_LG,
 )
 
 
@@ -41,6 +46,41 @@ class Data_Driving_Surround(
             self.surround_images[index],
         )
 
+        #修改20260728：读取普通Driving当前帧的四通道结构化未来世界标签。
+        future_interaction_grid = None
+        future_interaction_valid = False
+
+        if bool(
+            getattr(
+                self,
+                "driving_use_future_interaction_grid",
+                False,
+            )
+        ):
+            measurement_path = Path(
+                Data_LG._decode_path(
+                    sample.measurement_path
+                )
+            )
+            frame_name = measurement_path.name.split(".", 1)[0]
+            future_interaction_path = (
+                measurement_path.parent.parent
+                / str(
+                    getattr(
+                        self,
+                        "driving_future_interaction_grid_folder",
+                        "driving_future_interaction_grids",
+                    )
+                )
+                / f"{frame_name}.npz"
+            )
+            (
+                future_interaction_grid,
+                future_interaction_valid,
+            ) = Data_LG._load_future_interaction_grid(
+                future_interaction_path
+            )
+
         # Replace the legacy front fields with the front view taken from the
         # same six-view tensor, then expose the complete surround tensor.
         return sample._replace(
@@ -51,4 +91,10 @@ class Data_Driving_Surround(
                 image_data["rgb_surround_org_size"]
             ),
             camera_order=image_data["camera_order"],
+            future_interaction_grid=(
+                future_interaction_grid
+            ),
+            future_interaction_valid=(
+                future_interaction_valid
+            ),
         )

@@ -127,6 +127,10 @@ class DatasetBaseConfig:
 class DrivingDatasetConfig:
     _target_: str = "simlingo_training.dataloader.dataset_driving.Data_Driving"
 
+    #修改20260728：普通Driving四通道结构化未来世界标签配置。
+    driving_use_future_interaction_grid: bool = False
+    driving_future_interaction_grid_folder: str = "driving_future_interaction_grids"
+
 
 @dataclass
 class DreamerDatasetConfig:
