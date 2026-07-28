@@ -7,9 +7,13 @@ driving_dataset:
   # _target_: simlingo_training.dataloader.dataset_driving_fixed_val.Data_Driving_FixedVal
   _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
-  #修改20260728：读取普通Driving生成的四通道结构化未来世界标签。
+  #修改20260728：普通Driving结构化未来世界监督开关。
   driving_use_future_interaction_grid: true
   driving_future_interaction_grid_folder: driving_future_interaction_grids
+
+  #修改20260728：普通Driving关键actor六视角显式监督开关。
+  driving_use_camera_attention_supervision: true
+  driving_camera_attention_label_folder: driving_expert_conditioned_actor_selection
 
 # Keep the ordinary SimLingo driving source and bucket proportions unchanged.
 train_partitions:

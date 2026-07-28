@@ -15,7 +15,7 @@ DEFAULT_CONFIG = CURRENT_FILE.parents[1] / "configs" / "driving_structured_world
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate expert-conditioned five-channel structured-world labels for Driving data."
+        description="Generate expert-conditioned four-channel structured-world labels for Driving data."
     )
     parser.add_argument(
         "--config",

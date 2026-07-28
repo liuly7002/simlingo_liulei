@@ -41,10 +41,11 @@ class DrivingModelConfig:
     speed_wps_mode: str = '2d'
     predict_route_as_wps: bool = True
 
-    #修改20260720：是否使用LG生成的六视角相机注意力软标签。
+    #修改20260728：是否使用LG与普通Driving关键actor投影得到的六视角注意力软标签。
+    # 变量名为兼容当前训练代码暂时保留，但该监督已不再仅限LG数据。
     use_lg_camera_attention_supervision: bool = False
 
-    #修改20260720：LG相机注意力辅助损失在总损失中的权重。
+    #修改20260728：共享六视角注意力辅助损失在总损失中的权重。
     lg_camera_attention_loss_weight: float = 0.05
 
     #修改20260726：是否启用四通道结构化未来世界辅助预测。
@@ -130,6 +131,12 @@ class DrivingDatasetConfig:
     #修改20260728：普通Driving四通道结构化未来世界标签配置。
     driving_use_future_interaction_grid: bool = False
     driving_future_interaction_grid_folder: str = "driving_future_interaction_grids"
+
+    #修改20260728：普通Driving关键actor六视角投影监督配置。
+    driving_use_camera_attention_supervision: bool = False
+    driving_camera_attention_label_folder: str = (
+        "driving_expert_conditioned_actor_selection"
+    )
 
 
 @dataclass

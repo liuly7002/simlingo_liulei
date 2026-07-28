@@ -20,6 +20,10 @@ from lg_waypoint_planner.causal_response import (
     evaluate_candidate_pool,
     revalidate_causal_analysis,
 )
+#修改20260728：LG与普通Driving共享同一套主要关键actor六视角投影实现。
+from lg_waypoint_planner.camera_attention_target import (
+    build_camera_attention_supervision,
+)
 from lg_waypoint_planner.costmap import (
     build_temporal_costmaps,
     build_temporal_red_light_constraints,
@@ -437,6 +441,23 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         valid = False
         invalid_reason = invalid_reason or "grid_out_of_range"
 
+    #修改20260728：将专家条件主要关键actor投影到统一六视角空间，
+    # 与LG使用完全相同的相机顺序、投影、离轴补偿、平滑和归一化逻辑。
+    visual_grounding = build_camera_attention_supervision(
+        route_dir=route_dir,
+        frame_name=frame_name,
+        cfg=cfg,
+        primary_actor=(primary_actor if valid else None),
+        target_source=(
+            "driving_expert_conditioned_primary_actor_projection"
+        ),
+    )
+    if not valid:
+        visual_grounding["invalid_reason"] = (
+            "driving_label_invalid:"
+            f"{invalid_reason or 'unknown'}"
+        )
+
     output_cfg = _cfg_get(cfg, "output", {})
     save_npz_enabled = _cfg_bool(output_cfg, "save_npz", True)
     save_invalid = _cfg_bool(output_cfg, "save_invalid_labels", True)
@@ -475,6 +496,8 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             "invalid_reason": str(invalid_reason),
             "trajectory_source": "expert",
             "actor_selection_source": "expert_matched_lg_counterfactual_reselection",
+            #修改20260728：保存普通Driving主要关键actor的统一六视角显式监督。
+            "visual_grounding": visual_grounding,
             "expert_match": expert_match,
             "primary_actor": primary_actor if primary_actor is not None else {"exists": False},
             "primary_causal_score": float(primary_score),

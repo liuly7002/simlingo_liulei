@@ -4,10 +4,13 @@ Six-view wrapper for the ordinary SimLingo driving dataset.
 
 The driving-language/task construction remains exactly in Data_Driving. This
 wrapper adds the common six synchronized camera views and optionally attaches
-the ordinary-Driving four-channel structured future-world label.
+the ordinary-Driving four-channel structured future-world label and the shared
+six-view camera-attention supervision.
 """
 
 from pathlib import Path
+
+import numpy as np
 
 from simlingo_training.dataloader.dataset_base_surround import (
     SurroundDatasetMixin,
@@ -46,40 +49,84 @@ class Data_Driving_Surround(
             self.surround_images[index],
         )
 
-        #修改20260728：读取普通Driving当前帧的四通道结构化未来世界标签。
+        #修改20260728：普通Driving的两个共享辅助监督均允许独立关闭，
+        # 便于分别消融四通道结构化未来世界和六视角显式注意力监督。
         future_interaction_grid = None
         future_interaction_valid = False
+        camera_attention_target = np.zeros(
+            (6,),
+            dtype=np.float32,
+        )
+        camera_attention_valid = False
 
-        if bool(
+        use_future_interaction = bool(
             getattr(
                 self,
                 "driving_use_future_interaction_grid",
                 False,
             )
-        ):
+        )
+        use_camera_attention = bool(
+            getattr(
+                self,
+                "driving_use_camera_attention_supervision",
+                False,
+            )
+        )
+
+        if use_future_interaction or use_camera_attention:
             measurement_path = Path(
                 Data_LG._decode_path(
                     sample.measurement_path
                 )
             )
+            route_dir = measurement_path.parent.parent
             frame_name = measurement_path.name.split(".", 1)[0]
-            future_interaction_path = (
-                measurement_path.parent.parent
-                / str(
-                    getattr(
-                        self,
-                        "driving_future_interaction_grid_folder",
-                        "driving_future_interaction_grids",
+
+            if use_future_interaction:
+                future_interaction_path = (
+                    route_dir
+                    / str(
+                        getattr(
+                            self,
+                            "driving_future_interaction_grid_folder",
+                            "driving_future_interaction_grids",
+                        )
                     )
+                    / f"{frame_name}.npz"
                 )
-                / f"{frame_name}.npz"
-            )
-            (
-                future_interaction_grid,
-                future_interaction_valid,
-            ) = Data_LG._load_future_interaction_grid(
-                future_interaction_path
-            )
+                (
+                    future_interaction_grid,
+                    future_interaction_valid,
+                ) = Data_LG._load_future_interaction_grid(
+                    future_interaction_path
+                )
+
+            if use_camera_attention:
+                camera_attention_path = (
+                    route_dir
+                    / str(
+                        getattr(
+                            self,
+                            "driving_camera_attention_label_folder",
+                            "driving_expert_conditioned_actor_selection",
+                        )
+                    )
+                    / f"{frame_name}.json.gz"
+                )
+
+                if camera_attention_path.is_file():
+                    camera_attention_payload = (
+                        Data_LG._load_gzip_json(
+                            camera_attention_path
+                        )
+                    )
+                    (
+                        camera_attention_target,
+                        camera_attention_valid,
+                    ) = Data_LG._extract_camera_attention_supervision(
+                        camera_attention_payload
+                    )
 
         # Replace the legacy front fields with the front view taken from the
         # same six-view tensor, then expose the complete surround tensor.
@@ -96,5 +143,11 @@ class Data_Driving_Surround(
             ),
             future_interaction_valid=(
                 future_interaction_valid
+            ),
+            camera_attention_target=(
+                camera_attention_target
+            ),
+            camera_attention_valid=(
+                camera_attention_valid
             ),
         )

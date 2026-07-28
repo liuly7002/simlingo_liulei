@@ -8,11 +8,11 @@ model:
   lr: 3e-5
   predict_route_as_wps: true
   speed_wps_mode: 2d
-  
-  #修改20260720：使用LG因果actor投影结果监督六视角注意力。
-  use_lg_camera_attention_supervision: false
-  lg_camera_attention_loss_weight: 0.05
 
+  #修改20260728：LG与普通Driving共用关键actor六视角投影显式监督。
+  # 该变量名为兼容当前训练代码暂时保留，实际监督已不再仅限LG数据。
+  use_lg_camera_attention_supervision: true
+  lg_camera_attention_loss_weight: 0.05
 
   #修改20260726：四通道结构化未来世界辅助预测。
   use_future_interaction_prediction: true
@@ -34,7 +34,6 @@ model:
   future_interaction_channel_weights:
     [1.0, 1.0, 2.0, 4.0]
 
-
   language_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 语言模型的位置
     lora: true
@@ -43,8 +42,9 @@ model:
     lora_dropout: 0.1
   vision_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
-    
-    use_target_point_camera_attention: false  # 目标点引导的六视角相机注意力
+
+    # 消融开关：false关闭目标点引导的六视角注意力网络结构。
+    use_target_point_camera_attention: true
 
 data_module:
   batch_size: 6
@@ -65,12 +65,11 @@ data_module:
     img_shift_augmentation: true      # 是否进行图像增强(噪声、模糊等,不是几何增强)
     img_shift_augmentation_prob: 0.5
     hist_len: 1
-    
-    # 所有训练与验证样本固定使用两个TARGET_POINT，
-    # 不再在TP、HLC和LMDrive命令之间随机选择。
-    route_as: command                    # none command target_point
+
+    # 六视角注意力要求每个样本固定包含两个TARGET_POINT。
+    route_as: target_point             # none command target_point
     use_lmdrive_commands: false
-    
+
     use_old_towns: true
     use_town13: true
     use_safety_flag: false
@@ -87,7 +86,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_hlc_no_attention_seed_9876
+name: simlingo_lg_tp_attention_structured_world_seed_9876
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-#修改20260720：根据LG确认的主要因果对象在六视角中的真实投影质量，生成相机注意力软监督目标。
+#修改20260728：根据LG或普通Driving确认的主要关键对象在六视角中的真实投影质量，生成统一的相机注意力软监督目标。
 
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -36,6 +36,7 @@ _MIN_PROJECTION_DEPTH_M = 0.1
 _EPS = 1e-8
 
 
+#修改20260728：LG与普通Driving统一保存主要关键对象摘要。
 def _actor_summary(actor: Optional[Dict]) -> Dict:
     actor = actor if isinstance(actor, dict) else {}
     return {
@@ -64,12 +65,17 @@ def _empty_camera_evidence() -> Dict[str, Dict]:
     }
 
 
-def _invalid_result(reason: str, actor: Optional[Dict] = None) -> Dict:
+#修改20260728：target_source由调用方明确给出，使LG与普通Driving共享投影实现但保留监督来源。
+def _invalid_result(
+    reason: str,
+    actor: Optional[Dict] = None,
+    target_source: str = "lg_replanned_primary_actor_projection",
+) -> Dict:
     result = {
         "camera_order": list(CAMERA_ORDER),
         "camera_attention_valid": False,
         "camera_attention_target": None,
-        "target_source": "lg_causal_object_projection",
+        "target_source": str(target_source),
         "invalid_reason": str(reason),
         "parameters": {
             "center_sigma": float(CENTER_SIGMA),
@@ -91,7 +97,7 @@ def _project_actor_to_camera(
     image_shape,
     camera_spec: Dict,
 ) -> Dict:
-    """Return one camera's geometric evidence score for the causal actor."""
+    """Return one camera's geometric evidence score for the primary actor."""
     height, width = int(image_shape[0]), int(image_shape[1])
     if height <= 0 or width <= 0:
         return _empty_camera_evidence()[CAMERA_ORDER[0]]
@@ -213,24 +219,39 @@ def _project_actor_to_camera(
     }
 
 
+#修改20260728：LG可继续传入causal_analysis；普通Driving可直接传入其专家条件主要actor。
 def build_camera_attention_supervision(
     route_dir: Path,
     frame_name: str,
     cfg,
-    causal_analysis: Dict,
+    causal_analysis: Optional[Dict] = None,
+    *,
+    primary_actor: Optional[Dict] = None,
+    target_source: str = "lg_replanned_primary_actor_projection",
 ) -> Dict:
-    """Build the six-dimensional soft target from the verified LG causal actor."""
-    #修改20260720：只对反事实移除验证通过的主要因果对象生成监督；其他帧标记为无效。
-    if not isinstance(causal_analysis, dict) or not bool(
-        causal_analysis.get("has_causal_object", False)
-    ):
-        return _invalid_result("no_verified_causal_object")
+    """Build one shared six-dimensional soft target from a verified primary actor."""
+    actor = primary_actor
 
-    actor = causal_analysis.get("causal_object") or {}
+    if actor is None and isinstance(causal_analysis, dict):
+        if not bool(causal_analysis.get("has_causal_object", False)):
+            return _invalid_result(
+                "no_verified_causal_object",
+                target_source=target_source,
+            )
+        actor = causal_analysis.get("causal_object") or {}
+
     if not isinstance(actor, dict) or not bool(actor.get("exists", False)):
-        return _invalid_result("missing_verified_causal_actor", actor)
+        return _invalid_result(
+            "missing_verified_primary_actor",
+            actor,
+            target_source,
+        )
     if actor.get("x_m", None) is None or actor.get("y_m", None) is None:
-        return _invalid_result("causal_actor_missing_ego_local_position", actor)
+        return _invalid_result(
+            "primary_actor_missing_ego_local_position",
+            actor,
+            target_source,
+        )
 
     try:
         surround_images, camera_specs = _load_surround_rgb_images(
@@ -239,7 +260,11 @@ def build_camera_attention_supervision(
             cfg=cfg,
         )
         if surround_images is None or not camera_specs:
-            return _invalid_result("incomplete_six_view_images_or_calibration", actor)
+            return _invalid_result(
+                "incomplete_six_view_images_or_calibration",
+                actor,
+                target_source,
+            )
 
         per_camera_evidence = {}
         raw_scores = []
@@ -260,7 +285,11 @@ def build_camera_attention_supervision(
         raw_scores = np.asarray(raw_scores, dtype=np.float64)
         raw_sum = float(np.sum(raw_scores))
         if not np.isfinite(raw_sum) or raw_sum <= _EPS:
-            result = _invalid_result("causal_actor_not_visible_in_any_camera", actor)
+            result = _invalid_result(
+                "primary_actor_not_visible_in_any_camera",
+                actor,
+                target_source,
+            )
             result["per_camera_evidence"] = per_camera_evidence
             return result
 
@@ -283,7 +312,7 @@ def build_camera_attention_supervision(
             "camera_order": list(CAMERA_ORDER),
             "camera_attention_valid": True,
             "camera_attention_target": rounded_target,
-            "target_source": "lg_causal_object_projection",
+            "target_source": str(target_source),
             "invalid_reason": None,
             "parameters": {
                 "center_sigma": float(CENTER_SIGMA),
@@ -299,8 +328,9 @@ def build_camera_attention_supervision(
         result.update(_actor_summary(actor))
         return result
     except Exception as exc:
-        # 标签生成本身不应因单帧投影异常而中断整个LG数据处理。
+        # 标签生成本身不应因单帧投影异常而中断整个数据处理。
         return _invalid_result(
             f"camera_attention_projection_error:{type(exc).__name__}:{exc}",
             actor,
+            target_source,
         )
