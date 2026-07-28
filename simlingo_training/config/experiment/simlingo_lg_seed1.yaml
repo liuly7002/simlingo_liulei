@@ -14,7 +14,7 @@ model:
   lg_camera_attention_loss_weight: 0.05
 
 
-  #修改20260726：五通道结构化未来世界辅助预测。
+  #修改20260726：四通道结构化未来世界辅助预测。
   use_future_interaction_prediction: true
 
   # 第一版网络固定预测128×128。
@@ -26,13 +26,13 @@ model:
   # Dice相对于BCE的权重。
   future_interaction_dice_loss_weight: 1.0
 
-  # C0、C1较密集；C2、C3、C4极度稀疏。
+  # C0、C1较密集；C2、C4较稀疏。顺序为C0、C1、C2、C4。
   future_interaction_positive_weights:
-    [20.0, 20.0, 80.0, 100.0, 100.0]
+    [20.0, 20.0, 80.0, 100.0]
 
-  # 进一步提高稀疏交互通道在辅助任务中的权重。
+  # 进一步提高稀疏actor通道在辅助任务中的权重。
   future_interaction_channel_weights:
-    [1.0, 1.0, 2.0, 4.0, 4.0]
+    [1.0, 1.0, 2.0, 4.0]
 
 
   language_model:

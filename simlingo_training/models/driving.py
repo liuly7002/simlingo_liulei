@@ -98,7 +98,7 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        #修改20260726：五通道结构化未来世界辅助预测头。
+        #修改20260726：四通道结构化未来世界辅助预测头。
         self.future_interaction_decoder = None
 
         if bool(
@@ -113,7 +113,7 @@ class DrivingModel(pl.LightningModule):
                     hidden_size=(
                         self.language_model.hidden_size
                     ),
-                    output_channels=5,
+                    output_channels=4,
                     output_size=int(
                         getattr(
                             self,
@@ -559,7 +559,7 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        #修改20260726：五通道结构化未来世界辅助预测。
+        #修改20260726：四通道结构化未来世界辅助预测。
         if bool(
             getattr(
                 self,
@@ -637,7 +637,7 @@ class DrivingModel(pl.LightningModule):
                 future_interaction_target = torch.zeros(
                     (
                         batch_size,
-                        5,
+                        4,
                         future_interaction_logits.shape[-2],
                         future_interaction_logits.shape[-1],
                     ),
@@ -684,7 +684,6 @@ class DrivingModel(pl.LightningModule):
                                 20.0,
                                 20.0,
                                 80.0,
-                                100.0,
                                 100.0,
                             ),
                         )
@@ -1119,15 +1118,14 @@ class DrivingModel(pl.LightningModule):
                         1.0,
                         2.0,
                         4.0,
-                        4.0,
                     ),
                 )
             )
 
-            if len(channel_weights) != 5:
+            if len(channel_weights) != 4:
                 raise ValueError(
                     "future_interaction_channel_weights "
-                    "must contain exactly 5 values."
+                    "must contain exactly 4 values."
                 )
 
             future_interaction_loss_weight = float(

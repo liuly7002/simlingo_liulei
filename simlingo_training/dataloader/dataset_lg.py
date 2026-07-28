@@ -24,7 +24,6 @@ FUTURE_INTERACTION_CHANNEL_NAMES = (
     "selected_route_ego_footprint_occupancy",
     "future_ego_footprint_occupancy",
     "primary_causal_actor_future_footprint_occupancy",
-    "time_aligned_primary_future_interaction",
     "secondary_actor_future_footprint_occupancy",
 )
 
@@ -141,7 +140,7 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
             raise ValueError("LG label root must be a dictionary")
         return payload
 
-    #修改20260726：读取并检查五通道结构化未来世界标签。
+    #修改20260726：读取并检查四通道结构化未来世界标签。
     @staticmethod
     def _load_future_interaction_grid(
         path: Path,
@@ -181,10 +180,10 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                         f"in {path}: {channel_names}"
                     )
 
-        if grid.ndim != 3 or grid.shape[0] != 5:
+        if grid.ndim != 3 or grid.shape[0] != 4:
             raise ValueError(
                 "future_interaction_grid must have shape "
-                f"[5, H, W], but received {tuple(grid.shape)} "
+                f"[4, H, W], but received {tuple(grid.shape)} "
                 f"from {path}"
             )
 
@@ -740,7 +739,7 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 f"Invalid LG label at {lg_path}: {reason}"
             )
 
-        #修改20260726：读取当前帧的五通道结构化未来世界标签。
+        #修改20260726：读取当前帧的四通道结构化未来世界标签。
         future_interaction_grid = None
         future_interaction_valid = False
 
@@ -894,7 +893,7 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
                 camera_attention_valid
             ),
 
-            #修改20260726：传递五通道结构化未来世界标签。
+            #修改20260726：传递四通道结构化未来世界标签。
             future_interaction_grid=(
                 future_interaction_grid
             ),

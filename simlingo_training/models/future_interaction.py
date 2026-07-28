@@ -7,12 +7,11 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
-#修改20260726：五通道名称及顺序必须与标签生成脚本一致。
+#修改20260726：四通道名称及顺序必须与标签生成脚本一致。
 FUTURE_INTERACTION_CHANNEL_KEYS = (
     "c0_route",
     "c1_ego_future",
     "c2_primary_actor",
-    "c3_interaction",
     "c4_secondary_actor",
 )
 
@@ -20,28 +19,28 @@ FUTURE_INTERACTION_CHANNEL_KEYS = (
 class FutureInteractionDecoder(nn.Module):
     """
     使用已经完成多模态融合的Driving query特征，
-    解码五通道结构化未来世界预测。
+    解码四通道结构化未来世界预测。
 
     输入：
         query_features: [B, N, D]
         当前N=30，包括20个route query和10个speed waypoint query。
 
     输出：
-        prediction_logits: [B, 5, 128, 128]
+        prediction_logits: [B, 4, 128, 128]
     """
 
     def __init__(
         self,
         hidden_size: int,
-        output_channels: int = 5,
+        output_channels: int = 4,
         output_size: int = 128,
     ):
         super().__init__()
 
-        if output_channels != 5:
+        if output_channels != 4:
             raise ValueError(
                 "FutureInteractionDecoder currently requires "
-                f"5 output channels, but received {output_channels}."
+                f"4 output channels, but received {output_channels}."
             )
 
         if output_size != 128:
@@ -200,7 +199,7 @@ def compute_future_interaction_losses(
     计算分通道的加权BCE和Dice损失。
 
     BCE：
-        所有valid=True样本均参与，包括C2/C3/C4为全零的负样本。
+        所有valid=True样本均参与，包括C2/C4为全零的负样本。
 
     Dice：
         仅在该通道真实标签非零时计算，避免大量全零样本
@@ -210,14 +209,14 @@ def compute_future_interaction_losses(
     if prediction_logits.ndim != 4:
         raise ValueError(
             "Future interaction prediction must have shape "
-            f"[B,5,H,W], but received "
+            f"[B,4,H,W], but received "
             f"{tuple(prediction_logits.shape)}."
         )
 
     if target_grid.ndim != 4:
         raise ValueError(
             "Future interaction target must have shape "
-            f"[B,5,H,W], but received "
+            f"[B,4,H,W], but received "
             f"{tuple(target_grid.shape)}."
         )
 
@@ -231,12 +230,12 @@ def compute_future_interaction_losses(
         )
 
     if (
-        prediction_logits.shape[1] != 5
-        or target_grid.shape[1] != 5
+        prediction_logits.shape[1] != 4
+        or target_grid.shape[1] != 4
     ):
         raise ValueError(
             "Future interaction prediction and target must "
-            "both contain exactly 5 channels."
+            "both contain exactly 4 channels."
         )
 
     if valid_mask.shape != (
@@ -247,10 +246,10 @@ def compute_future_interaction_losses(
             f"but received {tuple(valid_mask.shape)}."
         )
 
-    if len(positive_weights) != 5:
+    if len(positive_weights) != 4:
         raise ValueError(
             "future_interaction_positive_weights must contain "
-            f"5 values, but received {len(positive_weights)}."
+            f"4 values, but received {len(positive_weights)}."
         )
 
     logits_float = prediction_logits.float()
@@ -298,7 +297,7 @@ def compute_future_interaction_losses(
         positive_weights,
         device=logits_float.device,
         dtype=torch.float32,
-    ).reshape(1, 5, 1, 1)
+    ).reshape(1, 4, 1, 1)
 
     bce_map = F.binary_cross_entropy_with_logits(
         logits_float,
@@ -307,7 +306,7 @@ def compute_future_interaction_losses(
         pos_weight=positive_weight_tensor,
     )
 
-    # [B,5]
+    # [B,4]
     bce_per_sample_channel = bce_map.mean(
         dim=(-2, -1)
     )
@@ -330,7 +329,7 @@ def compute_future_interaction_losses(
         )
     )
 
-    # [B,5]
+    # [B,4]
     dice_per_sample_channel = 1.0 - (
         2.0 * intersection + dice_smooth
     ) / (

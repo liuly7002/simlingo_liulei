@@ -47,7 +47,7 @@ class DrivingModelConfig:
     #修改20260720：LG相机注意力辅助损失在总损失中的权重。
     lg_camera_attention_loss_weight: float = 0.05
 
-    #修改20260726：是否启用五通道结构化未来世界辅助预测。
+    #修改20260726：是否启用四通道结构化未来世界辅助预测。
     use_future_interaction_prediction: bool = False
 
     #修改20260726：第一版解码器固定输出128×128。
@@ -59,9 +59,8 @@ class DrivingModelConfig:
     #修改20260726：Dice损失相对于BCE损失的权重。
     future_interaction_dice_loss_weight: float = 1.0
 
-    #修改20260726：五个通道的正像素权重。
+    #修改20260726：四个通道的正像素权重，顺序为C0、C1、C2、C4。
     future_interaction_positive_weights: Tuple[
-        float,
         float,
         float,
         float,
@@ -71,12 +70,10 @@ class DrivingModelConfig:
         20.0,
         80.0,
         100.0,
-        100.0,
     )
 
-    #修改20260726：五个通道在未来世界任务内部的权重。
+    #修改20260726：四个通道在未来世界任务内部的权重，顺序为C0、C1、C2、C4。
     future_interaction_channel_weights: Tuple[
-        float,
         float,
         float,
         float,
@@ -85,7 +82,6 @@ class DrivingModelConfig:
         1.0,
         1.0,
         2.0,
-        4.0,
         4.0,
     )
 
@@ -144,7 +140,7 @@ class DreamerDatasetConfig:
     use_lg_supervision: bool = False
     lg_label_folder: str = "language_grounded_waypoints"
 
-    #修改20260726：LG五通道结构化未来世界标签配置。
+    #修改20260726：LG四通道结构化未来世界标签配置。
     lg_use_future_interaction_grid: bool = False
     lg_future_interaction_grid_folder: str = "future_interaction_grids"
 

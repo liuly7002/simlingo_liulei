@@ -697,7 +697,7 @@ class DataModule(LightningDataModule):
                 sample_index
             ] = True
 
-        #修改20260726：把LG单样本的五通道结构化未来世界标签组成batch。
+        #修改20260726：把LG单样本的四通道结构化未来世界标签组成batch。
         # 普通Driving样本或缺少该标签的样本保持valid=False。
         future_interaction_grid = None
         future_interaction_valid = torch.zeros(
@@ -720,10 +720,10 @@ class DataModule(LightningDataModule):
                 dtype=np.float32,
             )
 
-            if sample_grid.ndim != 3 or sample_grid.shape[0] != 5:
+            if sample_grid.ndim != 3 or sample_grid.shape[0] != 4:
                 raise ValueError(
                     "LG future_interaction_grid must have shape "
-                    f"[5, H, W], but received "
+                    f"[4, H, W], but received "
                     f"{tuple(sample_grid.shape)}."
                 )
 
@@ -842,7 +842,7 @@ class DataModule(LightningDataModule):
                 camera_attention_valid=(
                     camera_attention_valid
                 ),
-                #修改20260726：batch级五通道结构化未来世界监督。
+                #修改20260726：batch级四通道结构化未来世界监督。
                 future_interaction_grid=(
                     future_interaction_grid
                 ),

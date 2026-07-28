@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo"),
+        default=Path("/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo"),  # 需要修改的内容,数据集目录
         help=(
             "数据集根目录、单条 route 目录，或 future_interaction_grids 目录。"
         ),
@@ -64,19 +64,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--grid-folder",
         type=str,
-        default="future_interaction_grids",
+        default="future_interaction_grids",  # 无需修改,因为这是 generate_future_interaction_grids.py 文件生成的目录
         help="结构化未来世界标签文件夹名称。",
     )
     parser.add_argument(
         "--lg-folder",
         type=str,
-        default="language_grounded_waypoints",
+        default="language_grounded_waypoints",# 无需修改,因为这是 run_language_grounded_waypoint_planner.py 文件生成的目录
         help="LG JSON 标签文件夹名称，用于统计文件覆盖率。",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./future_interaction_grid_statistics"),
+        default=Path("./future_interaction_grid_statistics"),  # 无需修改,这是该文件运行结果的存放目录
         help="统计结果保存目录。",
     )
     parser.add_argument(
