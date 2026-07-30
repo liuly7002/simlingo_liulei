@@ -47,7 +47,28 @@ class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
         base_cfg["img_shift_augmentation"] = False
 
 
-        if bool(base_cfg.get("lg_match_dreamer_split", True)):
+        # if bool(base_cfg.get("lg_match_dreamer_split", True)):
+        #     base_cfg["use_town13"] = False
+
+        #修改20260728：启用统一官方route划分后，
+        # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑。
+        #
+        # 只有未启用新的统一划分开关时，才保留旧的
+        # lg_match_dreamer_split兼容行为。
+        if (
+            bool(
+                base_cfg.get(
+                    "lg_match_dreamer_split",
+                    True,
+                )
+            )
+            and not bool(
+                base_cfg.get(
+                    "use_official_route_split",
+                    False,
+                )
+            )
+        ):
             base_cfg["use_town13"] = False
 
         super().__init__(dreamer=False, **base_cfg)

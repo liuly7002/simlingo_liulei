@@ -317,29 +317,113 @@ class BaseDataset(Dataset):
 
         ################################################## 🏀 将所有 route 拆分为"训练集"和"验证集" 🏀 ##################################################
 
-        # 打乱所有 route 顺序,这个打乱只是在 route 级别随机化，避免总是按固定目录顺序加载
-        random.shuffle(route_dirs)
-        split_percentage = 0.99
+        # # 打乱所有 route 顺序,这个打乱只是在 route 级别随机化，避免总是按固定目录顺序加载
+        # random.shuffle(route_dirs)
+        # split_percentage = 0.99
         
         
-        # 情况A：此时采用官方 town 划分,train 用 routes_training,val 用 routes_validation
-        if dreamer or not self.use_town13:  # use_town13=True表示把 Town13 也纳入整体训练池/验证池中，而不再保留官方独立验证 town 的严格划分
-            # split the data into official training(Town12 and old Towns) and validation set (Town13)
+        # # 情况A：此时采用官方 town 划分,train 用 routes_training,val 用 routes_validation
+        # if dreamer or not self.use_town13:  # use_town13=True表示把 Town13 也纳入整体训练池/验证池中，而不再保留官方独立验证 town 的严格划分
+        #     # split the data into official training(Town12 and old Towns) and validation set (Town13)
+        #     if self.split == "train":
+        #         print("Using Town12 for training")
+        #         route_dirs = [route_dir for route_dir in route_dirs if 'routes_training' in route_dir]
+        #     elif self.split == "val":
+        #         print("Using Town13 for validation")
+        #         route_dirs = [route_dir for route_dir in route_dirs if 'routes_validation' in route_dir]
+        #         route_dirs = route_dirs[:int(0.02 * len(route_dirs))]  # 注意验证集这里还额外只取了前 2%
+        # else:
+        #     # use all towns
+        #     # 这里不是按 town 名字切，而是对所有 route 随机打乱后按比例切分
+        #     # 前 99% 做 train  后 1% 做 val
+        #     if self.split == "train":
+        #         route_dirs = route_dirs[:int(split_percentage * len(route_dirs))]  # 取出所有路线的前99%个路线作为训练集
+        #     elif self.split == "val":
+        #         route_dirs = route_dirs[int(split_percentage * len(route_dirs)):]  # 取出所有路线的最后1%作为验证集
+
+
+        #修改20260728：普通Driving和LG可统一采用固定的官方route目录划分。
+        #
+        # use_official_route_split=True时：
+        #   train只使用routes_training；
+        #   val只使用routes_validation；
+        #   不再随机执行99%/1%划分；
+        #   不再只截取Town13验证路线的2%；
+        #   对route路径排序，保证不同数据源和不同运行使用相同路线集合。
+        use_official_route_split = bool(
+            getattr(
+                self,
+                "use_official_route_split",
+                False,
+            )
+        )
+
+        if use_official_route_split:
             if self.split == "train":
-                print("Using Town12 for training")
-                route_dirs = [route_dir for route_dir in route_dirs if 'routes_training' in route_dir]
+                route_dirs = sorted(
+                    route_dir
+                    for route_dir in route_dirs
+                    if "routes_training" in Path(route_dir).parts
+                )
+                print(
+                    "Using routes_training for training: "
+                    f"{len(route_dirs)} routes"
+                )
+
             elif self.split == "val":
-                print("Using Town13 for validation")
-                route_dirs = [route_dir for route_dir in route_dirs if 'routes_validation' in route_dir]
-                route_dirs = route_dirs[:int(0.02 * len(route_dirs))]  # 注意验证集这里还额外只取了前 2%
+                route_dirs = sorted(
+                    route_dir
+                    for route_dir in route_dirs
+                    if "routes_validation" in Path(route_dir).parts
+                )
+                print(
+                    "Using fixed routes_validation for validation: "
+                    f"{len(route_dirs)} routes"
+                )
+
         else:
-            # use all towns
-            # 这里不是按 town 名字切，而是对所有 route 随机打乱后按比例切分
-            # 前 99% 做 train  后 1% 做 val
-            if self.split == "train":
-                route_dirs = route_dirs[:int(split_percentage * len(route_dirs))]  # 取出所有路线的前99%个路线作为训练集
-            elif self.split == "val":
-                route_dirs = route_dirs[int(split_percentage * len(route_dirs)):]  # 取出所有路线的最后1%作为验证集
+            # 保留原SimLingo的数据划分逻辑，
+            # 便于其他不使用统一route划分的实验继续运行。
+            random.shuffle(route_dirs)
+            split_percentage = 0.99
+
+            if dreamer or not self.use_town13:
+                if self.split == "train":
+                    print("Using Town12 for training")
+                    route_dirs = [
+                        route_dir
+                        for route_dir in route_dirs
+                        if "routes_training" in route_dir
+                    ]
+
+                elif self.split == "val":
+                    print("Using Town13 for validation")
+                    route_dirs = [
+                        route_dir
+                        for route_dir in route_dirs
+                        if "routes_validation" in route_dir
+                    ]
+
+                    route_dirs = route_dirs[
+                        :int(0.02 * len(route_dirs))
+                    ]
+
+            else:
+                if self.split == "train":
+                    route_dirs = route_dirs[
+                        :int(
+                            split_percentage
+                            * len(route_dirs)
+                        )
+                    ]
+
+                elif self.split == "val":
+                    route_dirs = route_dirs[
+                        int(
+                            split_percentage
+                            * len(route_dirs)
+                        ):
+                    ]
 
         total_routes += len(route_dirs)  # 一共看了多少 route
 

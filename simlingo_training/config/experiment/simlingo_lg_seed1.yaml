@@ -11,7 +11,7 @@ model:
 
   #修改20260728：LG与普通Driving共用关键actor六视角投影显式监督。
   # 该变量名为兼容当前训练代码暂时保留，实际监督已不再仅限LG数据。
-  use_lg_camera_attention_supervision: true
+  use_lg_camera_attention_supervision: false
   lg_camera_attention_loss_weight: 0.05
 
   #修改20260726：四通道结构化未来世界辅助预测。
@@ -44,15 +44,15 @@ model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
 
     # 消融开关：false关闭目标点引导的六视角注意力网络结构。
-    use_target_point_camera_attention: true
+    use_target_point_camera_attention: false
 
 data_module:
   batch_size: 6
   num_workers: 8
 
   base_dataset:
-    data_path: database/simlingo_v2_2026_07_21_16_16_03
-    bucket_path: database/simlingo_v2_2026_07_21_16_16_03/bucketsv2_simlingo
+    data_path: database/simlingo_v2_2026_07_25_15_05_25
+    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo
     pred_len: 11
     cut_bottom_quarter: true
 
@@ -74,6 +74,11 @@ data_module:
     use_town13: true
     use_safety_flag: false
 
+    #修改20260728：普通Driving和LG统一使用官方route目录划分。
+    # train：routes_training
+    # val：routes_validation，并使用全部固定Town13验证路线。
+    use_official_route_split: true
+
   # LG switches can also be overridden here from the command line, e.g.:
   # data_module.dreamer_dataset.lg_use_language=false
   dreamer_dataset:
@@ -86,7 +91,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: simlingo_lg_tp_attention_structured_world_seed_9876
+name: abl_m6_language_structured
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

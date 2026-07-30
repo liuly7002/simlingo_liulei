@@ -12,7 +12,7 @@ driving_dataset:
   driving_future_interaction_grid_folder: driving_future_interaction_grids
 
   #修改20260728：普通Driving关键actor六视角显式监督开关。
-  driving_use_camera_attention_supervision: true
+  driving_use_camera_attention_supervision: false
   driving_camera_attention_label_folder: driving_expert_conditioned_actor_selection
 
 # Keep the ordinary SimLingo driving source and bucket proportions unchanged.

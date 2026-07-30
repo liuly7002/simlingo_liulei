@@ -106,6 +106,14 @@ class DatasetBaseConfig:
     use_only_old_towns: bool = False
     use_town13: bool = False
 
+    #修改20260728：普通Driving和LG统一按route目录划分训练集和验证集。
+    # true：
+    #   train只使用routes_training；
+    #   val只使用routes_validation；
+    #   普通Driving与LG共享完全相同的路线集合。
+    # false：保留原SimLingo的use_town13划分逻辑。
+    use_official_route_split: bool = False
+
     skip_first_n_frames: int = 10
     pred_len: int = 11  # including the current time step
     hist_len: int = 1  # including the current time step
