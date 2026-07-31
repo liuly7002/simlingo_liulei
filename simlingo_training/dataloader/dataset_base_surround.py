@@ -112,7 +112,7 @@ class SurroundDatasetMixin:
 
         for sample_index in range(original_count):
 
-            # 防止存在历史帧
+            # 如果存在历史帧的话,会有历史帧数量的图像.jpg文件路径
             temporal_front_paths = np.asarray(self.images[sample_index]).reshape(-1)
 
             # 如果当前数量与历史帧数量不一致就跳过当前样本
@@ -123,7 +123,7 @@ class SurroundDatasetMixin:
             temporal_views: List[List[str]] = []
             sample_valid = True
 
-            # 遍历当前样本中的每一帧
+            # 遍历每一帧
             for front_entry in temporal_front_paths:
 
                 # 解析当前帧.jpg文件的路径名称
@@ -169,11 +169,10 @@ class SurroundDatasetMixin:
         # 六视角图像.jpg文件路径
         if valid_surround_paths:
             self.surround_images = np.asarray(valid_surround_paths, dtype=np.string_,)
-
         else:
             self.surround_images = np.empty((0, int(self.hist_len), len(self.surround_camera_order),), dtype=np.string_,)
 
-        if bool( getattr(self, "surround_print_filter_summary", True,)):
+        if bool(getattr(self, "surround_print_filter_summary", True,)):
             print(
                 f"[{self.split} surround samples]: kept "
                 f"{len(valid_indices)}/{original_count}; "

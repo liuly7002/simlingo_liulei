@@ -43,6 +43,15 @@ class DrivingModelConfig:
     interaction_num_heads: int = 8
     interaction_dropout: float = 0.1
 
+    # 第二阶段语言—交互—动作一致性配置。
+    interaction_alignment_temperature: float = 0.1
+    language_interaction_alignment_loss_weight: float = 0.05
+    action_interaction_alignment_loss_weight: float = 0.05
+    actor_attention_separation_loss_weight: float = 0.02
+    actor_token_separation_loss_weight: float = 0.02
+    actor_attention_overlap_margin: float = 0.35
+    actor_token_cosine_margin: float = 0.30
+
     # 主要关键参与者六视角视觉token级空间监督。
     use_participant_spatial_attention_supervision: bool = False
     participant_spatial_attention_loss_weight: float = 0.05

@@ -28,8 +28,7 @@ FUTURE_INTERACTION_CHANNEL_NAMES = (
 )
 
 
-class Data_LG(SurroundBaseDataset):  # pylint: disable=invalid-name
-    """Load LG language/trajectory supervision with the common six-view RGB input."""
+class Data_LG(SurroundBaseDataset):
 
     def __init__(self, **cfg):
         if not bool(cfg.get("use_lg_supervision", False)):

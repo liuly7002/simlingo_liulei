@@ -16,6 +16,17 @@ model:
   interaction_num_heads: 8
   interaction_dropout: 0.1
 
+  # 第二阶段：Q1-Q4、动作query与统一交互token的一致性监督。
+  interaction_alignment_temperature: 0.1
+  language_interaction_alignment_loss_weight: 0.05
+  action_interaction_alignment_loss_weight: 0.05
+
+  # 第二阶段：当C4存在次要参与者时，防止主/次参与者token和空间注意力塌缩。
+  actor_attention_separation_loss_weight: 0.02
+  actor_token_separation_loss_weight: 0.02
+  actor_attention_overlap_margin: 0.35
+  actor_token_cosine_margin: 0.30
+
   # 主要关键参与者六视角视觉token级空间监督。
   use_participant_spatial_attention_supervision: true
   participant_spatial_attention_loss_weight: 0.05
@@ -95,7 +106,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: interaction_grounded_stage1
+name: interaction_grounded_stage2
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

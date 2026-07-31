@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 from torch import Tensor
@@ -11,7 +11,9 @@ from simlingo_training.models.future_interaction import (
     compute_future_interaction_losses,
 )
 from simlingo_training.models.interaction_reasoning import (
-    UnifiedInteractionReasoner,
+    INTERACTION_TOKEN_KEYS,
+    PreLanguageInteractionReasoner,
+    compute_actor_disentanglement_losses,
     compute_participant_spatial_attention_losses,
 )
 from simlingo_training.models.utils import summarise_losses
@@ -24,13 +26,13 @@ from simlingo_training.utils.custom_types import (
 
 class InteractionGroundedDrivingModel(DrivingModel):
     """
-    第一阶段统一决策交互模型。
+    第二阶段统一语言—交互—动作模型。
 
-    在原SimLingo语言和Driving Transformer输出之上构建四个共享交互token，
-    并使以下任务共同读取同一表示：
-        1. 主要/次要参与者六视角空间注意力；
-        2. route与waypoint动作预测；
-        3. C0/C1/C2/C4四通道结构化未来世界预测。
+    序列固定为：
+        [4个统一交互token | 语言token | 30个Driving query]
+
+    因此语言生成、轨迹预测和四通道未来世界预测不再通过相互独立的
+    后处理分支读取交互信息，而是在同一次因果Transformer前向中共享证据。
     """
 
     def __init__(
@@ -50,10 +52,10 @@ class InteractionGroundedDrivingModel(DrivingModel):
         driving_adaptor = self.adaptors.driving
         if driving_adaptor is None:
             raise RuntimeError(
-                "Unified interaction reasoning requires DrivingAdaptor."
+                "Stage-2 interaction reasoning requires DrivingAdaptor."
             )
 
-        self.interaction_reasoner = UnifiedInteractionReasoner(
+        self.interaction_reasoner = PreLanguageInteractionReasoner(
             hidden_size=self.language_model.hidden_size,
             num_route_queries=int(
                 getattr(driving_adaptor, "future_waypoints", 20)
@@ -81,19 +83,77 @@ class InteractionGroundedDrivingModel(DrivingModel):
         self.future_interaction_logits = None
         self.primary_spatial_attention = None
         self.secondary_spatial_attention = None
+        self.contextual_interaction_tokens = None
 
-    def _reason_from_raw_inputs(
+        self._question_marker_patterns = tuple(
+            self._tokenize_marker_variants(f"A{index}:")
+            for index in range(1, 5)
+        )
+        self._waypoint_marker_patterns = (
+            self._tokenize_marker_variants("Waypoints:")
+        )
+
+    def _tokenize_marker_variants(
         self,
-        *,
-        adaptor_dict: Dict,
-        action_features: Tensor,
-        batch_index: Optional[int] = None,
-    ) -> Dict[str, Tensor]:
-        if batch_index is None:
-            batch_slice = slice(None)
-        else:
-            batch_slice = slice(batch_index, batch_index + 1)
+        marker: str,
+    ) -> Tuple[Tuple[int, ...], ...]:
+        variants: List[Tuple[int, ...]] = []
+        for text in (marker, f" {marker}", f"\n{marker}"):
+            token_ids = tuple(
+                int(value)
+                for value in self.tokenizer.encode(
+                    text,
+                    add_special_tokens=False,
+                )
+            )
+            if token_ids and token_ids not in variants:
+                variants.append(token_ids)
+        if not variants:
+            raise RuntimeError(
+                f"Tokenizer produced no ids for marker {marker!r}."
+            )
+        return tuple(variants)
 
+    @staticmethod
+    def _append_tensor(
+        current: Optional[Tensor],
+        value: Tensor,
+    ) -> Tensor:
+        if current is None:
+            return value
+        return torch.cat((current, value), dim=0)
+
+    def _model_dtype(self) -> torch.dtype:
+        return self.adaptors.language.embed_tokens.weight.dtype
+
+    def _replace_multimodal_placeholders(
+        self,
+        example: DrivingExample,
+        *,
+        inference: bool,
+    ) -> Dict:
+        adaptor_dict = self.adaptors(
+            example,
+            inference=inference,
+        )
+        prompt = (
+            example.driving_input.prompt_inference
+            if inference
+            else example.driving_input.prompt
+        )
+        return self.vision_model.image_encoder.replace_placeholder_tokens(
+            adaptor_dict=adaptor_dict,
+            pixel_values=example.driving_input.camera_images,
+            placeholder_values=prompt.placeholder_values,
+            wp_encoder=self.wp_encoder,
+        )
+
+    def _build_pre_language_interaction(
+        self,
+        adaptor_dict: Dict,
+        *,
+        batch_slice=slice(None),
+    ) -> Dict[str, Tensor]:
         raw_language_features = adaptor_dict[
             "language_inputs"
         ][batch_slice]
@@ -106,6 +166,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         language_valid = adaptor_dict[
             "language_inputs_mask"
         ][batch_slice].bool()
+
         answer_mask = adaptor_dict.get(
             "language__ids_mask",
             None,
@@ -146,8 +207,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
             visual_token_count == expected_visual_tokens
         ):
             raise RuntimeError(
-                "Unified interaction reasoning requires exactly "
-                f"{expected_visual_tokens} raw visual tokens per sample, "
+                "Stage-2 interaction reasoning requires exactly "
+                f"{expected_visual_tokens} visual tokens per sample, "
                 f"but received counts={visual_token_count.tolist()}."
             )
         visual_features = raw_language_features[
@@ -164,7 +225,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         navigation_count = navigation_mask.sum(dim=1)
         if not torch.all(navigation_count == 2):
             raise RuntimeError(
-                "Unified interaction reasoning requires exactly two "
+                "Stage-2 interaction reasoning requires exactly two "
                 "TARGET_POINT embeddings per sample, but received "
                 f"counts={navigation_count.tolist()}."
             )
@@ -176,353 +237,390 @@ class InteractionGroundedDrivingModel(DrivingModel):
             raw_language_features.shape[-1],
         ).mean(dim=1)
 
-        # 空间定位只能读取用户prompt、导航和视觉证据，不能读取训练阶段的
-        # ground-truth assistant答案，避免通过语言标签直接泄漏关键actor。
+        # 交互token只读取用户问题、导航和视觉证据，不能读取训练答案。
         language_context_mask = (
             language_valid
             & ~visual_mask
             & ~answer_mask
         )
 
-        return self.interaction_reasoner(
-            interaction_query_features=raw_driving_queries,
-            action_features=action_features,
-            visual_features=visual_features,
-            language_features=raw_language_features,
+        reasoner_dtype = next(
+            self.interaction_reasoner.parameters()
+        ).dtype
+        outputs = self.interaction_reasoner(
+            interaction_query_features=raw_driving_queries.to(
+                dtype=reasoner_dtype
+            ),
+            visual_features=visual_features.to(
+                dtype=reasoner_dtype
+            ),
+            language_features=raw_language_features.to(
+                dtype=reasoner_dtype
+            ),
             language_context_mask=language_context_mask,
-            navigation_context=navigation_context,
+            navigation_context=navigation_context.to(
+                dtype=reasoner_dtype
+            ),
+        )
+        outputs["language_ids"] = language_ids
+        outputs["language_valid"] = language_valid
+        outputs["answer_mask"] = answer_mask
+        outputs["raw_language_features"] = raw_language_features
+        outputs["raw_driving_queries"] = raw_driving_queries
+        return outputs
+
+    @staticmethod
+    def _assemble_joint_sequence(
+        interaction_tokens: Tensor,
+        language_features: Tensor,
+        language_valid: Tensor,
+        driving_queries: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tuple[int, int, int]]:
+        batch_size = int(language_features.shape[0])
+        interaction_valid = torch.ones(
+            interaction_tokens.shape[:2],
+            device=interaction_tokens.device,
+            dtype=torch.bool,
+        )
+        driving_valid = torch.ones(
+            driving_queries.shape[:2],
+            device=driving_queries.device,
+            dtype=torch.bool,
         )
 
-    def _extract_interaction_inputs(
-        self,
-        adaptor_dict: Dict,
-        adaptor_features: Tensor,
-    ) -> Dict[str, Tensor]:
-        features_by_adaptor = (
-            self.adaptors.split_outputs_by_adaptor(
-                adaptor_dict,
-                adaptor_features,
-            )
-        )
-        driving_features = features_by_adaptor.get(
-            "driving",
-            None,
-        )
-        if not isinstance(driving_features, torch.Tensor):
-            raise RuntimeError(
-                "Driving features are required for unified interaction "
-                "reasoning."
-            )
-
-        return self._reason_from_raw_inputs(
-            adaptor_dict=adaptor_dict,
-            action_features=driving_features,
-        )
-
-    def _replace_driving_features(
-        self,
-        adaptor_dict: Dict,
-        adaptor_features: Tensor,
-        enhanced_driving_features: Tensor,
-    ) -> Tensor:
-        permutation = adaptor_dict["perm"]
-        inverse_permutation = permutation.argsort(dim=-1)
-        batch_index = torch.arange(
-            permutation.shape[0],
-            device=permutation.device,
-        )[:, None]
-        original_order_features = adaptor_features[
-            batch_index,
-            inverse_permutation,
-        ]
-
-        adaptor_names = list(self.adaptors.adaptors.keys())
-        if "driving" not in adaptor_names:
-            raise RuntimeError(
-                "Driving adaptor is missing from the adaptor sequence."
-            )
-        split_sizes = [
-            int(value)
-            for value in adaptor_dict["split_sizes"]
-        ]
-        driving_index = adaptor_names.index("driving")
-        driving_start = sum(split_sizes[:driving_index])
-        driving_size = split_sizes[driving_index]
-
-        if enhanced_driving_features.shape[1] != driving_size:
-            raise RuntimeError(
-                "Enhanced Driving feature count does not match adaptor "
-                f"split size: {enhanced_driving_features.shape[1]} vs "
-                f"{driving_size}."
-            )
-
-        updated_original_features = torch.cat(
+        original_embeddings = torch.cat(
             (
-                original_order_features[:, :driving_start],
-                enhanced_driving_features,
-                original_order_features[
-                    :,
-                    driving_start + driving_size :,
-                ],
+                interaction_tokens,
+                language_features,
+                driving_queries,
             ),
             dim=1,
         )
-        return updated_original_features[
-            batch_index,
-            permutation,
-        ]
+        original_mask = torch.cat(
+            (
+                interaction_valid,
+                language_valid,
+                driving_valid,
+            ),
+            dim=1,
+        )
 
-    def _build_interaction_for_inference(
-        self,
-        *,
-        adaptor_dict: Dict,
-        driving_features: Tensor,
-        batch_index: int,
-    ) -> Dict[str, Tensor]:
-        return self._reason_from_raw_inputs(
-            adaptor_dict=adaptor_dict,
-            action_features=driving_features,
-            batch_index=batch_index,
+        original_indices = torch.arange(
+            original_embeddings.shape[1],
+            device=original_embeddings.device,
+        ).expand(batch_size, -1)
+        valid_permutation = original_mask.byte().argsort(
+            dim=-1,
+            descending=True,
+            stable=True,
+        )
+        permutation = original_indices.gather(
+            1,
+            valid_permutation,
+        )
+        batch_indices = torch.arange(
+            batch_size,
+            device=original_embeddings.device,
+        )[:, None]
+
+        return (
+            original_embeddings[batch_indices, permutation],
+            original_mask[batch_indices, permutation],
+            permutation,
+            (
+                int(interaction_tokens.shape[1]),
+                int(language_features.shape[1]),
+                int(driving_queries.shape[1]),
+            ),
         )
 
     @staticmethod
-    def _append_tensor(
-        current: Optional[Tensor],
-        value: Tensor,
-    ) -> Tensor:
-        if current is None:
-            return value
-        return torch.cat((current, value), dim=0)
-
-    def forward(
-        self,
-        example: DrivingExample,
-        return_language: Optional[bool] = None,
-        prompt_ids: Optional[Tensor] = None,
-    ) -> DrivingOutput:
-        del return_language, prompt_ids
-
-        self.speed_wps = None
-        self.route = None
-        self.language = []
-        self.future_interaction_logits = None
-        self.primary_spatial_attention = None
-        self.secondary_spatial_attention = None
-
-        try:
-            driving_input = example.driving_input
-        except AttributeError:
-            driving_input = example
-
-        adaptor_dict = self.adaptors(
-            example,
-            inference=True,
-        )
-        adaptor_dict = (
-            self.vision_model.image_encoder.replace_placeholder_tokens(
-                adaptor_dict=adaptor_dict,
-                pixel_values=driving_input.camera_images,
-                placeholder_values=(
-                    driving_input
-                    .prompt_inference
-                    .placeholder_values
-                ),
-                wp_encoder=self.wp_encoder,
-            )
-        )
-        input_embeds_all = adaptor_dict["language_inputs"]
-        attention_masks = adaptor_dict[
-            "language_inputs_mask"
+    def _split_joint_outputs(
+        outputs: Tensor,
+        permutation: Tensor,
+        split_sizes: Tuple[int, int, int],
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        inverse_permutation = permutation.argsort(dim=-1)
+        batch_indices = torch.arange(
+            outputs.shape[0],
+            device=outputs.device,
+        )[:, None]
+        original_order = outputs[
+            batch_indices,
+            inverse_permutation,
         ]
+        return tuple(
+            original_order.split(split_sizes, dim=1)
+        )
 
-        if self.predict_language:
-            inputs_driving = self.adaptors.driving(
-                driving_input
-            )
-            len_driving = int(
-                inputs_driving["inputs"].size(1)
-            )
+    def _forward_joint_transformer(
+        self,
+        interaction_outputs: Dict[str, Tensor],
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        interaction_tokens = interaction_outputs[
+            "interaction_tokens"
+        ].to(dtype=self._model_dtype())
+        language_features = interaction_outputs[
+            "raw_language_features"
+        ].to(dtype=self._model_dtype())
+        driving_queries = interaction_outputs[
+            "raw_driving_queries"
+        ].to(dtype=self._model_dtype())
 
-            for batch_index, (
-                input_embed,
-                attention_mask,
-            ) in enumerate(
-                zip(input_embeds_all, attention_masks)
+        (
+            joint_embeddings,
+            joint_mask,
+            permutation,
+            split_sizes,
+        ) = self._assemble_joint_sequence(
+            interaction_tokens=interaction_tokens,
+            language_features=language_features,
+            language_valid=interaction_outputs["language_valid"],
+            driving_queries=driving_queries,
+        )
+        joint_features = self.language_model.forward_features(
+            embeddings=joint_embeddings,
+            attention_mask=joint_mask,
+            position_ids=None,
+            return_dict=True,
+        )
+        return self._split_joint_outputs(
+            joint_features,
+            permutation,
+            split_sizes,
+        )
+
+    @staticmethod
+    def _find_marker(
+        token_ids: Sequence[int],
+        allowed_mask: Sequence[bool],
+        patterns: Sequence[Sequence[int]],
+        start_index: int,
+    ) -> Optional[Tuple[int, int]]:
+        for position in range(
+            max(int(start_index), 0),
+            len(token_ids),
+        ):
+            for pattern in patterns:
+                pattern_length = len(pattern)
+                end = position + pattern_length
+                if end > len(token_ids):
+                    continue
+                if not all(allowed_mask[position:end]):
+                    continue
+                if tuple(token_ids[position:end]) == tuple(pattern):
+                    return position, end
+        return None
+
+    def _build_question_span_masks(
+        self,
+        language_ids: Tensor,
+        answer_mask: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        batch_size, sequence_length = language_ids.shape
+        question_masks = torch.zeros(
+            (batch_size, 4, sequence_length),
+            device=language_ids.device,
+            dtype=torch.bool,
+        )
+        valid_samples = torch.zeros(
+            (batch_size,),
+            device=language_ids.device,
+            dtype=torch.bool,
+        )
+
+        for sample_index in range(batch_size):
+            ids = [
+                int(value)
+                for value in language_ids[sample_index].detach().cpu().tolist()
+            ]
+            allowed = [
+                bool(value)
+                for value in answer_mask[sample_index].detach().cpu().tolist()
+            ]
+
+            markers: List[Tuple[int, int]] = []
+            cursor = 0
+            for patterns in self._question_marker_patterns:
+                marker = self._find_marker(
+                    ids,
+                    allowed,
+                    patterns,
+                    cursor,
+                )
+                if marker is None:
+                    markers = []
+                    break
+                markers.append(marker)
+                cursor = marker[1]
+
+            if len(markers) != 4:
+                continue
+
+            waypoint_marker = self._find_marker(
+                ids,
+                allowed,
+                self._waypoint_marker_patterns,
+                markers[-1][1],
+            )
+            if waypoint_marker is None:
+                continue
+
+            span_valid = True
+            for question_index in range(4):
+                span_start = markers[question_index][1]
+                span_end = (
+                    markers[question_index + 1][0]
+                    if question_index < 3
+                    else waypoint_marker[0]
+                )
+                if span_end <= span_start:
+                    span_valid = False
+                    break
+
+                span_mask = answer_mask[
+                    sample_index,
+                    span_start:span_end,
+                ]
+                if not bool(span_mask.any().item()):
+                    span_valid = False
+                    break
+                question_masks[
+                    sample_index,
+                    question_index,
+                    span_start:span_end,
+                ] = span_mask
+
+            if span_valid:
+                valid_samples[sample_index] = True
+            else:
+                question_masks[sample_index].zero_()
+
+        return question_masks, valid_samples
+
+    @staticmethod
+    def _prepare_future_supervision(
+        example: DrivingExample,
+        prediction_logits: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        target = example.driving_label.future_interaction_grid
+        valid = example.driving_label.future_interaction_valid
+        batch_size = int(prediction_logits.shape[0])
+
+        if target is None:
+            if (
+                isinstance(valid, torch.Tensor)
+                and bool(valid.any().item())
             ):
-                input_embed = input_embed.unsqueeze(0)
-                attention_mask = attention_mask.unsqueeze(0)
-
-                if (
-                    self.language_model.variant
-                    == "OpenGVLab/InternVL2-4B"
-                ):
-                    eos = self.tokenizer.added_tokens_encoder[
-                        "<|end|>"
-                    ]
-                elif (
-                    self.language_model.variant
-                    == "OpenGVLab/InternVL2-2B"
-                ):
-                    eos = self.tokenizer.added_tokens_encoder[
-                        "<|im_end|>"
-                    ]
-                else:
-                    eos = self.tokenizer.eos_token_id
-
-                sampled_tokens, generated_embeds = (
-                    self.language_model.greedy_sample(
-                        input_embed,
-                        eos_token_id=eos,
-                        max_new_tokens=100,
-                        input_embed_matrix=(
-                            self.adaptors
-                            .language
-                            .embed_tokens
-                            .weight
-                        ),
-                        logit_matrix=(
-                            self.adaptors
-                            .language
-                            .lm_head
-                            .weight
-                        ),
-                        attention_mask=attention_mask,
-                    )
+                raise RuntimeError(
+                    "future_interaction_valid contains True, but "
+                    "future_interaction_grid is None."
                 )
-
-                sample_driving_inputs = inputs_driving[
-                    "inputs"
-                ][batch_index].unsqueeze(0)
-                input_embed_concat = torch.cat(
-                    (
-                        generated_embeds,
-                        sample_driving_inputs,
-                    ),
-                    dim=1,
-                )
-                features, logits = self.language_model.forward(
-                    input_embed_concat
-                )
-                driving_features = features[:, -len_driving:]
-                driving_logits = logits[:, -len_driving:]
-
-                interaction_outputs = (
-                    self._build_interaction_for_inference(
-                        adaptor_dict=adaptor_dict,
-                        driving_features=driving_features,
-                        batch_index=batch_index,
-                    )
-                )
-                predictions = (
-                    self.adaptors.driving.get_predictions(
-                        interaction_outputs[
-                            "enhanced_driving_features"
-                        ],
-                        driving_logits,
-                    )
-                )
-
-                for key, value in predictions.items():
-                    if value is None:
-                        continue
-                    current_value = getattr(self, key, None)
-                    if isinstance(value, torch.Tensor):
-                        setattr(
-                            self,
-                            key,
-                            self._append_tensor(
-                                current_value,
-                                value,
-                            ),
-                        )
-                    elif isinstance(value, list):
-                        if current_value is None:
-                            setattr(self, key, list(value))
-                        else:
-                            current_value.extend(value)
-                    else:
-                        raise NotImplementedError(
-                            f"Type of {key} is not supported."
-                        )
-
-                if self.future_interaction_decoder is not None:
-                    future_logits = self.future_interaction_decoder(
-                        interaction_outputs[
-                            "interaction_tokens"
-                        ]
-                    )
-                    self.future_interaction_logits = (
-                        self._append_tensor(
-                            self.future_interaction_logits,
-                            future_logits,
-                        )
-                    )
-
-                self.primary_spatial_attention = (
-                    self._append_tensor(
-                        self.primary_spatial_attention,
-                        interaction_outputs[
-                            "primary_spatial_attention"
-                        ],
-                    )
-                )
-                self.secondary_spatial_attention = (
-                    self._append_tensor(
-                        self.secondary_spatial_attention,
-                        interaction_outputs[
-                            "secondary_spatial_attention"
-                        ],
-                    )
-                )
-                self.language.append(
-                    self.tokenizer.batch_decode(
-                        sampled_tokens,
-                        skip_special_tokens=True,
-                    )[0]
-                )
+            target = torch.zeros(
+                (
+                    batch_size,
+                    4,
+                    prediction_logits.shape[-2],
+                    prediction_logits.shape[-1],
+                ),
+                device=prediction_logits.device,
+                dtype=torch.float32,
+            )
+            valid = torch.zeros(
+                (batch_size,),
+                device=prediction_logits.device,
+                dtype=torch.bool,
+            )
+        elif not isinstance(valid, torch.Tensor):
+            raise RuntimeError(
+                "A future interaction target exists, but its valid mask "
+                "is missing."
+            )
         else:
-            adaptor_features, _ = self.forward_model(
-                driving_input,
-                adaptor_dict,
+            target = target.to(
+                device=prediction_logits.device,
+                dtype=torch.float32,
             )
-            interaction_outputs = self._extract_interaction_inputs(
-                adaptor_dict,
-                adaptor_features,
+            valid = valid.to(
+                device=prediction_logits.device,
+                dtype=torch.bool,
             )
-            predictions = self.adaptors.driving.get_predictions(
-                interaction_outputs[
-                    "enhanced_driving_features"
-                ]
-            )
-            for key, value in predictions.items():
-                if value is not None:
-                    setattr(self, key, value)
 
-            if self.future_interaction_decoder is not None:
-                self.future_interaction_logits = (
-                    self.future_interaction_decoder(
-                        interaction_outputs[
-                            "interaction_tokens"
-                        ]
-                    )
+        return target, valid
+
+    def _add_target_point_metadata(
+        self,
+        *,
+        pred_labels: Dict,
+        adaptor_dict: Dict,
+        example: DrivingExample,
+    ) -> None:
+        image_encoder = self.vision_model.image_encoder
+        language_ids = adaptor_dict.get("language__ids")
+        if not isinstance(language_ids, torch.Tensor):
+            raise RuntimeError(
+                "language__ids is required to save TARGET_POINT coordinates."
+            )
+
+        target_point_token_id = getattr(
+            image_encoder,
+            "target_point_token_id",
+            None,
+        )
+        if target_point_token_id is None:
+            raise RuntimeError(
+                "target_point_token_id was not initialized by the image encoder."
+            )
+        target_point_token_id = int(target_point_token_id)
+
+        has_target_point = (
+            language_ids == target_point_token_id
+        ).any(dim=1)
+        batch_size = int(language_ids.shape[0])
+        target_point_coordinates = torch.full(
+            (batch_size, 2, 2),
+            float("nan"),
+            device=language_ids.device,
+            dtype=torch.float32,
+        )
+        placeholder_values = (
+            example.driving_input.prompt.placeholder_values
+        )
+        if len(placeholder_values) != batch_size:
+            raise RuntimeError(
+                "The number of placeholder dictionaries does not match "
+                f"batch size: {len(placeholder_values)} vs {batch_size}."
+            )
+
+        for sample_index in range(batch_size):
+            if not bool(has_target_point[sample_index].item()):
+                continue
+            sample_values = placeholder_values[sample_index]
+            if target_point_token_id not in sample_values:
+                raise KeyError(
+                    "The prompt contains TARGET_POINT, but its coordinates "
+                    "are missing from placeholder_values."
                 )
-            self.primary_spatial_attention = (
-                interaction_outputs[
-                    "primary_spatial_attention"
-                ]
+            points = torch.as_tensor(
+                sample_values[target_point_token_id],
+                device=language_ids.device,
+                dtype=torch.float32,
             )
-            self.secondary_spatial_attention = (
-                interaction_outputs[
-                    "secondary_spatial_attention"
-                ]
-            )
+            if points.numel() != 4:
+                raise ValueError(
+                    "TARGET_POINT must contain two 2D coordinates."
+                )
+            target_point_coordinates[sample_index] = points.reshape(2, 2)
 
-        return self.speed_wps, self.route, self.language
+        pred_labels["target_point_coordinates"] = target_point_coordinates
+        pred_labels["has_target_point"] = has_target_point
 
-    def _log_participant_spatial_attention(
+    def _log_stage2_statistics(
         self,
         mode: str,
         interaction_outputs: Dict[str, Tensor],
+        language_alignment_valid: Tensor,
+        secondary_exists: Tensor,
     ) -> None:
         primary_attention = interaction_outputs[
             "primary_spatial_attention"
@@ -551,8 +649,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 camera_marginal,
             ):
                 self.log(
-                    f"{mode}_participant_attention/"
-                    f"{prefix}_{camera_name}",
+                    f"{mode}_stage2_attention/{prefix}_{camera_name}",
                     camera_weight,
                     on_step=on_step,
                     on_epoch=True,
@@ -562,13 +659,11 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     sync_dist=True,
                 )
 
-        entropy = interaction_outputs[
-            "primary_spatial_attention_entropy"
-        ].detach().float().mean()
         self.log(
-            f"{mode}_participant_attention/"
-            "primary_normalized_spatial_entropy",
-            entropy,
+            f"{mode}_stage2_attention/primary_normalized_entropy",
+            interaction_outputs[
+                "primary_spatial_attention_entropy"
+            ].detach().float().mean(),
             on_step=on_step,
             on_epoch=True,
             prog_bar=False,
@@ -576,13 +671,9 @@ class InteractionGroundedDrivingModel(DrivingModel):
             batch_size=batch_size,
             sync_dist=True,
         )
-
-        action_gate = torch.tanh(
-            self.interaction_reasoner.action_gate.detach()
-        ).float()
         self.log(
-            f"{mode}_participant_attention/action_gate",
-            action_gate,
+            f"{mode}_stage2_alignment/four_question_valid_ratio",
+            language_alignment_valid.float().mean(),
             on_step=on_step,
             on_epoch=True,
             prog_bar=False,
@@ -590,117 +681,96 @@ class InteractionGroundedDrivingModel(DrivingModel):
             batch_size=batch_size,
             sync_dist=True,
         )
-
-    def _add_target_point_metadata(
-        self,
-        *,
-        pred_labels: Dict,
-        adaptor_dict: Dict,
-        example: DrivingExample,
-    ) -> None:
-        image_encoder = self.vision_model.image_encoder
-        language_ids = adaptor_dict.get("language__ids")
-        if not isinstance(language_ids, torch.Tensor):
-            raise RuntimeError(
-                "language__ids is required to save TARGET_POINT "
-                "coordinates."
-            )
-
-        target_point_token_id = getattr(
-            image_encoder,
-            "target_point_token_id",
-            None,
+        self.log(
+            f"{mode}_stage2_alignment/secondary_actor_ratio",
+            secondary_exists.float().mean(),
+            on_step=on_step,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+            batch_size=batch_size,
+            sync_dist=True,
         )
-        if target_point_token_id is None:
-            raise RuntimeError(
-                "target_point_token_id was not initialized by the "
-                "InternVL2 image encoder."
-            )
-        target_point_token_id = int(target_point_token_id)
-
-        has_target_point = (
-            language_ids == target_point_token_id
-        ).any(dim=1)
-        batch_size = int(language_ids.shape[0])
-        target_point_coordinates = torch.full(
-            (batch_size, 2, 2),
-            float("nan"),
-            device=language_ids.device,
-            dtype=torch.float32,
-        )
-
-        placeholder_values = (
-            example.driving_input.prompt.placeholder_values
-        )
-        if len(placeholder_values) != batch_size:
-            raise RuntimeError(
-                "The number of placeholder value dictionaries does not "
-                f"match batch size: {len(placeholder_values)} vs "
-                f"{batch_size}."
-            )
-
-        for sample_index in range(batch_size):
-            if not bool(has_target_point[sample_index].item()):
-                continue
-            sample_placeholder_values = placeholder_values[
-                sample_index
-            ]
-            if target_point_token_id not in sample_placeholder_values:
-                raise KeyError(
-                    "The prompt contains TARGET_POINT, but its value is "
-                    "missing from placeholder_values."
-                )
-            sample_target_points = torch.as_tensor(
-                sample_placeholder_values[
-                    target_point_token_id
-                ],
-                device=language_ids.device,
-                dtype=torch.float32,
-            )
-            if sample_target_points.numel() != 4:
-                raise ValueError(
-                    "TARGET_POINT must contain two 2D coordinates, "
-                    f"but received {sample_target_points.numel()} values."
-                )
-            target_point_coordinates[sample_index] = (
-                sample_target_points.reshape(2, 2)
-            )
-
-        pred_labels["target_point_coordinates"] = (
-            target_point_coordinates
-        )
-        pred_labels["has_target_point"] = has_target_point
 
     def forward_loss(
         self,
         example: DrivingExample,
         per_sample: bool = False,
     ) -> TrainingOutput:
-        adaptor_dict = self.adaptors(example)
-        adaptor_features, adaptor_logits = self.forward_model(
-            example.driving_input,
-            adaptor_dict,
-            driving_labels=example.driving_label,
+        adaptor_dict = self._replace_multimodal_placeholders(
+            example,
+            inference=False,
         )
+        interaction_outputs = self._build_pre_language_interaction(
+            adaptor_dict
+        )
+        (
+            contextual_interaction_tokens,
+            language_features,
+            driving_features,
+        ) = self._forward_joint_transformer(interaction_outputs)
 
-        interaction_outputs = self._extract_interaction_inputs(
-            adaptor_dict,
-            adaptor_features,
-        )
-        enhanced_adaptor_features = self._replace_driving_features(
-            adaptor_dict,
-            adaptor_features,
-            interaction_outputs[
-                "enhanced_driving_features"
-            ],
-        )
-        loss_dict = self.adaptors.compute_loss(
-            enhanced_adaptor_features,
-            adaptor_logits,
-            adaptor_dict,
+        language_input_dict = {
+            "_ids": interaction_outputs["language_ids"],
+            "_ids_mask": interaction_outputs["answer_mask"],
+        }
+        loss_dict = self.adaptors.language.compute_loss(
+            language_features,
+            None,
+            language_input_dict,
             example,
         )
+        loss_dict.update(
+            self.adaptors.driving.compute_loss(
+                driving_features,
+                None,
+                {},
+                example,
+            )
+        )
 
+        question_span_mask, language_alignment_valid = (
+            self._build_question_span_masks(
+                interaction_outputs["language_ids"],
+                interaction_outputs["answer_mask"],
+            )
+        )
+        language_alignment_loss = (
+            self.interaction_reasoner.compute_language_alignment_loss(
+                language_features=language_features,
+                contextual_interaction_tokens=(
+                    contextual_interaction_tokens
+                ),
+                question_span_mask=question_span_mask,
+                valid_mask=language_alignment_valid,
+                temperature=float(
+                    getattr(
+                        self,
+                        "interaction_alignment_temperature",
+                        0.1,
+                    )
+                ),
+            )
+        )
+        loss_dict["language_interaction_alignment_loss"] = (
+            language_alignment_loss
+        )
+
+        loss_dict["action_interaction_alignment_loss"] = (
+            self.interaction_reasoner.compute_action_alignment_loss(
+                driving_features=driving_features,
+                contextual_interaction_tokens=(
+                    contextual_interaction_tokens
+                ),
+            )
+        )
+
+        future_target = None
+        future_valid = torch.zeros(
+            (driving_features.shape[0],),
+            device=driving_features.device,
+            dtype=torch.bool,
+        )
         if bool(
             getattr(
                 self,
@@ -713,72 +783,20 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     "Future interaction prediction is enabled, but the "
                     "decoder was not initialized."
                 )
-
-            future_interaction_logits = (
-                self.future_interaction_decoder(
-                    interaction_outputs[
-                        "interaction_tokens"
-                    ]
+            future_logits = self.future_interaction_decoder(
+                contextual_interaction_tokens
+            )
+            future_target, future_valid = (
+                self._prepare_future_supervision(
+                    example,
+                    future_logits,
                 )
             )
-            future_interaction_target = (
-                example
-                .driving_label
-                .future_interaction_grid
-            )
-            future_interaction_valid = (
-                example
-                .driving_label
-                .future_interaction_valid
-            )
-            batch_size = int(
-                future_interaction_logits.shape[0]
-            )
-
-            if future_interaction_target is None:
-                if (
-                    isinstance(
-                        future_interaction_valid,
-                        torch.Tensor,
-                    )
-                    and bool(
-                        future_interaction_valid.any().item()
-                    )
-                ):
-                    raise RuntimeError(
-                        "future_interaction_valid contains True, but "
-                        "future_interaction_grid is None."
-                    )
-
-                future_interaction_target = torch.zeros(
-                    (
-                        batch_size,
-                        4,
-                        future_interaction_logits.shape[-2],
-                        future_interaction_logits.shape[-1],
-                    ),
-                    device=future_interaction_logits.device,
-                    dtype=torch.float32,
-                )
-                future_interaction_valid = torch.zeros(
-                    (batch_size,),
-                    device=future_interaction_logits.device,
-                    dtype=torch.bool,
-                )
-            elif not isinstance(
-                future_interaction_valid,
-                torch.Tensor,
-            ):
-                raise RuntimeError(
-                    "A future interaction target exists, but its valid "
-                    "mask is missing."
-                )
-
             loss_dict.update(
                 compute_future_interaction_losses(
-                    prediction_logits=future_interaction_logits,
-                    target_grid=future_interaction_target,
-                    valid_mask=future_interaction_valid,
+                    prediction_logits=future_logits,
+                    target_grid=future_target,
+                    valid_mask=future_valid,
                     positive_weights=tuple(
                         float(value)
                         for value in getattr(
@@ -798,26 +816,21 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         ):
             participant_target = (
-                example
-                .driving_label
-                .camera_attention_target
+                example.driving_label.camera_attention_target
             )
             participant_valid = (
-                example
-                .driving_label
-                .camera_attention_valid
+                example.driving_label.camera_attention_valid
             )
             if not isinstance(participant_target, torch.Tensor):
                 raise RuntimeError(
-                    "Participant spatial attention supervision is enabled, "
-                    "but the target tensor is missing."
+                    "Participant spatial supervision is enabled, but the "
+                    "target tensor is missing."
                 )
             if not isinstance(participant_valid, torch.Tensor):
                 raise RuntimeError(
-                    "Participant spatial attention supervision is enabled, "
-                    "but the valid mask is missing."
+                    "Participant spatial supervision is enabled, but the "
+                    "valid mask is missing."
                 )
-
             loss_dict.update(
                 compute_participant_spatial_attention_losses(
                     primary_attention=interaction_outputs[
@@ -828,32 +841,45 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 )
             )
 
-            valid_count = participant_valid.float().sum()
-            valid_ratio = valid_count / max(
-                int(participant_valid.numel()),
-                1,
+        if future_target is None:
+            secondary_exists = torch.zeros_like(future_valid)
+        else:
+            secondary_exists = (
+                future_valid
+                & (
+                    future_target[:, 3]
+                    .amax(dim=(-2, -1))
+                    > 1e-6
+                )
             )
-            mode = "train" if self.training else "val"
-            self.log(
-                f"{mode}_participant_attention/valid_sample_count",
-                valid_count,
-                on_step=self.training,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=int(participant_valid.numel()),
-                sync_dist=True,
+        loss_dict.update(
+            compute_actor_disentanglement_losses(
+                primary_attention=interaction_outputs[
+                    "primary_spatial_attention"
+                ],
+                secondary_attention=interaction_outputs[
+                    "secondary_spatial_attention"
+                ],
+                contextual_interaction_tokens=(
+                    contextual_interaction_tokens
+                ),
+                secondary_exists=secondary_exists,
+                attention_overlap_margin=float(
+                    getattr(
+                        self,
+                        "actor_attention_overlap_margin",
+                        0.35,
+                    )
+                ),
+                token_cosine_margin=float(
+                    getattr(
+                        self,
+                        "actor_token_cosine_margin",
+                        0.30,
+                    )
+                ),
             )
-            self.log(
-                f"{mode}_participant_attention/valid_sample_ratio",
-                valid_ratio,
-                on_step=self.training,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=int(participant_valid.numel()),
-                sync_dist=True,
-            )
+        )
 
         loss_dict_only_losses = {
             key: value
@@ -871,7 +897,6 @@ class InteractionGroundedDrivingModel(DrivingModel):
             if not key.endswith("loss")
             and not key.endswith("log")
         }
-
         pred_labels["primary_spatial_attention"] = (
             interaction_outputs[
                 "primary_spatial_attention"
@@ -883,14 +908,20 @@ class InteractionGroundedDrivingModel(DrivingModel):
             ].detach()
         )
         pred_labels["interaction_token_norms"] = (
-            interaction_outputs[
-                "interaction_tokens"
-            ].detach().float().norm(dim=-1)
+            contextual_interaction_tokens.detach().float().norm(dim=-1)
+        )
+        pred_labels["language_alignment_valid"] = (
+            language_alignment_valid.detach()
+        )
+        pred_labels["secondary_actor_exists"] = (
+            secondary_exists.detach()
         )
 
-        self._log_participant_spatial_attention(
+        self._log_stage2_statistics(
             "train" if self.training else "val",
             interaction_outputs,
+            language_alignment_valid,
+            secondary_exists,
         )
 
         if per_sample:
@@ -901,7 +932,37 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
             return loss_dict_only_losses, pred_labels
 
-        loss_weights = {}
+        loss_weights: Dict[str, float] = {
+            "language_interaction_alignment_loss": float(
+                getattr(
+                    self,
+                    "language_interaction_alignment_loss_weight",
+                    0.05,
+                )
+            ),
+            "action_interaction_alignment_loss": float(
+                getattr(
+                    self,
+                    "action_interaction_alignment_loss_weight",
+                    0.05,
+                )
+            ),
+            "actor_attention_separation_loss": float(
+                getattr(
+                    self,
+                    "actor_attention_separation_loss_weight",
+                    0.02,
+                )
+            ),
+            "actor_token_separation_loss": float(
+                getattr(
+                    self,
+                    "actor_token_separation_loss_weight",
+                    0.02,
+                )
+            ),
+        }
+
         if bool(
             getattr(
                 self,
@@ -971,10 +1032,173 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     * dice_loss_weight
                 )
 
-        if len(loss_weights) == 0:
-            loss_weights = None
-
         return summarise_losses(
             loss_dict_only_losses,
             weights=loss_weights,
         ), loss_logs
+
+    def _eos_token_id(self) -> int:
+        if self.language_model.variant == "OpenGVLab/InternVL2-4B":
+            return self.tokenizer.added_tokens_encoder["<|end|>"]
+        if self.language_model.variant == "OpenGVLab/InternVL2-2B":
+            return self.tokenizer.added_tokens_encoder["<|im_end|>"]
+        return self.tokenizer.eos_token_id
+
+    def _store_predictions(self, predictions: Dict) -> None:
+        for key, value in predictions.items():
+            if value is None:
+                continue
+            current_value = getattr(self, key, None)
+            if isinstance(value, torch.Tensor):
+                setattr(
+                    self,
+                    key,
+                    self._append_tensor(current_value, value),
+                )
+            elif isinstance(value, list):
+                if current_value is None:
+                    setattr(self, key, list(value))
+                else:
+                    current_value.extend(value)
+            else:
+                raise NotImplementedError(
+                    f"Type of {key} is not supported."
+                )
+
+    def forward(
+        self,
+        example: DrivingExample,
+        return_language: Optional[bool] = None,
+        prompt_ids: Optional[Tensor] = None,
+    ) -> DrivingOutput:
+        del return_language, prompt_ids
+
+        self.speed_wps = None
+        self.route = None
+        self.language = []
+        self.future_interaction_logits = None
+        self.primary_spatial_attention = None
+        self.secondary_spatial_attention = None
+        self.contextual_interaction_tokens = None
+
+        adaptor_dict = self._replace_multimodal_placeholders(
+            example,
+            inference=True,
+        )
+        batch_size = int(
+            adaptor_dict["language_inputs"].shape[0]
+        )
+
+        for batch_index in range(batch_size):
+            batch_slice = slice(batch_index, batch_index + 1)
+            interaction_outputs = (
+                self._build_pre_language_interaction(
+                    adaptor_dict,
+                    batch_slice=batch_slice,
+                )
+            )
+            interaction_tokens = interaction_outputs[
+                "interaction_tokens"
+            ].to(dtype=self._model_dtype())
+            language_valid = interaction_outputs[
+                "language_valid"
+            ][0]
+            prompt_embeddings = interaction_outputs[
+                "raw_language_features"
+            ][0, language_valid].unsqueeze(0).to(
+                dtype=self._model_dtype()
+            )
+
+            prefix_embeddings = torch.cat(
+                (interaction_tokens, prompt_embeddings),
+                dim=1,
+            )
+            prefix_mask = torch.ones(
+                prefix_embeddings.shape[:2],
+                device=prefix_embeddings.device,
+                dtype=torch.bool,
+            )
+
+            if self.predict_language:
+                sampled_tokens, generated_embeddings = (
+                    self.language_model.greedy_sample(
+                        prefix_embeddings,
+                        eos_token_id=self._eos_token_id(),
+                        max_new_tokens=100,
+                        input_embed_matrix=(
+                            self.adaptors.language.embed_tokens.weight
+                        ),
+                        logit_matrix=(
+                            self.adaptors.language.lm_head.weight
+                        ),
+                        attention_mask=prefix_mask,
+                    )
+                )
+                self.language.append(
+                    self.tokenizer.batch_decode(
+                        sampled_tokens,
+                        skip_special_tokens=True,
+                    )[0]
+                )
+            else:
+                generated_embeddings = prefix_embeddings
+
+            driving_queries = interaction_outputs[
+                "raw_driving_queries"
+            ].to(dtype=self._model_dtype())
+            full_embeddings = torch.cat(
+                (generated_embeddings, driving_queries),
+                dim=1,
+            )
+            full_mask = torch.ones(
+                full_embeddings.shape[:2],
+                device=full_embeddings.device,
+                dtype=torch.bool,
+            )
+            full_features = self.language_model.forward_features(
+                embeddings=full_embeddings,
+                attention_mask=full_mask,
+                position_ids=None,
+                return_dict=True,
+            )
+
+            contextual_interaction_tokens = full_features[
+                :,
+                : len(INTERACTION_TOKEN_KEYS),
+            ]
+            driving_features = full_features[
+                :,
+                -self.interaction_reasoner.num_driving_queries :,
+            ]
+            predictions = self.adaptors.driving.get_predictions(
+                driving_features
+            )
+            self._store_predictions(predictions)
+
+            if self.future_interaction_decoder is not None:
+                future_logits = self.future_interaction_decoder(
+                    contextual_interaction_tokens
+                )
+                self.future_interaction_logits = self._append_tensor(
+                    self.future_interaction_logits,
+                    future_logits,
+                )
+
+            self.primary_spatial_attention = self._append_tensor(
+                self.primary_spatial_attention,
+                interaction_outputs[
+                    "primary_spatial_attention"
+                ],
+            )
+            self.secondary_spatial_attention = self._append_tensor(
+                self.secondary_spatial_attention,
+                interaction_outputs[
+                    "secondary_spatial_attention"
+                ],
+            )
+            self.contextual_interaction_tokens = self._append_tensor(
+                self.contextual_interaction_tokens,
+                contextual_interaction_tokens,
+            )
+
+        return self.speed_wps, self.route, self.language

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
 import math
-from typing import Dict, Tuple
+from typing import Dict, Sequence, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 
@@ -14,9 +15,12 @@ INTERACTION_TOKEN_KEYS: Tuple[str, ...] = (
     "secondary_actor",
 )
 
+# Q1: primary actor; Q2: route constraint; Q3/Q4: ego future response.
+LANGUAGE_QUESTION_TO_TOKEN_INDEX: Tuple[int, ...] = (2, 0, 1, 1)
+
 
 class _SemanticTokenPool(nn.Module):
-    """将一组同语义Driving query汇聚为一个语义token。"""
+    """将同一语义分支的一组Driving query汇聚为一个交互token。"""
 
     def __init__(self, hidden_size: int):
         super().__init__()
@@ -38,20 +42,14 @@ class _SemanticTokenPool(nn.Module):
         return (normalized * weights.unsqueeze(-1)).sum(dim=1)
 
 
-class UnifiedInteractionReasoner(nn.Module):
+class PreLanguageInteractionReasoner(nn.Module):
     """
-    从语言、六视角视觉token和Driving query中构造统一决策交互表示。
+    在语言模型前构造四个统一决策交互token。
 
-    四个token固定对应：
-        0: route
-        1: ego future
-        2: primary actor
-        3: secondary actor
-
-    主要输出：
-        interaction_tokens: [B,4,D]
-        enhanced_driving_features: [B,30,D]
-        spatial_attention: [B,4,6,64]
+    这四个token被放置在语言序列最前方，因此：
+      1. Q1-Q4语言生成能够直接读取交互证据；
+      2. 后置Driving query同时读取交互token和生成/监督语言；
+      3. 四通道未来世界预测继续读取同一组token。
     """
 
     def __init__(
@@ -94,7 +92,11 @@ class UnifiedInteractionReasoner(nn.Module):
         self.ego_pool = _SemanticTokenPool(hidden_size)
 
         self.token_type_embeddings = nn.Parameter(
-            0.02 * torch.randn(1, len(INTERACTION_TOKEN_KEYS), hidden_size)
+            0.02 * torch.randn(
+                1,
+                len(INTERACTION_TOKEN_KEYS),
+                hidden_size,
+            )
         )
         self.primary_actor_seed = nn.Parameter(
             0.02 * torch.randn(1, hidden_size)
@@ -153,14 +155,19 @@ class UnifiedInteractionReasoner(nn.Module):
         )
         self.interaction_ffn_norm = nn.LayerNorm(hidden_size)
 
-        self.action_cross_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=num_heads,
-            dropout=float(dropout),
-            batch_first=True,
+        # 语言、动作与交互token的一致性投影仅服务第二阶段损失。
+        self.language_alignment_projection = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size, bias=False),
         )
-        self.action_gate = nn.Parameter(torch.tensor(0.1))
-        self.action_norm = nn.LayerNorm(hidden_size)
+        self.action_alignment_projection = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
+        self.token_alignment_projection = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
 
         nn.init.xavier_uniform_(self.spatial_query.weight)
         nn.init.xavier_uniform_(self.spatial_key.weight)
@@ -174,12 +181,12 @@ class UnifiedInteractionReasoner(nn.Module):
     ) -> Tensor:
         if features.ndim != 3:
             raise ValueError(
-                "Language features must have shape [B,L,D], "
-                f"but received {tuple(features.shape)}."
+                "Features must have shape [B,L,D], but received "
+                f"{tuple(features.shape)}."
             )
         if valid_mask.shape != features.shape[:2]:
             raise ValueError(
-                "Language context mask must match [B,L]: "
+                "Mask must match [B,L]: "
                 f"{tuple(valid_mask.shape)} vs "
                 f"{tuple(features.shape[:2])}."
             )
@@ -196,7 +203,6 @@ class UnifiedInteractionReasoner(nn.Module):
     def forward(
         self,
         interaction_query_features: Tensor,
-        action_features: Tensor,
         visual_features: Tensor,
         language_features: Tensor,
         language_context_mask: Tensor,
@@ -207,11 +213,6 @@ class UnifiedInteractionReasoner(nn.Module):
                 "Interaction query features must have shape [B,N,D], "
                 f"but received {tuple(interaction_query_features.shape)}."
             )
-        if action_features.shape != interaction_query_features.shape:
-            raise ValueError(
-                "Raw interaction queries and contextualized action features "
-                "must have the same [B,N,D] shape."
-            )
         if interaction_query_features.shape[1] != self.num_driving_queries:
             raise ValueError(
                 "Unexpected number of Driving queries: expected "
@@ -220,8 +221,8 @@ class UnifiedInteractionReasoner(nn.Module):
             )
         if visual_features.ndim != 3:
             raise ValueError(
-                "Visual features must have shape [B,V,D], "
-                f"but received {tuple(visual_features.shape)}."
+                "Visual features must have shape [B,V,D], but received "
+                f"{tuple(visual_features.shape)}."
             )
         if visual_features.shape[1] != self.num_visual_tokens:
             raise ValueError(
@@ -238,15 +239,16 @@ class UnifiedInteractionReasoner(nn.Module):
                 f"{tuple(navigation_context.shape)}."
             )
         if (
-            interaction_query_features.shape[0] != visual_features.shape[0]
-            or interaction_query_features.shape[0] != language_features.shape[0]
+            interaction_query_features.shape[0]
+            != visual_features.shape[0]
+            or interaction_query_features.shape[0]
+            != language_features.shape[0]
         ):
             raise ValueError(
                 "Language, visual and Driving batch sizes must match."
             )
         if (
             interaction_query_features.shape[-1] != self.hidden_size
-            or action_features.shape[-1] != self.hidden_size
             or visual_features.shape[-1] != self.hidden_size
             or language_features.shape[-1] != self.hidden_size
         ):
@@ -344,29 +346,12 @@ class UnifiedInteractionReasoner(nn.Module):
             + self.interaction_ffn(interaction_tokens)
         )
 
-        action_context, action_token_weights = (
-            self.action_cross_attention(
-                action_features,
-                interaction_tokens,
-                interaction_tokens,
-                need_weights=True,
-                average_attn_weights=True,
-            )
-        )
-        action_gate = torch.tanh(self.action_gate).to(
-            dtype=action_features.dtype
-        )
-        enhanced_driving_features = self.action_norm(
-            action_features + action_gate * action_context
-        )
-
         spatial_attention = spatial_attention.reshape(
             batch_size,
             len(INTERACTION_TOKEN_KEYS),
             self.num_cameras,
             self.tokens_per_camera,
         )
-
         primary_attention = spatial_attention[:, 2]
         secondary_attention = spatial_attention[:, 3]
 
@@ -377,15 +362,119 @@ class UnifiedInteractionReasoner(nn.Module):
 
         return {
             "interaction_tokens": interaction_tokens,
-            "enhanced_driving_features": enhanced_driving_features,
             "spatial_attention": spatial_attention,
             "primary_spatial_attention": primary_attention,
             "secondary_spatial_attention": secondary_attention,
             "primary_camera_attention": primary_attention.sum(dim=-1),
             "secondary_camera_attention": secondary_attention.sum(dim=-1),
             "primary_spatial_attention_entropy": primary_entropy,
-            "driving_to_interaction_attention": action_token_weights,
         }
+
+    def compute_language_alignment_loss(
+        self,
+        language_features: Tensor,
+        contextual_interaction_tokens: Tensor,
+        question_span_mask: Tensor,
+        valid_mask: Tensor,
+        temperature: float,
+    ) -> Tuple[Tensor, Tensor]:
+        """将Q1-Q4答案表示分别对齐到固定语义交互token。"""
+
+        if question_span_mask.shape[:2] != (
+            language_features.shape[0],
+            len(LANGUAGE_QUESTION_TO_TOKEN_INDEX),
+        ):
+            raise ValueError(
+                "Question span mask must have shape [B,4,L]."
+            )
+        if question_span_mask.shape[-1] != language_features.shape[1]:
+            raise ValueError(
+                "Question span mask length must match language features."
+            )
+
+        span = question_span_mask.to(
+            device=language_features.device,
+            dtype=language_features.dtype,
+        )
+        denominator = span.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        question_features = torch.einsum(
+            "bql,bld->bqd",
+            span,
+            language_features,
+        ) / denominator
+
+        question_features = F.normalize(
+            self.language_alignment_projection(question_features).float(),
+            dim=-1,
+        )
+        token_features = F.normalize(
+            self.token_alignment_projection(
+                contextual_interaction_tokens
+            ).float(),
+            dim=-1,
+        )
+
+        logits = torch.einsum(
+            "bqd,btd->bqt",
+            question_features,
+            token_features,
+        ) / max(float(temperature), 1e-4)
+        targets = torch.as_tensor(
+            LANGUAGE_QUESTION_TO_TOKEN_INDEX,
+            device=logits.device,
+            dtype=torch.long,
+        ).unsqueeze(0).expand(logits.shape[0], -1)
+        per_question_loss = F.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]),
+            targets.reshape(-1),
+            reduction="none",
+        ).reshape(logits.shape[0], logits.shape[1])
+        per_sample_loss = per_question_loss.mean(dim=1)
+        count = valid_mask.to(
+            device=per_sample_loss.device,
+            dtype=per_sample_loss.dtype,
+        )
+        return per_sample_loss * count, count
+
+    def compute_action_alignment_loss(
+        self,
+        driving_features: Tensor,
+        contextual_interaction_tokens: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """对齐route/ego动作query与对应的上下文化交互token。"""
+
+        if driving_features.shape[1] != self.num_driving_queries:
+            raise ValueError(
+                "Driving feature count does not match configured queries."
+            )
+
+        route_action = driving_features[
+            :,
+            : self.num_route_queries,
+        ].mean(dim=1)
+        ego_action = driving_features[
+            :,
+            self.num_route_queries :,
+        ].mean(dim=1)
+        action_features = torch.stack(
+            (route_action, ego_action),
+            dim=1,
+        )
+
+        action_features = F.normalize(
+            self.action_alignment_projection(action_features).float(),
+            dim=-1,
+        )
+        target_tokens = F.normalize(
+            self.token_alignment_projection(
+                contextual_interaction_tokens[:, :2]
+            ).float(),
+            dim=-1,
+        )
+        cosine = (action_features * target_tokens).sum(dim=-1)
+        per_sample_loss = (1.0 - cosine).mean(dim=1)
+        count = torch.ones_like(per_sample_loss)
+        return per_sample_loss, count
 
 
 def compute_participant_spatial_attention_losses(
@@ -443,7 +532,6 @@ def compute_participant_spatial_attention_losses(
         target / target_sum.clamp_min(1e-8).view(-1, 1, 1),
         torch.zeros_like(target),
     )
-
     per_sample_loss = -(
         normalized_target * prediction.log()
     ).sum(dim=(-2, -1))
@@ -455,3 +543,75 @@ def compute_participant_spatial_attention_losses(
             loss_count,
         )
     }
+
+
+def compute_actor_disentanglement_losses(
+    primary_attention: Tensor,
+    secondary_attention: Tensor,
+    contextual_interaction_tokens: Tensor,
+    secondary_exists: Tensor,
+    attention_overlap_margin: float,
+    token_cosine_margin: float,
+) -> Dict[str, Tuple[Tensor, Tensor]]:
+    """
+    当C4中确实存在次要参与者时，约束主要/次要参与者证据不塌缩。
+
+    该约束直接使用现有C4标签判断次要参与者是否存在，
+    不要求新增或重新生成次要参与者空间标签。
+    """
+
+    if primary_attention.shape != secondary_attention.shape:
+        raise ValueError(
+            "Primary and secondary spatial attention shapes must match."
+        )
+    if secondary_exists.shape != (primary_attention.shape[0],):
+        raise ValueError("secondary_exists must have shape [B].")
+
+    primary_probability = primary_attention.float().clamp_min(1e-8)
+    secondary_probability = secondary_attention.float().clamp_min(1e-8)
+
+    # Bhattacharyya overlap: 0表示完全分离，1表示完全相同。
+    attention_overlap = torch.sqrt(
+        primary_probability * secondary_probability
+    ).sum(dim=(-2, -1))
+    attention_loss = F.relu(
+        attention_overlap - float(attention_overlap_margin)
+    )
+
+    primary_token = F.normalize(
+        contextual_interaction_tokens[:, 2].float(),
+        dim=-1,
+    )
+    secondary_token = F.normalize(
+        contextual_interaction_tokens[:, 3].float(),
+        dim=-1,
+    )
+    token_cosine = (primary_token * secondary_token).sum(dim=-1)
+    token_loss = F.relu(
+        token_cosine - float(token_cosine_margin)
+    )
+
+    count = secondary_exists.to(
+        device=attention_loss.device,
+        dtype=attention_loss.dtype,
+    )
+    return {
+        "actor_attention_separation_loss": (
+            attention_loss * count,
+            count,
+        ),
+        "actor_token_separation_loss": (
+            token_loss * count,
+            count,
+        ),
+    }
+
+
+def validate_question_token_mapping(mapping: Sequence[int]) -> None:
+    if tuple(int(value) for value in mapping) != (
+        LANGUAGE_QUESTION_TO_TOKEN_INDEX
+    ):
+        raise ValueError(
+            "The Q1-Q4 interaction-token mapping must remain "
+            f"{LANGUAGE_QUESTION_TO_TOKEN_INDEX}."
+        )

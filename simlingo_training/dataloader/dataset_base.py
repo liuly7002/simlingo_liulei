@@ -563,7 +563,7 @@ class BaseDataset(Dataset):
                 # 构造历史图像路径和 box 路径
                 skip = False
                 augment_exist = True
-                for idx in range(self.hist_len):
+                for idx in range(self.hist_len):  # 如果设置self.hist_len=1的话,那么image就只有当前帧了,因为idex只能是0,seq+idx=seq
                     image.append(route_dir +  f'/{self.rgb_folder}' + (f'/{(seq + idx):04}.jpg'))
                     box.append(route_dir + '/boxes' + (f'/{(seq + idx):04}.json.gz'))
 
