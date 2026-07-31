@@ -11,9 +11,6 @@ class VLMEncoderConfig:
     embed_dim: int = 512
     freeze: bool = False
 
-    # 是否启用目标点引导的六视角相机注意力
-    use_target_point_camera_attention: bool = False
-
     _target_: str = "simlingo_training.models.encoder.vlm.VLMEncoderModel"
 
 
@@ -41,26 +38,28 @@ class DrivingModelConfig:
     speed_wps_mode: str = '2d'
     predict_route_as_wps: bool = True
 
-    #修改20260728：是否使用LG与普通Driving关键actor投影得到的六视角注意力软标签。
-    # 变量名为兼容当前训练代码暂时保留，但该监督已不再仅限LG数据。
-    use_lg_camera_attention_supervision: bool = False
+    # 统一决策交互表示配置。
+    interaction_attention_dim: int = 128
+    interaction_num_heads: int = 8
+    interaction_dropout: float = 0.1
 
-    #修改20260728：共享六视角注意力辅助损失在总损失中的权重。
-    lg_camera_attention_loss_weight: float = 0.05
+    # 主要关键参与者六视角视觉token级空间监督。
+    use_participant_spatial_attention_supervision: bool = False
+    participant_spatial_attention_loss_weight: float = 0.05
 
-    #修改20260726：是否启用四通道结构化未来世界辅助预测。
+    # 是否启用四通道结构化未来世界辅助预测。
     use_future_interaction_prediction: bool = False
 
-    #修改20260726：第一版解码器固定输出128×128。
+    # 当前解码器固定输出128×128。
     future_interaction_output_size: int = 128
 
-    #修改20260726：完整未来世界辅助任务在总损失中的基础权重。
+    # 完整未来世界辅助任务在总损失中的基础权重。
     future_interaction_loss_weight: float = 0.05
 
-    #修改20260726：Dice损失相对于BCE损失的权重。
+    # Dice损失相对于BCE损失的权重。
     future_interaction_dice_loss_weight: float = 1.0
 
-    #修改20260726：四个通道的正像素权重，顺序为C0、C1、C2、C4。
+    # 四个通道的正像素权重，顺序为C0、C1、C2、C4。
     future_interaction_positive_weights: Tuple[
         float,
         float,
@@ -73,7 +72,7 @@ class DrivingModelConfig:
         100.0,
     )
 
-    #修改20260726：四个通道在未来世界任务内部的权重，顺序为C0、C1、C2、C4。
+    # 四个通道在未来世界任务内部的权重，顺序为C0、C1、C2、C4。
     future_interaction_channel_weights: Tuple[
         float,
         float,
@@ -136,13 +135,13 @@ class DatasetBaseConfig:
 class DrivingDatasetConfig:
     _target_: str = "simlingo_training.dataloader.dataset_driving.Data_Driving"
 
-    #修改20260728：普通Driving四通道结构化未来世界标签配置。
+    # 普通Driving四通道结构化未来世界标签配置。
     driving_use_future_interaction_grid: bool = False
     driving_future_interaction_grid_folder: str = "driving_future_interaction_grids"
 
-    #修改20260728：普通Driving关键actor六视角投影监督配置。
-    driving_use_camera_attention_supervision: bool = False
-    driving_camera_attention_label_folder: str = (
+    # 普通Driving主要关键参与者空间投影监督配置。
+    driving_use_participant_spatial_attention_supervision: bool = False
+    driving_participant_attention_label_folder: str = (
         "driving_expert_conditioned_actor_selection"
     )
 
@@ -154,14 +153,17 @@ class DreamerDatasetConfig:
     # ------------------------------------------------------------------
     # Optional LG supervision adapter.
     # These switches are ignored by the original Data_Dreamer class. They
-    # become active only when _target_ is changed to dataset_lg.Data_LG.
+    # become active only when _target_ is changed to an LG dataset class.
     # ------------------------------------------------------------------
     use_lg_supervision: bool = False
     lg_label_folder: str = "language_grounded_waypoints"
 
-    #修改20260726：LG四通道结构化未来世界标签配置。
+    # LG四通道结构化未来世界标签配置。
     lg_use_future_interaction_grid: bool = False
     lg_future_interaction_grid_folder: str = "future_interaction_grids"
+
+    # LG主要关键参与者视觉token级空间监督配置。
+    lg_use_participant_spatial_attention_supervision: bool = False
 
     # Main ablation switches.
     # True/True  : complete LG method (four-question language + LG waypoints)

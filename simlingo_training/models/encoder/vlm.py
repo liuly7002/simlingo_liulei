@@ -19,14 +19,12 @@ class VLMEncoderModel(nn.Module):
         
         self.token_size = self.embed_dim
 
-        # if 'internvl2' in self.variant.lower():
-        #     self.image_encoder = LingoInternVLModel(self.variant, *cfg)
+        # 第一阶段不再在视觉编码器内部使用目标点六相机统一缩放；
+        # 参与者级空间注意力由统一交互模块直接在384个视觉token上计算。
         if 'internvl2' in self.variant.lower():
             self.image_encoder = LingoInternVLModel(
                 self.variant,
-                use_target_point_camera_attention=(
-                    self.use_target_point_camera_attention
-                ),
+                use_target_point_camera_attention=False,
             )
         else:
             raise ValueError(f"Unknown variant {self.variant}")

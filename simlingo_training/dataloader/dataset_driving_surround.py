@@ -5,7 +5,7 @@ Six-view wrapper for the ordinary SimLingo driving dataset.
 The driving-language/task construction remains exactly in Data_Driving. This
 wrapper adds the common six synchronized camera views and optionally attaches
 the ordinary-Driving four-channel structured future-world label and the shared
-six-view camera-attention supervision.
+participant-level spatial-attention supervision.
 """
 
 from pathlib import Path
@@ -20,6 +20,11 @@ from simlingo_training.dataloader.dataset_driving import (
 )
 from simlingo_training.dataloader.dataset_lg import (
     Data_LG,
+)
+from simlingo_training.dataloader.participant_spatial_attention import (
+    CAMERA_ORDER,
+    TOKENS_PER_CAMERA,
+    extract_participant_spatial_attention_supervision,
 )
 
 
@@ -49,15 +54,13 @@ class Data_Driving_Surround(
             self.surround_images[index],
         )
 
-        #修改20260728：普通Driving的两个共享辅助监督均允许独立关闭，
-        # 便于分别消融四通道结构化未来世界和六视角显式注意力监督。
         future_interaction_grid = None
         future_interaction_valid = False
-        camera_attention_target = np.zeros(
-            (6,),
+        participant_spatial_target = np.zeros(
+            (len(CAMERA_ORDER), TOKENS_PER_CAMERA),
             dtype=np.float32,
         )
-        camera_attention_valid = False
+        participant_spatial_valid = False
 
         use_future_interaction = bool(
             getattr(
@@ -66,15 +69,18 @@ class Data_Driving_Surround(
                 False,
             )
         )
-        use_camera_attention = bool(
+        use_participant_spatial_attention = bool(
             getattr(
                 self,
-                "driving_use_camera_attention_supervision",
+                "driving_use_participant_spatial_attention_supervision",
                 False,
             )
         )
 
-        if use_future_interaction or use_camera_attention:
+        if (
+            use_future_interaction
+            or use_participant_spatial_attention
+        ):
             measurement_path = Path(
                 Data_LG._decode_path(
                     sample.measurement_path
@@ -102,34 +108,39 @@ class Data_Driving_Surround(
                     future_interaction_path
                 )
 
-            if use_camera_attention:
-                camera_attention_path = (
+            if use_participant_spatial_attention:
+                participant_attention_path = (
                     route_dir
                     / str(
                         getattr(
                             self,
-                            "driving_camera_attention_label_folder",
+                            "driving_participant_attention_label_folder",
                             "driving_expert_conditioned_actor_selection",
                         )
                     )
                     / f"{frame_name}.json.gz"
                 )
 
-                if camera_attention_path.is_file():
-                    camera_attention_payload = (
+                if participant_attention_path.is_file():
+                    participant_attention_payload = (
                         Data_LG._load_gzip_json(
-                            camera_attention_path
+                            participant_attention_path
                         )
                     )
                     (
-                        camera_attention_target,
-                        camera_attention_valid,
-                    ) = Data_LG._extract_camera_attention_supervision(
-                        camera_attention_payload
+                        participant_spatial_target,
+                        participant_spatial_valid,
+                    ) = extract_participant_spatial_attention_supervision(
+                        participant_attention_payload,
+                        cut_bottom_quarter=bool(
+                            self.cut_bottom_quarter
+                            or self.img_shift_augmentation
+                        ),
+                        use_global_img=bool(self.use_global_img),
                     )
 
-        # Replace the legacy front fields with the front view taken from the
-        # same six-view tensor, then expose the complete surround tensor.
+        # DatasetOutput中的历史字段名继续作为公共批处理接口；
+        # target实际形状和语义已经升级为[6,64]参与者空间监督。
         return sample._replace(
             image_ff=image_data["rgb"],
             image_ff_org_size=image_data["rgb_org_size"],
@@ -145,9 +156,9 @@ class Data_Driving_Surround(
                 future_interaction_valid
             ),
             camera_attention_target=(
-                camera_attention_target
+                participant_spatial_target
             ),
             camera_attention_valid=(
-                camera_attention_valid
+                participant_spatial_valid
             ),
         )

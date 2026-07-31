@@ -5,19 +5,25 @@ defaults:
   - /data_module/base_dataset: dataset
 
 model:
+  _target_: simlingo_training.models.driving_interaction.InteractionGroundedDrivingModel
+
   lr: 3e-5
   predict_route_as_wps: true
   speed_wps_mode: 2d
 
-  #修改20260728：LG与普通Driving共用关键actor六视角投影显式监督。
-  # 该变量名为兼容当前训练代码暂时保留，实际监督已不再仅限LG数据。
-  use_lg_camera_attention_supervision: false
-  lg_camera_attention_loss_weight: 0.05
+  # 统一决策交互表示：route、ego future、primary actor、secondary actor。
+  interaction_attention_dim: 128
+  interaction_num_heads: 8
+  interaction_dropout: 0.1
 
-  #修改20260726：四通道结构化未来世界辅助预测。
+  # 主要关键参与者六视角视觉token级空间监督。
+  use_participant_spatial_attention_supervision: true
+  participant_spatial_attention_loss_weight: 0.05
+
+  # 四通道结构化未来世界辅助预测。
   use_future_interaction_prediction: true
 
-  # 第一版网络固定预测128×128。
+  # 当前网络固定预测128×128。
   future_interaction_output_size: 128
 
   # 未来世界辅助任务总权重。
@@ -43,10 +49,9 @@ model:
   vision_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
 
-    # 消融开关：false关闭目标点引导的六视角注意力网络结构。
-    use_target_point_camera_attention: false
-
 data_module:
+  _target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataModule
+
   batch_size: 6
   num_workers: 8
 
@@ -66,7 +71,6 @@ data_module:
     img_shift_augmentation_prob: 0.5
     hist_len: 1
 
-    # 六视角注意力要求每个样本固定包含两个TARGET_POINT。
     route_as: target_point             # none command target_point
     use_lmdrive_commands: false
 
@@ -74,7 +78,7 @@ data_module:
     use_town13: true
     use_safety_flag: false
 
-    #修改20260728：普通Driving和LG统一使用官方route目录划分。
+    # 普通Driving和LG统一使用官方route目录划分。
     # train：routes_training
     # val：routes_validation，并使用全部固定Town13验证路线。
     use_official_route_split: true
@@ -91,7 +95,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: abl_m6_language_structured
+name: interaction_grounded_stage1
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.

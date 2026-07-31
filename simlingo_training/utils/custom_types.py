@@ -25,7 +25,7 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     image_surround_org_size: Optional[Tensor] = None
     camera_order: Optional[Tuple[str, ...]] = None
 
-    #修改20260720：LG单样本的六视角注意力监督。
+    # 第一阶段兼容字段：实际保存主要关键参与者的[6,64]视觉token空间目标。
     camera_attention_target: Optional[Tensor] = None
     camera_attention_valid: Optional[bool] = None
 
@@ -77,7 +77,7 @@ class DrivingLabel(NamedTuple):
     image_ff_org: Tensor
     eval_infos: Optional[Dict] = None
 
-    #修改20260720：batch级LG六视角注意力监督。
+    # 第一阶段兼容字段：batch级主要关键参与者空间监督，形状[B,6,64]。
     camera_attention_target: Optional[Tensor] = None
     camera_attention_valid: Optional[Tensor] = None
 

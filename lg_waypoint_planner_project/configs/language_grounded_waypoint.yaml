@@ -4,7 +4,7 @@
 
 run:
   # Route directory or a parent data directory.
-  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_21_16_16_03/data/simlingo
+  input: /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_07_25_15_05_25/data/simlingo
   # true: recursively find route folders under input.
   # false: treat input as one route folder.
   recursive: true

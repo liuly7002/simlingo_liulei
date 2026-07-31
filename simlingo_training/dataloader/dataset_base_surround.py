@@ -1,20 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Shared six-view data-indexing and image-loading support.
-
-Both the ordinary driving dataset and the LG dataset use this module, so the
-six synchronized RGB views are a common visual input rather than an LG-only
-input.
-
-Fixed tensor order:
-    front, front_left, front_right, rear, rear_left, rear_right
-
-Indexed paths:
-    [N, T, V]
-
-Loaded images:
-    [T, V, C, H, W]
-"""
 
 from collections import Counter
 from pathlib import Path
@@ -36,7 +20,6 @@ SURROUND_CAMERA_ORDER: Tuple[str, ...] = (
 )
 
 SURROUND_CAMERA_FOLDERS: Dict[str, Tuple[str, ...]] = {
-    # The collector stores the front image in both rgb_front/ and rgb/.
     "front": ("rgb_front", "rgb"),
     "front_left": ("rgb_front_left",),
     "front_right": ("rgb_front_right",),
@@ -68,17 +51,8 @@ class SurroundDatasetMixin:
             return values[indices]
         return [values[int(index)] for index in valid_indices]
 
-    def _filter_base_samples(
-        self,
-        valid_indices: List[int],
-        original_count: int,
-    ) -> None:
-        """
-        Apply the same six-view-valid indices to every sample-level container.
+    def _filter_base_samples(self, valid_indices: List[int], original_count: int,) -> None:
 
-        This keeps image paths, boxes, measurements, frame IDs and optional
-        trajectory files strictly aligned.
-        """
         indices = np.asarray(valid_indices, dtype=np.int64)
 
         attributes = [
@@ -111,38 +85,37 @@ class SurroundDatasetMixin:
                 filtered = np.asarray(filtered, dtype=np.bool_)
             setattr(self, attribute, filtered)
 
-    def _resolve_camera_path(
-        self,
-        route_dir: Path,
-        frame_filename: str,
-        camera_name: str,
-    ) -> Path:
-        folders = self.surround_camera_folders[camera_name]
-        for folder_name in folders:
-            candidate = route_dir / folder_name / frame_filename
-            if candidate.is_file():
-                return candidate
+    def _resolve_camera_path(self, route_dir: Path, frame_filename: str, camera_name: str,) -> Path:
+        
+        folders = self.surround_camera_folders[camera_name] # .jpg所在目录
 
-        # Return the preferred path for readable diagnostics.
+        for folder_name in folders:
+            
+            # 拼接路径 -> ...../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/六视角图像分别的文件夹名称例rgb_rear/0026.jpg
+            candidate = route_dir / folder_name / frame_filename
+            
+            # 如果存在该.jpg文件那么就直接返回该.jpg文件的详细路径
+            if candidate.is_file():
+                return candidate  # .jpg文件路径
+
+        # 返回用于诊断的路径信息,如果存在该.jpg文件那么就不需要走这里了
         return route_dir / folders[0] / frame_filename
 
     def _build_surround_image_index(self) -> None:
-        """
-        Derive the synchronized six-view paths from BaseDataset's front index.
 
-        A sample is discarded when any required view is absent at any history
-        timestep. Missing views are never silently replaced by zero images.
-        """
-        original_count = len(self.images)
+        # 所有样本包含的图像的数量
+        original_count = len(self.images)  # self.images=.jpg文件路径,整个数据集所有样本
+        
         valid_indices: List[int] = []
         valid_surround_paths: List[List[List[str]]] = []
         reasons = Counter()
 
         for sample_index in range(original_count):
-            temporal_front_paths = np.asarray(
-                self.images[sample_index]
-            ).reshape(-1)
 
+            # 防止存在历史帧
+            temporal_front_paths = np.asarray(self.images[sample_index]).reshape(-1)
+
+            # 如果当前数量与历史帧数量不一致就跳过当前样本
             if len(temporal_front_paths) != int(self.hist_len):
                 reasons["invalid_history_length"] += 1
                 continue
@@ -150,28 +123,38 @@ class SurroundDatasetMixin:
             temporal_views: List[List[str]] = []
             sample_valid = True
 
+            # 遍历当前样本中的每一帧
             for front_entry in temporal_front_paths:
-                front_path = Path(
-                    self._decode_dataset_path(front_entry)
-                )
-                route_dir = front_path.parent.parent
-                frame_filename = front_path.name
 
+                # 解析当前帧.jpg文件的路径名称
+                front_path = Path(self._decode_dataset_path(front_entry))
+
+                # 上上级目录
+                route_dir = front_path.parent.parent  # ...../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48
+
+                # 文件名
+                frame_filename = front_path.name  # 0026.jpg
+
+                # 六视角图像文件路径名称
                 frame_views: List[str] = []
                 for camera_name in self.surround_camera_order:
-                    camera_path = self._resolve_camera_path(
-                        route_dir,
-                        frame_filename,
-                        camera_name,
-                    )
+                    
+                    camera_path = self._resolve_camera_path(route_dir, frame_filename, camera_name,)  # .jpg文件路径
+                    
+                    # 如果文件有问题就中断
                     if not camera_path.is_file():
                         reasons[f"missing_{camera_name}"] += 1
                         sample_valid = False
                         break
+                    
+                    # 如果文件没有问题,那么就保存下来
                     frame_views.append(str(camera_path))
+
+                    # 最终 frame_views 中就按顺序保存了六视角的图像的 .jpg路径名称
 
                 if not sample_valid:
                     break
+                
                 temporal_views.append(frame_views)
 
             if not sample_valid:
@@ -180,41 +163,24 @@ class SurroundDatasetMixin:
             valid_indices.append(sample_index)
             valid_surround_paths.append(temporal_views)
 
+        # 保证数据对齐
         self._filter_base_samples(valid_indices, original_count)
 
+        # 六视角图像.jpg文件路径
         if valid_surround_paths:
-            self.surround_images = np.asarray(
-                valid_surround_paths,
-                dtype=np.string_,
-            )
-        else:
-            self.surround_images = np.empty(
-                (
-                    0,
-                    int(self.hist_len),
-                    len(self.surround_camera_order),
-                ),
-                dtype=np.string_,
-            )
+            self.surround_images = np.asarray(valid_surround_paths, dtype=np.string_,)
 
-        if bool(
-            getattr(
-                self,
-                "surround_print_filter_summary",
-                True,
-            )
-        ):
+        else:
+            self.surround_images = np.empty((0, int(self.hist_len), len(self.surround_camera_order),), dtype=np.string_,)
+
+        if bool( getattr(self, "surround_print_filter_summary", True,)):
             print(
                 f"[{self.split} surround samples]: kept "
                 f"{len(valid_indices)}/{original_count}; "
                 f"filtered={dict(reasons)}"
             )
 
-    def load_surround_images(
-        self,
-        data: Dict,
-        surround_images: Sequence[Sequence],
-    ) -> Dict:
+    def load_surround_images(self, data: Dict, surround_images: Sequence[Sequence],) -> Dict:
         """
         Load the six synchronized RGB views into [T, V, C, H, W].
 
@@ -336,15 +302,10 @@ class SurroundDatasetMixin:
         return data
 
 
-class SurroundBaseDataset(
-    SurroundDatasetMixin,
-    BaseDataset,
-):
-    """
-    BaseDataset variant used by datasets that can directly inherit the common
-    six-view implementation, including Data_LG.
-    """
-
+class SurroundBaseDataset(SurroundDatasetMixin, BaseDataset,):
+    
     def __init__(self, *args, **kwargs):
+
         super().__init__(*args, **kwargs)
+        
         self._initialize_surround_dataset()
