@@ -8,7 +8,8 @@ _target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataMod
 # Use SimLingo's original Data_Driving implementation for training, while
 # replacing only validation prompts with a deterministic waypoint task.
 driving_dataset:
-  # _target_: simlingo_training.dataloader.dataset_driving_fixed_val.Data_Driving_FixedVal
+
+  # driving 数据集相关的内容在 dataset_driving_surround.py 中实现 
   _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
   # 普通Driving结构化未来世界监督开关。
@@ -40,17 +41,19 @@ train_partitions:
 train_partitions_dreamer:
   all: 1.0
 
-dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是把simlingo原来的Dreamer辅助数据槽更换成了我们的数据槽
+dreamer_dataset:
+
+  # lg 数据集相关的内容在 dataset_lg_counterfactual.py 中实现
   _target_: simlingo_training.dataloader.dataset_lg_counterfactual.Data_LG_Counterfactual
 
-  # Master switch. Data_LG refuses to run when this is false, which prevents an
-  # LG experiment from silently using the wrong supervision source.
-  use_lg_supervision: true   # 是否启用lg监督
-  lg_label_folder: language_grounded_waypoints  # lg标签文件夹名称
 
-  # 读取LG生成的四通道结构化未来世界标签。
-  lg_use_future_interaction_grid: true
-  lg_future_interaction_grid_folder: future_interaction_grids
+  use_lg_supervision: true                      # 是否启用 lg 监督
+  lg_label_folder: language_grounded_waypoints  # lg 标签存放的文件夹名称
+
+
+  lg_use_future_interaction_grid: true                         # 是否使用结构化未来世界标签
+  lg_future_interaction_grid_folder: future_interaction_grids  # 结构化未来世界标签存放的文件夹名称
+
 
   # 读取主要关键参与者六视角空间投影并生成6×64视觉token监督。
   lg_use_participant_spatial_attention_supervision: true
@@ -59,22 +62,18 @@ dreamer_dataset:  # 这里的含义是并没有删除普通Data_Driving，而是
   lg_use_counterfactual_supervision: true
   lg_counterfactual_min_effect_m: 0.03
 
-  # Main experiment / ablation switches:
-  # true / true   -> LG-Full
-  # false / true  -> LG-WP Only
-  # true / false  -> LG language + expert waypoints
-  lg_use_language: true
+  lg_use_language: true  # 是否使用lg语言描述
   lg_use_waypoints: true
 
   # four_questions, random_question, or none
-  lg_language_mode: four_questions  # 语言组织模式
-  lg_include_navigation_conditioning: true
+  lg_language_mode: four_questions  # 语言组织模式(四个问题、随机问题、无语言)
+  lg_include_navigation_conditioning: true  # 是否在语言中包含导航条件(两个 target points )
 
   # Strict filtering keeps the comparison focused on valid generated labels.
-  lg_require_risk_label_valid: true  # 滤除没有通过安全性和可行性检查的lg waypoints轨迹
-  lg_require_four_questions: true
-  lg_skip_expert_fallback: true
-  lg_max_abs_waypoint_m: 100.0
+  lg_require_risk_label_valid: true  # 滤除在标签生成的时候没有通过安全性和可行性检查的lg waypoints轨迹
+  lg_require_four_questions: true    # lg 语言是否要求必须为四个问题(这样可以滤除没有四个问题的lg语言描述)
+  lg_skip_expert_fallback: true      # 如果 lg waypoints 轨迹是专家回退的,则滤除该样本
+  lg_max_abs_waypoint_m: 100.0       # lg waypoints 和 route 轨迹中最大绝对坐标值超过100米的样本将被滤除
   lg_print_filter_summary: true
 
   # Match the original Dreamer source's official town split.

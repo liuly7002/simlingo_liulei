@@ -31,13 +31,13 @@ model:
   use_participant_spatial_attention_supervision: true
   participant_spatial_attention_loss_weight: 0.05
 
-  # 四通道结构化未来世界辅助预测。
+  # 是否使用四通道结构化未来世界辅助预测
   use_future_interaction_prediction: true
 
   # 当前网络固定预测128×128。
   future_interaction_output_size: 128
 
-  # 未来世界辅助任务总权重。
+  # 未来世界辅助任务总权重
   future_interaction_loss_weight: 0.05
 
   # Dice相对于BCE的权重。
@@ -61,16 +61,20 @@ model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
 
 data_module:
+
+  # 普通Driving和LG统一处理在 datamodule_interaction.py 中实现
   _target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataModule
 
   batch_size: 6
   num_workers: 8
 
   base_dataset:
-    data_path: database/simlingo_v2_2026_07_25_15_05_25
-    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo
-    pred_len: 11
-    cut_bottom_quarter: true
+
+    data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置
+    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️训练的时候数据集加载的位置
+    
+    pred_len: 11              
+    cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
 
     # These remain active for the ordinary driving source. Data_LG constructs
     # its own language and locally disables DriveLM/commentary loading.
@@ -79,8 +83,8 @@ data_module:
     qa_augmentation: true
 
     img_shift_augmentation: true      # 是否进行图像增强(噪声、模糊等,不是几何增强)
-    img_shift_augmentation_prob: 0.5
-    hist_len: 1
+    img_shift_augmentation_prob: 0.5  # 图像曾请的概率
+    hist_len: 1                       # 历史帧长度,1表示不使用历史帧,只使用当前帧,2表示使用当前帧和上一帧,以此类推
 
     route_as: target_point             # none command target_point
     use_lmdrive_commands: false

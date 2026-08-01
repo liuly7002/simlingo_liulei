@@ -19,12 +19,12 @@ from simlingo_training.utils.custom_types import DatasetOutput
 
 VIZ_DATA = False
 
-#修改20260726：必须与generate_future_interaction_grids.py中的保存顺序一致。
+# 必须与generate_future_interaction_grids.py中的保存顺序一致。
 FUTURE_INTERACTION_CHANNEL_NAMES = (
-    "selected_route_ego_footprint_occupancy",
-    "future_ego_footprint_occupancy",
-    "primary_causal_actor_future_footprint_occupancy",
-    "secondary_actor_future_footprint_occupancy",
+    "selected_route_ego_footprint_occupancy",           # 参考路径footprint占用
+    "future_ego_footprint_occupancy",                   # 未来ego footprint占用
+    "primary_causal_actor_future_footprint_occupancy",  # 主要actor未来footprint占用
+    "secondary_actor_future_footprint_occupancy",       # 次要actor未来footprint占用
 )
 
 
@@ -32,6 +32,7 @@ class Data_LG(SurroundBaseDataset):
 
     def __init__(self, **cfg):
         
+        # 如果决定使用 lg 数据,但未启用 use_lg_supervision,则抛出异常,提示用户修改配置
         if not bool(cfg.get("use_lg_supervision", False)):
             raise ValueError(
                 "Data_LG was selected but use_lg_supervision is False. "
@@ -39,58 +40,33 @@ class Data_LG(SurroundBaseDataset):
                 "or switch back to the original Data_Dreamer target."
             )
 
+        # 加载配置文件并修改
         base_cfg = dict(cfg)
-        base_cfg["use_qa"] = False
-        base_cfg["use_commentary"] = False
-
-        # LG与普通Driving统一使用无几何增强六视角图像。
-        base_cfg["img_shift_augmentation"] = False
+        base_cfg["use_qa"] = False                 # lg 不使用 QA
+        base_cfg["use_commentary"] = False         # lg 不使用 commentary
+        base_cfg["img_shift_augmentation"] = False # lg 与普通 Driving 统一使用无几何增强六视角图像。
 
         #修改20260728：启用统一官方route划分后，
         # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑。
         #
         # 只有未启用新的统一划分开关时，才保留旧的
         # lg_match_dreamer_split兼容行为。
-        if (
-            bool(
-                base_cfg.get(
-                    "lg_match_dreamer_split",
-                    True,
-                )
-            )
-            and not bool(
-                base_cfg.get(
-                    "use_official_route_split",
-                    False,
-                )
-            )
-        ):
+        if (bool(base_cfg.get("lg_match_dreamer_split",True,)) and not bool(base_cfg.get("use_official_route_split",False,))):
             base_cfg["use_town13"] = False
 
+        # 调用父类构造函数，初始化数据集
         super().__init__(dreamer=False, **base_cfg)
 
-        self.lg_label_folder = str(
-            getattr(
-                self,
-                "lg_label_folder",
-                "language_grounded_waypoints",
-            )
-        )
-        #修改20260726：结构化未来世界标签读取配置。
-        self.lg_use_future_interaction_grid = bool(
-            getattr(
-                self,
-                "lg_use_future_interaction_grid",
-                False,
-            )
-        )
-        self.lg_future_interaction_grid_folder = str(
-            getattr(
-                self,
-                "lg_future_interaction_grid_folder",
-                "future_interaction_grids",
-            )
-        )
+        # lg标签存放的文件夹名称
+        self.lg_label_folder = str(getattr(self,"lg_label_folder","language_grounded_waypoints",))
+
+        # 是否使用结构化未来世界标签
+        self.lg_use_future_interaction_grid = bool(getattr( self, "lg_use_future_interaction_grid",False,))
+
+        # 结构化未来世界标签存放的文件夹名称
+        self.lg_future_interaction_grid_folder = str(getattr(self,"lg_future_interaction_grid_folder","future_interaction_grids",))
+
+        # LG语言问题的键值顺序,必须与生成顺序一致
         self.lg_question_keys = tuple(
             getattr(
                 self,
@@ -126,13 +102,17 @@ class Data_LG(SurroundBaseDataset):
         return int(self.sample_start[index]) + int(self.hist_len) - 1
 
     def _lg_path_for_index(self, index: int) -> Path:
+        """
+        返回当前样本的LG标签路径:
+        ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/language_grounded_waypoints/0026.json.gz
+        """
         measurement_dir = self._measurement_dir_for_index(index)
         route_dir = measurement_dir.parent
         frame_id = self._current_frame_for_index(index)
         return (
-            route_dir
-            / self.lg_label_folder
-            / f"{frame_id:04d}.json.gz"
+            route_dir                   # ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48
+            / self.lg_label_folder      # language_grounded_waypoints
+            / f"{frame_id:04d}.json.gz" # 0026.json.gz
         )
 
     #修改20260726：获得当前帧的结构化未来世界标签路径。
@@ -148,6 +128,9 @@ class Data_LG(SurroundBaseDataset):
 
     @staticmethod
     def _load_gzip_json(path: Path) -> Dict:
+        """
+        从gzip压缩的JSON文件中加载LG标签数据
+        """
         with gzip.open(path, "rt", encoding="utf-8") as file_obj:
             payload = ujson.load(file_obj)
         if not isinstance(payload, dict):
@@ -213,8 +196,11 @@ class Data_LG(SurroundBaseDataset):
         return grid.astype(np.float32), valid
 
     def _extract_questions(self, payload: Dict) -> List[Dict[str, str]]:
+        """
+        返回LG标签中的四个问题及答案,如果不存在则返回空列表。
+        """
         questions: List[Dict[str, str]] = []
-        core = payload.get("core_questions", {})
+        core = payload.get("core_questions", {})  # 从.json.gz文件中的 core_questions 字段中提取问题和答案
 
         if isinstance(core, dict):
             for key in self.lg_question_keys:
@@ -222,43 +208,49 @@ class Data_LG(SurroundBaseDataset):
                 if not isinstance(item, dict):
                     questions = []
                     break
+                # 问题
                 question = str(item.get("question", "")).strip()
+                
+                # 答案
                 answer = str(item.get("answer", "")).strip()
+                
                 if not question or not answer:
                     questions = []
                     break
+                
                 questions.append(
                     {
-                        "key": key,
-                        "question": question,
-                        "answer": answer,
+                        "key": key,           # attention/motion_constraint/driving_response/future_motion
+                        "question": question, # 对应的问题
+                        "answer": answer,     # 对应的答案
                     }
                 )
 
+        # 这是一个兼容性检查,如果 core_questions 中没有四个问题,则尝试从 language_annotation.qa_pairs_en 中提取问题和答案
         if len(questions) != len(self.lg_question_keys):
-            qa_pairs = (
-                payload.get("language_annotation", {})
-                .get("qa_pairs_en", [])
-            )
-            if (
-                isinstance(qa_pairs, list)
-                and len(qa_pairs) == len(self.lg_question_keys)
-            ):
+
+            # 从 language_annotation.qa_pairs_en 中提取问题和答案
+            qa_pairs = (payload.get("language_annotation", {}).get("qa_pairs_en", []))
+
+            if (isinstance(qa_pairs, list) and len(qa_pairs) == len(self.lg_question_keys)):
                 fallback_questions = []
                 for key, item in zip(self.lg_question_keys, qa_pairs):
                     if not isinstance(item, dict):
                         fallback_questions = []
                         break
+                    # 问题
                     question = str(item.get("question", "")).strip()
+                    
+                    # 答案
                     answer = str(item.get("answer", "")).strip()
                     if not question or not answer:
                         fallback_questions = []
                         break
                     fallback_questions.append(
                         {
-                            "key": key,
-                            "question": question,
-                            "answer": answer,
+                            "key": key,           # attention/motion_constraint/driving_response/future_motion
+                            "question": question, # 对应的问题
+                            "answer": answer,     # 对应的答案
                         }
                     )
                 questions = fallback_questions
@@ -267,21 +259,22 @@ class Data_LG(SurroundBaseDataset):
 
     @staticmethod
     def _extract_lg_waypoints(payload: Dict) -> np.ndarray:
+        """
+        返回LG标签中的risk_planned_waypoints字段(规划出来的waypoints),如果不存在则返回空数组
+        """
         supervision = payload.get("supervision", {})
-        return np.asarray(
-            supervision.get("risk_planned_waypoints", []),
-            dtype=np.float32,
-        )
+        return np.asarray(supervision.get("risk_planned_waypoints", []),dtype=np.float32,)
 
     def _extract_lg_path(self, payload: Dict) -> np.ndarray:
+        """
+        返回LG标签中的reference.selected_reference_route字段(参考路径),如果不存在则返回空数组
+        """
         reference = payload.get("reference", {})
         if not isinstance(reference, dict):
             return np.empty((0, 2), dtype=np.float32)
 
-        path = np.asarray(
-            reference.get("selected_reference_route", []),
-            dtype=np.float32,
-        )
+        path = np.asarray(reference.get("selected_reference_route", []),dtype=np.float32,)
+
         if path.ndim != 2 or path.shape[1] != 2 or len(path) < 2:
             return path
 
@@ -291,42 +284,33 @@ class Data_LG(SurroundBaseDataset):
     #修改20260720：读取并检查LG生成的六视角相机注意力软标签。
     @staticmethod
     def _extract_camera_attention_supervision(payload: Dict,) -> Tuple[np.ndarray, bool]:
+        """
+        返回LG标签中的六视角相机注意力软标签,如果不存在则返回空标签和无效标志
+        """
+
+        # 创建一个空的六视角注意力标签,如果后续检查失败,则返回该空标签和无效标志
         empty_target = np.zeros((6,), dtype=np.float32)
 
+        # 检查 visual_grounding 字段是否存在且为字典类型
         visual_grounding = payload.get("visual_grounding", {})
         if not isinstance(visual_grounding, dict):
             return empty_target, False
 
-        if not bool(
-            visual_grounding.get(
-                "camera_attention_valid",
-                False,
-            )
-        ):
+        # 
+        if not bool(visual_grounding.get("camera_attention_valid",False,)):
             return empty_target, False
 
-        expected_camera_order = (
-            "front",
-            "front_left",
-            "front_right",
-            "rear",
-            "rear_left",
-            "rear_right",
-        )
-        camera_order = tuple(
-            visual_grounding.get("camera_order", [])
-        )
+        # 预期相机的顺序
+        expected_camera_order = ("front","front_left","front_right","rear","rear_left","rear_right",)
+        # 从 visual_grounding 中获取 camera_order 字段
+        camera_order = tuple(visual_grounding.get("camera_order", []))
+        # 如果相机顺序不一致,则返回空标签和无效标志
         if camera_order != expected_camera_order:
             return empty_target, False
 
-        target = np.asarray(
-            visual_grounding.get(
-                "camera_attention_target",
-                [],
-            ),
-            dtype=np.float32,
-        )
+        target = np.asarray(visual_grounding.get("camera_attention_target",[],),dtype=np.float32,)
 
+        # 如果 target 的形状不为 (6,), 或者包含非有限值,或者包含负值,则返回空标签和无效标志
         if target.shape != (6,):
             return empty_target, False
         if not np.isfinite(target).all():
@@ -334,76 +318,88 @@ class Data_LG(SurroundBaseDataset):
         if np.any(target < 0.0):
             return empty_target, False
 
+        # 如果 target 的和小于等于 0,则返回空标签和无效标志
         target_sum = float(target.sum())
         if target_sum <= 0.0:
             return empty_target, False
 
+        # 归一化 target,使其和为 1,并返回有效标志
         target = target / target_sum
+
         return target.astype(np.float32), True
 
     def _validate_payload(self, payload: Dict) -> Tuple[bool, str]:
+        """
+        检查LG标签数据的有效性,返回是否有效以及无效原因
+        """
+
+        # 1. 检查supervision字段是否存在且为字典类型
         supervision = payload.get("supervision", {})
         if not isinstance(supervision, dict):
             return False, "missing_supervision"
 
+        # 2. 检查 risk_label_valid 字段是否存在且为 True (True 表示在标签生成的时候通过安全性和可行性检查)
         if bool(getattr(self, "lg_require_risk_label_valid", True)):
             if not bool(supervision.get("risk_label_valid", False)):
                 return False, "risk_label_invalid"
 
+        # 3. 检查是否跳过专家回退样本
         if bool(getattr(self, "lg_skip_expert_fallback", True)):
-            internal_name = str(
-                supervision.get(
-                    "selected_internal_intent_name",
-                    "",
-                )
-            )
+            internal_name = str(supervision.get("selected_internal_intent_name","",))
             if internal_name in {
-                "expert_fallback",
-                "stationary_hold_fallback",
+                "expert_fallback",          # 专家回退
+                "stationary_hold_fallback", # 静止保持回退
             }:
                 return False, f"fallback:{internal_name}"
 
+        # 检查 waypoints 和 path 的有效性
         if bool(getattr(self, "lg_use_waypoints", True)):
+
+            # lg规划出来的 waypoints
             waypoints = self._extract_lg_waypoints(payload)
+            
+            # 数量应该为 10 个
             expected_count = int(self.pred_len) - 1
+            
+            # 检查 waypoints 数量对不对
             if waypoints.shape != (expected_count, 2):
                 return False, f"waypoint_shape:{tuple(waypoints.shape)}"
+            
+            # 检查 waypoints 是否包含非有限值
             if not np.isfinite(waypoints).all():
                 return False, "waypoint_non_finite"
-
-            max_abs = float(
-                getattr(self, "lg_max_abs_waypoint_m", 100.0)
-            )
+            
+            # 检查 waypoints 是否超出范围
+            max_abs = float(getattr(self, "lg_max_abs_waypoint_m", 100.0))
             if np.max(np.abs(waypoints), initial=0.0) > max_abs:
                 return False, "waypoint_out_of_range"
 
+            # lg标签中选择出来的参考路径
             path = self._extract_lg_path(payload)
+
+            # 检查参考路径的形状
             if path.shape != (20, 2):
                 return False, f"path_shape:{tuple(path.shape)}"
+            
+            # 检查参考路径是否包含非有限值
             if not np.isfinite(path).all():
                 return False, "path_non_finite"
+            
+            # 检查参考路径是否超出范围
             if np.max(np.abs(path), initial=0.0) > max_abs:
                 return False, "path_out_of_range"
 
-        language_mode = str(
-            getattr(
-                self,
-                "lg_language_mode",
-                "four_questions",
-            )
-        ).lower()
-        require_questions = bool(
-            getattr(self, "lg_require_four_questions", True)
-        )
-        use_language = bool(
-            getattr(self, "lg_use_language", True)
-        )
+        # 语言模式(四问题)
+        language_mode = str(getattr(self,"lg_language_mode","four_questions",)).lower()
+        
+        # 是否要求必须为四个问题
+        require_questions = bool(getattr(self, "lg_require_four_questions", True))
 
-        if (
-            use_language
-            and language_mode != "none"
-            and require_questions
-        ):
+        # 是否启用语言描述
+        use_language = bool(getattr(self, "lg_use_language", True))
+
+        # 检查语言描述的有效性
+        if (use_language and language_mode != "none" and require_questions):
             questions = self._extract_questions(payload)
             if len(questions) != len(self.lg_question_keys):
                 return False, "incomplete_four_questions"
@@ -417,23 +413,28 @@ class Data_LG(SurroundBaseDataset):
         return [values[int(index)] for index in valid_indices]
 
     def _filter_samples_with_valid_lg_labels(self) -> None:
+
         valid_indices: List[int] = []
         valid_paths: List[str] = []
         reasons = Counter()
 
-        #修改20260721：统计真正进入当前LG数据集的样本中，
-        # 有效六视角注意力监督的数量及无效原因。
-        camera_attention_valid_count = 0
-        camera_attention_invalid_reasons = Counter()
+        # 统计真正进入当前LG数据集的样本中,有效六视角注意力监督的数量及无效原因。
+        camera_attention_valid_count = 0  # 有效六视角注意力监督数量
+        camera_attention_invalid_reasons = Counter()  # 无效六视角注意力监督的原因统计
 
         for index in range(len(self.images)):
+
+            # ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/language_grounded_waypoints/0026.json.gz
             label_path = self._lg_path_for_index(index)
+            # 文件缺失
             if not label_path.is_file():
                 reasons["missing_label"] += 1
                 continue
 
             try:
+                # 加载lg标签数据
                 payload = self._load_gzip_json(label_path)
+                # 检查lg标签数据的有效性,如果有效则valid=True,reason=ok,否则为valid=False,reason=无效原因
                 valid, reason = self._validate_payload(payload)
             except (
                 OSError,
@@ -446,46 +447,37 @@ class Data_LG(SurroundBaseDataset):
                 ] += 1
                 continue
 
+            # 如果lg标签数据无效,则统计无效原因并跳过该样本
             if not valid:
                 reasons[reason] += 1
                 continue
 
-            #修改20260721：只在通过LG基础标签检查、真正保留的样本中，
-            # 统计六视角注意力标签是否有效。
-            (
-                _camera_attention_target,
-                camera_attention_valid,
-            ) = self._extract_camera_attention_supervision(
-                payload
-            )
+            # 读取并检查六视角注意力监督标签
+            # 如果六视角注意力监督标签有效,那么_camera_attention_target是一个长度为6的numpy数组,表示六个相机的注意力权重,并且权重和为1,camera_attention_valid=True
+            # 如果六视角注意力监督标签无效,那么_camera_attention_target是一个长度为6的零数组,camera_attention_valid=False
+            _camera_attention_target, camera_attention_valid = self._extract_camera_attention_supervision(payload)
 
+            # 如果六视角注意力监督标签有效,则统计有效数量
             if camera_attention_valid:
                 camera_attention_valid_count += 1
+            # 如果六视角注意力监督标签无效,则统计无效原因
             else:
-                visual_grounding = payload.get(
-                    "visual_grounding",
-                    {},
-                )
+                visual_grounding = payload.get("visual_grounding",{},)
 
+                # 无效原因
                 if isinstance(visual_grounding, dict):
-                    invalid_reason = str(
-                        visual_grounding.get(
-                            "invalid_reason",
-                            "unknown",
-                        )
-                    )
+                    invalid_reason = str(visual_grounding.get("invalid_reason","unknown",))
                 else:
-                    invalid_reason = (
-                        "missing_visual_grounding"
-                    )
+                    invalid_reason = ("missing_visual_grounding")
 
-                camera_attention_invalid_reasons[
-                    invalid_reason
-                ] += 1
+                camera_attention_invalid_reasons[invalid_reason] += 1
 
+            # 有效样本的索引
             valid_indices.append(index)
+            # 有效样本的路径
             valid_paths.append(str(label_path))
 
+        # 将有效样本的索引转换为numpy数组,并获取原始样本数量
         indices = np.asarray(valid_indices, dtype=np.int64)
         original_sample_count = len(self.images)
 
