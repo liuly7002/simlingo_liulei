@@ -33,6 +33,12 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     future_interaction_grid: Optional[Tensor] = None
     future_interaction_valid: Optional[bool] = None
 
+    # 反事实对象移除后的真实重规划轨迹监督。
+    counterfactual_waypoints: Optional[List[Tuple[float, float]]] = None
+    counterfactual_waypoints_valid: Optional[bool] = None
+    counterfactual_causal_score: Optional[float] = None
+    counterfactual_conversation: Optional[list] = None
+
 
 class LanguageLabel(NamedTuple):
     phrase_ids: Tensor  # [B, max(len(tokens))] int64
@@ -68,6 +74,7 @@ class DrivingInput(NamedTuple):
     target_point: torch.Tensor  # [B, 2] float32
     prompt: LanguageLabel
     prompt_inference: LanguageLabel
+    counterfactual_prompt: Optional[LanguageLabel] = None
 
 
 class DrivingLabel(NamedTuple):
@@ -84,6 +91,11 @@ class DrivingLabel(NamedTuple):
     #修改20260726：batch级LG结构化未来世界监督。
     future_interaction_grid: Optional[Tensor] = None
     future_interaction_valid: Optional[Tensor] = None
+
+    # batch级反事实对象移除重规划轨迹，形状[B,F,2]。
+    counterfactual_waypoints: Optional[Tensor] = None
+    counterfactual_waypoints_valid: Optional[Tensor] = None
+    counterfactual_causal_score: Optional[Tensor] = None
 
 
 class DrivingExample(NamedTuple):

@@ -52,6 +52,22 @@ class DrivingModelConfig:
     actor_attention_overlap_margin: float = 0.35
     actor_token_cosine_margin: float = 0.30
 
+    # 反事实对象移除训练。
+    use_counterfactual_intervention_training: bool = False
+    counterfactual_intervention_probability: float = 1.0
+    counterfactual_intervention_strength: float = 1.0
+    counterfactual_intervention_mask_gamma: float = 0.5
+    counterfactual_language_min_change: float = 0.02
+
+    counterfactual_visual_suppression_loss_weight: float = 0.05
+    counterfactual_language_supervision_loss_weight: float = 0.10
+    counterfactual_language_consistency_loss_weight: float = 0.05
+    counterfactual_action_target_loss_weight: float = 0.10
+    counterfactual_action_effect_loss_weight: float = 0.10
+    counterfactual_route_invariance_loss_weight: float = 0.05
+    counterfactual_world_primary_removal_loss_weight: float = 0.05
+    counterfactual_world_invariance_loss_weight: float = 0.02
+
     # 主要关键参与者六视角视觉token级空间监督。
     use_participant_spatial_attention_supervision: bool = False
     participant_spatial_attention_loss_weight: float = 0.05
@@ -173,6 +189,10 @@ class DreamerDatasetConfig:
 
     # LG主要关键参与者视觉token级空间监督配置。
     lg_use_participant_spatial_attention_supervision: bool = False
+
+    # LG对象移除后的真实反事实重规划轨迹监督。
+    lg_use_counterfactual_supervision: bool = False
+    lg_counterfactual_min_effect_m: float = 0.03
 
     # Main ablation switches.
     # True/True  : complete LG method (four-question language + LG waypoints)

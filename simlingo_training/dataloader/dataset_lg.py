@@ -31,6 +31,7 @@ FUTURE_INTERACTION_CHANNEL_NAMES = (
 class Data_LG(SurroundBaseDataset):
 
     def __init__(self, **cfg):
+        
         if not bool(cfg.get("use_lg_supervision", False)):
             raise ValueError(
                 "Data_LG was selected but use_lg_supervision is False. "
@@ -44,10 +45,6 @@ class Data_LG(SurroundBaseDataset):
 
         # LG与普通Driving统一使用无几何增强六视角图像。
         base_cfg["img_shift_augmentation"] = False
-
-
-        # if bool(base_cfg.get("lg_match_dreamer_split", True)):
-        #     base_cfg["use_town13"] = False
 
         #修改20260728：启用统一官方route划分后，
         # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑。
@@ -139,10 +136,7 @@ class Data_LG(SurroundBaseDataset):
         )
 
     #修改20260726：获得当前帧的结构化未来世界标签路径。
-    def _future_interaction_grid_path_for_index(
-        self,
-        index: int,
-    ) -> Path:
+    def _future_interaction_grid_path_for_index(self, index: int,) -> Path:
         measurement_dir = self._measurement_dir_for_index(index)
         route_dir = measurement_dir.parent
         frame_id = self._current_frame_for_index(index)
@@ -162,9 +156,7 @@ class Data_LG(SurroundBaseDataset):
 
     #修改20260726：读取并检查四通道结构化未来世界标签。
     @staticmethod
-    def _load_future_interaction_grid(
-        path: Path,
-    ) -> Tuple[Optional[np.ndarray], bool]:
+    def _load_future_interaction_grid(path: Path,) -> Tuple[Optional[np.ndarray], bool]:
         if not path.is_file():
             return None, False
 
@@ -298,9 +290,7 @@ class Data_LG(SurroundBaseDataset):
 
     #修改20260720：读取并检查LG生成的六视角相机注意力软标签。
     @staticmethod
-    def _extract_camera_attention_supervision(
-        payload: Dict,
-    ) -> Tuple[np.ndarray, bool]:
+    def _extract_camera_attention_supervision(payload: Dict,) -> Tuple[np.ndarray, bool]:
         empty_target = np.zeros((6,), dtype=np.float32)
 
         visual_grounding = payload.get("visual_grounding", {})
@@ -577,9 +567,7 @@ class Data_LG(SurroundBaseDataset):
             )
 
     @staticmethod
-    def _compute_waypoints_1d(
-        waypoints: np.ndarray,
-    ) -> np.ndarray:
+    def _compute_waypoints_1d(waypoints: np.ndarray,) -> np.ndarray:
         points = np.asarray(waypoints, dtype=np.float32)
         points_with_origin = np.concatenate(
             [
@@ -601,11 +589,7 @@ class Data_LG(SurroundBaseDataset):
             axis=1,
         ).astype(np.float32)
 
-    def _build_language_text(
-        self,
-        payload: Dict,
-        prefix: str,
-    ) -> Tuple[str, str]:
+    def _build_language_text(self, payload: Dict, prefix: str,) -> Tuple[str, str]:
         use_language = bool(
             getattr(self, "lg_use_language", True)
         )
@@ -683,11 +667,7 @@ class Data_LG(SurroundBaseDataset):
         surround_images = self.surround_images[index]
         measurements = self.measurements[index]
         sample_start = self.sample_start[index]
-        lg_path = Path(
-            self._decode_path(
-                self.lg_label_paths[index]
-            )
-        )
+        lg_path = Path(self._decode_path(self.lg_label_paths[index]))
 
         (
             loaded_measurements,

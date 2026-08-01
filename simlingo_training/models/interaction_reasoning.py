@@ -169,6 +169,21 @@ class PreLanguageInteractionReasoner(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=False),
         )
 
+        # 反事实语言变化必须与对象移除后的真实动作变化保持一致。
+        self.counterfactual_language_delta_projection = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
+        self.counterfactual_action_effect_projection = nn.Sequential(
+            nn.LayerNorm(self.num_ego_queries * 2),
+            nn.Linear(
+                self.num_ego_queries * 2,
+                hidden_size,
+            ),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=False),
+        )
+
         nn.init.xavier_uniform_(self.spatial_query.weight)
         nn.init.xavier_uniform_(self.spatial_key.weight)
         nn.init.xavier_uniform_(self.spatial_value.weight)
@@ -370,6 +385,252 @@ class PreLanguageInteractionReasoner(nn.Module):
             "primary_spatial_attention_entropy": primary_entropy,
         }
 
+    @staticmethod
+    def _prediction_span_mask(question_span_mask: Tensor) -> Tensor:
+        """将答案token位置转换为真正预测这些token的前一位置。"""
+        prediction_mask = torch.zeros_like(question_span_mask)
+        prediction_mask[..., :-1] = question_span_mask[..., 1:]
+        return prediction_mask
+
+    @classmethod
+    def _pool_question_prediction_features(
+        cls,
+        language_features: Tensor,
+        question_span_mask: Tensor,
+    ) -> Tensor:
+        prediction_mask = cls._prediction_span_mask(
+            question_span_mask
+        ).to(
+            device=language_features.device,
+            dtype=language_features.dtype,
+        )
+        denominator = prediction_mask.sum(
+            dim=-1,
+            keepdim=True,
+        ).clamp_min(1.0)
+        return torch.einsum(
+            "bql,bld->bqd",
+            prediction_mask,
+            language_features,
+        ) / denominator
+
+    def build_counterfactual_visual_features(
+        self,
+        visual_features: Tensor,
+        participant_target: Tensor,
+        valid_mask: Tensor,
+        strength: float,
+        mask_gamma: float,
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        用主要参与者空间标签替换其视觉token，构造对象移除反事实场景。
+
+        替换值使用同一相机内未被参与者覆盖token的加权均值，避免简单置零
+        产生训练时不存在的异常视觉分布。
+        """
+        expected_shape = (
+            visual_features.shape[0],
+            self.num_cameras,
+            self.tokens_per_camera,
+        )
+        if participant_target.shape != expected_shape:
+            raise ValueError(
+                "Counterfactual participant target must have shape "
+                f"{expected_shape}, but received "
+                f"{tuple(participant_target.shape)}."
+            )
+        if valid_mask.shape != (visual_features.shape[0],):
+            raise ValueError(
+                "Counterfactual valid mask must have shape [B]."
+            )
+
+        target = participant_target.to(
+            device=visual_features.device,
+            dtype=torch.float32,
+        )
+        valid = valid_mask.to(
+            device=visual_features.device,
+            dtype=torch.bool,
+        )
+        target_max = target.amax(
+            dim=(-2, -1),
+            keepdim=True,
+        )
+        invalid = valid & (
+            target_max.reshape(-1) <= 0.0
+        )
+        if bool(invalid.any().item()):
+            raise ValueError(
+                "A valid counterfactual participant target has zero mass."
+            )
+
+        intervention_mask = torch.where(
+            valid.view(-1, 1, 1),
+            target / target_max.clamp_min(1e-8),
+            torch.zeros_like(target),
+        )
+        intervention_mask = intervention_mask.clamp(0.0, 1.0).pow(
+            max(float(mask_gamma), 1e-4)
+        )
+        intervention_mask = (
+            intervention_mask * float(strength)
+        ).clamp(0.0, 1.0)
+
+        visual = visual_features.reshape(
+            visual_features.shape[0],
+            self.num_cameras,
+            self.tokens_per_camera,
+            visual_features.shape[-1],
+        )
+        background_weight = (1.0 - intervention_mask).to(
+            dtype=visual.dtype
+        )
+        camera_background = (
+            visual * background_weight.unsqueeze(-1)
+        ).sum(dim=2) / background_weight.sum(
+            dim=2,
+            keepdim=True,
+        ).clamp_min(1e-4)
+        camera_background = camera_background.detach().unsqueeze(2)
+
+        mask = intervention_mask.to(
+            dtype=visual.dtype
+        ).unsqueeze(-1)
+        counterfactual = (
+            visual * (1.0 - mask)
+            + camera_background * mask
+        )
+        return (
+            counterfactual.reshape_as(visual_features),
+            intervention_mask,
+        )
+
+    def compute_counterfactual_language_consistency_loss(
+        self,
+        original_language_features: Tensor,
+        counterfactual_language_features: Tensor,
+        original_interaction_tokens: Tensor,
+        counterfactual_interaction_tokens: Tensor,
+        original_question_span_mask: Tensor,
+        counterfactual_question_span_mask: Tensor,
+        full_scene_waypoints: Tensor,
+        counterfactual_waypoints: Tensor,
+        valid_mask: Tensor,
+        minimum_change: float,
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        约束对象移除前后Q1-Q4预测状态的变化，与交互证据和真实动作
+        变化保持一致。原始与反事实答案允许具有不同token长度。
+
+        Q1对应主要参与者token变化，Q2对应route token变化，Q3/Q4对应
+        标签生成阶段对象移除后重规划轨迹与完整场景轨迹之间的真实差异。
+        """
+        if (
+            original_language_features.shape[0]
+            != counterfactual_language_features.shape[0]
+            or original_language_features.shape[-1]
+            != counterfactual_language_features.shape[-1]
+        ):
+            raise ValueError(
+                "Original and counterfactual language features must share "
+                "batch and hidden dimensions."
+            )
+        if full_scene_waypoints.shape != counterfactual_waypoints.shape:
+            raise ValueError(
+                "Full-scene and counterfactual waypoint shapes must match."
+            )
+        if original_interaction_tokens.shape != (
+            counterfactual_interaction_tokens.shape
+        ):
+            raise ValueError(
+                "Original and counterfactual interaction token shapes must match."
+            )
+
+        original_question = self._pool_question_prediction_features(
+            original_language_features,
+            original_question_span_mask,
+        )
+        counterfactual_question = (
+            self._pool_question_prediction_features(
+                counterfactual_language_features,
+                counterfactual_question_span_mask,
+            )
+        )
+        language_delta = self.counterfactual_language_delta_projection(
+            counterfactual_question - original_question
+        ).float()
+
+        token_delta = self.token_alignment_projection(
+            counterfactual_interaction_tokens
+            - original_interaction_tokens
+        ).float()
+        action_effect = (
+            full_scene_waypoints.float()
+            - counterfactual_waypoints.float()
+        ).reshape(full_scene_waypoints.shape[0], -1)
+        expected_action_dim = self.num_ego_queries * 2
+        if action_effect.shape[-1] != expected_action_dim:
+            raise ValueError(
+                "Counterfactual waypoint effect must contain "
+                f"{expected_action_dim} values, but received "
+                f"{action_effect.shape[-1]}."
+            )
+        action_reference = self.counterfactual_action_effect_projection(
+            action_effect
+        ).float()
+
+        references = torch.stack(
+            (
+                token_delta[:, 2],
+                token_delta[:, 0],
+                action_reference,
+                action_reference,
+            ),
+            dim=1,
+        )
+        cosine = (
+            F.normalize(language_delta, dim=-1)
+            * F.normalize(references, dim=-1)
+        ).sum(dim=-1)
+        direction_loss = 1.0 - cosine
+
+        scale = math.sqrt(float(self.hidden_size))
+        language_change = language_delta.norm(dim=-1) / scale
+        reference_change = references.detach().norm(dim=-1) / scale
+        magnitude_target = reference_change.clamp_min(
+            float(minimum_change)
+        )
+        magnitude_loss = F.smooth_l1_loss(
+            language_change,
+            magnitude_target,
+            reduction="none",
+        )
+
+        per_sample_loss = (
+            direction_loss + magnitude_loss
+        ).mean(dim=1)
+        count = valid_mask.to(
+            device=per_sample_loss.device,
+            dtype=per_sample_loss.dtype,
+        )
+        return per_sample_loss * count, count
+
+    def counterfactual_parameter_zero(self) -> Tensor:
+        return (
+            sum(
+                parameter.sum()
+                for parameter in (
+                    list(
+                        self.counterfactual_language_delta_projection.parameters()
+                    )
+                    + list(
+                        self.counterfactual_action_effect_projection.parameters()
+                    )
+                )
+            )
+            * 0.0
+        )
+
     def compute_language_alignment_loss(
         self,
         language_features: Tensor,
@@ -392,16 +653,10 @@ class PreLanguageInteractionReasoner(nn.Module):
                 "Question span mask length must match language features."
             )
 
-        span = question_span_mask.to(
-            device=language_features.device,
-            dtype=language_features.dtype,
-        )
-        denominator = span.sum(dim=-1, keepdim=True).clamp_min(1.0)
-        question_features = torch.einsum(
-            "bql,bld->bqd",
-            span,
+        question_features = self._pool_question_prediction_features(
             language_features,
-        ) / denominator
+            question_span_mask,
+        )
 
         question_features = F.normalize(
             self.language_alignment_projection(question_features).float(),
@@ -542,6 +797,101 @@ def compute_participant_spatial_attention_losses(
             per_sample_loss * loss_count,
             loss_count,
         )
+    }
+
+
+def compute_counterfactual_attention_suppression_loss(
+    counterfactual_primary_attention: Tensor,
+    intervention_mask: Tensor,
+    valid_mask: Tensor,
+) -> Dict[str, Tuple[Tensor, Tensor]]:
+    """对象移除后，主要参与者注意力不得继续停留在被删除区域。"""
+    if counterfactual_primary_attention.shape != intervention_mask.shape:
+        raise ValueError(
+            "Counterfactual attention and intervention mask shapes must match."
+        )
+    overlap = (
+        counterfactual_primary_attention.float()
+        * intervention_mask.to(
+            device=counterfactual_primary_attention.device,
+            dtype=torch.float32,
+        )
+    ).sum(dim=(-2, -1))
+    count = valid_mask.to(
+        device=overlap.device,
+        dtype=overlap.dtype,
+    )
+    return {
+        "counterfactual_visual_suppression_loss": (
+            overlap * count,
+            count,
+        )
+    }
+
+
+def compute_counterfactual_future_world_losses(
+    counterfactual_logits: Tensor,
+    full_scene_target: Tensor,
+    valid_mask: Tensor,
+) -> Dict[str, Tuple[Tensor, Tensor]]:
+    """
+    对象移除后C2必须消失；导航路线C0和未删除次要参与者C4保持不变。
+    C1不在此处监督，因为对象移除会真实改变自车未来轨迹。
+    """
+    if counterfactual_logits.ndim != 4 or counterfactual_logits.shape[1] != 4:
+        raise ValueError(
+            "Counterfactual future logits must have shape [B,4,H,W]."
+        )
+    if (
+        full_scene_target.ndim != 4
+        or full_scene_target.shape[:2]
+        != counterfactual_logits.shape[:2]
+    ):
+        raise ValueError(
+            "Counterfactual future target must have shape [B,4,H,W]."
+        )
+    full_scene_target = full_scene_target.to(
+        device=counterfactual_logits.device,
+        dtype=torch.float32,
+    )
+    if full_scene_target.shape[-2:] != counterfactual_logits.shape[-2:]:
+        full_scene_target = F.interpolate(
+            full_scene_target,
+            size=counterfactual_logits.shape[-2:],
+            mode="nearest",
+        )
+
+    primary_removed = F.binary_cross_entropy_with_logits(
+        counterfactual_logits[:, 2].float(),
+        torch.zeros_like(counterfactual_logits[:, 2].float()),
+        reduction="none",
+    ).mean(dim=(-2, -1))
+
+    route_loss = F.binary_cross_entropy_with_logits(
+        counterfactual_logits[:, 0].float(),
+        full_scene_target[:, 0].float(),
+        reduction="none",
+    ).mean(dim=(-2, -1))
+    secondary_loss = F.binary_cross_entropy_with_logits(
+        counterfactual_logits[:, 3].float(),
+        full_scene_target[:, 3].float(),
+        reduction="none",
+    ).mean(dim=(-2, -1))
+    invariant = 0.5 * (route_loss + secondary_loss)
+
+    count = valid_mask.to(
+        device=counterfactual_logits.device,
+        dtype=torch.float32,
+    )
+    return {
+        "counterfactual_world_primary_removal_loss": (
+            primary_removed * count,
+            count,
+        ),
+        "counterfactual_world_invariance_loss": (
+            invariant * count,
+            count,
+        ),
     }
 
 

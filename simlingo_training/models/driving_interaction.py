@@ -14,6 +14,8 @@ from simlingo_training.models.interaction_reasoning import (
     INTERACTION_TOKEN_KEYS,
     PreLanguageInteractionReasoner,
     compute_actor_disentanglement_losses,
+    compute_counterfactual_attention_suppression_loss,
+    compute_counterfactual_future_world_losses,
     compute_participant_spatial_attention_losses,
 )
 from simlingo_training.models.utils import summarise_losses
@@ -26,7 +28,7 @@ from simlingo_training.utils.custom_types import (
 
 class InteractionGroundedDrivingModel(DrivingModel):
     """
-    第二阶段统一语言—交互—动作模型。
+    统一语言—交互—动作模型，并执行参与者删除反事实训练。
 
     序列固定为：
         [4个统一交互token | 语言token | 30个Driving query]
@@ -148,11 +150,90 @@ class InteractionGroundedDrivingModel(DrivingModel):
             wp_encoder=self.wp_encoder,
         )
 
+    def _build_counterfactual_adaptor_dict(
+        self,
+        example: DrivingExample,
+        source_adaptor_dict: Dict,
+    ) -> Dict:
+        """
+        构造独立反事实文本序列，并复用完整场景已经编码的视觉与导航
+        placeholder特征，避免第二次运行视觉编码器。
+        """
+        counterfactual_prompt = (
+            example.driving_input.counterfactual_prompt
+        )
+        if counterfactual_prompt is None:
+            raise RuntimeError(
+                "Counterfactual intervention training requires "
+                "driving_input.counterfactual_prompt."
+            )
+
+        counterfactual_input = example.driving_input._replace(
+            prompt=counterfactual_prompt
+        )
+        counterfactual_example = example._replace(
+            driving_input=counterfactual_input
+        )
+        counterfactual_dict = self.adaptors(
+            counterfactual_example,
+            inference=False,
+        )
+
+        image_encoder = self.vision_model.image_encoder
+        placeholder_token_ids = (
+            getattr(image_encoder, "img_context_token_id", None),
+            getattr(image_encoder, "target_point_token_id", None),
+        )
+        if any(value is None for value in placeholder_token_ids):
+            raise RuntimeError(
+                "Image and target-point token ids must be initialized "
+                "before counterfactual text construction."
+            )
+
+        source_ids = source_adaptor_dict["language__ids"]
+        target_ids = counterfactual_dict["language__ids"]
+        source_features = source_adaptor_dict["language_inputs"]
+        target_features = counterfactual_dict["language_inputs"].clone()
+        batch_size = int(source_ids.shape[0])
+
+        for token_id in placeholder_token_ids:
+            source_mask = source_ids == int(token_id)
+            target_mask = target_ids == int(token_id)
+            source_count = source_mask.sum(dim=1)
+            target_count = target_mask.sum(dim=1)
+            if not torch.equal(source_count, target_count):
+                raise RuntimeError(
+                    "Original and counterfactual prompts contain different "
+                    f"numbers of placeholder token id {int(token_id)}: "
+                    f"{source_count.tolist()} vs {target_count.tolist()}."
+                )
+            count = int(source_count[0].item())
+            if not torch.all(source_count == count):
+                raise RuntimeError(
+                    "Placeholder counts must be constant within a batch."
+                )
+            if count == 0:
+                continue
+            replacement = source_features[source_mask].reshape(
+                batch_size,
+                count,
+                source_features.shape[-1],
+            )
+            target_features[target_mask] = replacement.reshape(
+                -1,
+                replacement.shape[-1],
+            ).to(dtype=target_features.dtype)
+
+        counterfactual_dict["language_inputs"] = target_features
+        return counterfactual_dict
+
     def _build_pre_language_interaction(
         self,
         adaptor_dict: Dict,
         *,
         batch_slice=slice(None),
+        visual_intervention_target: Optional[Tensor] = None,
+        visual_intervention_valid: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
         raw_language_features = adaptor_dict[
             "language_inputs"
@@ -219,6 +300,42 @@ class InteractionGroundedDrivingModel(DrivingModel):
             raw_language_features.shape[-1],
         )
 
+        intervention_mask = None
+        if visual_intervention_target is not None:
+            if visual_intervention_valid is None:
+                raise ValueError(
+                    "visual_intervention_valid is required when a "
+                    "counterfactual target is provided."
+                )
+            (
+                visual_features,
+                intervention_mask,
+            ) = self.interaction_reasoner.build_counterfactual_visual_features(
+                visual_features=visual_features,
+                participant_target=visual_intervention_target,
+                valid_mask=visual_intervention_valid,
+                strength=float(
+                    getattr(
+                        self,
+                        "counterfactual_intervention_strength",
+                        1.0,
+                    )
+                ),
+                mask_gamma=float(
+                    getattr(
+                        self,
+                        "counterfactual_intervention_mask_gamma",
+                        0.5,
+                    )
+                ),
+            )
+            raw_language_features = raw_language_features.clone()
+            raw_language_features[visual_mask] = (
+                visual_features.to(
+                    dtype=raw_language_features.dtype
+                ).reshape(-1, raw_language_features.shape[-1])
+            )
+
         navigation_mask = (
             language_ids == int(target_point_token_id)
         )
@@ -267,6 +384,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
         outputs["answer_mask"] = answer_mask
         outputs["raw_language_features"] = raw_language_features
         outputs["raw_driving_queries"] = raw_driving_queries
+        if intervention_mask is not None:
+            outputs["visual_intervention_mask"] = intervention_mask
         return outputs
 
     @staticmethod
@@ -547,6 +666,508 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
 
         return target, valid
+
+    @staticmethod
+    def _counterfactual_loss_keys() -> Tuple[str, ...]:
+        return (
+            "counterfactual_visual_suppression_loss",
+            "counterfactual_language_supervision_loss",
+            "counterfactual_language_consistency_loss",
+            "counterfactual_action_target_loss",
+            "counterfactual_action_effect_loss",
+            "counterfactual_route_invariance_loss",
+            "counterfactual_world_primary_removal_loss",
+            "counterfactual_world_invariance_loss",
+        )
+
+    def _empty_counterfactual_losses(
+        self,
+        reference: Tensor,
+        batch_size: int,
+    ) -> Dict[str, Tuple[Tensor, Tensor]]:
+        parameter_zero = (
+            self.interaction_reasoner.counterfactual_parameter_zero()
+        ).to(device=reference.device, dtype=reference.dtype)
+        zero_value = (
+            reference.reshape(reference.shape[0], -1).sum(dim=-1)
+            * 0.0
+        )
+        if zero_value.shape[0] != int(batch_size):
+            zero_value = torch.zeros(
+                (int(batch_size),),
+                device=reference.device,
+                dtype=reference.dtype,
+            )
+        zero_value = zero_value + parameter_zero
+        zero_count = torch.zeros_like(zero_value)
+        return {
+            key: (zero_value, zero_count)
+            for key in self._counterfactual_loss_keys()
+        }
+
+    def _select_counterfactual_indices(
+        self,
+        participant_valid: Tensor,
+    ) -> Tensor:
+        selected = participant_valid.bool().clone()
+        probability = float(
+            getattr(
+                self,
+                "counterfactual_intervention_probability",
+                1.0,
+            )
+        )
+        if self.training and probability < 1.0:
+            selected = selected & (
+                torch.rand(
+                    selected.shape,
+                    device=selected.device,
+                ) < max(probability, 0.0)
+            )
+        return selected.nonzero(as_tuple=False).squeeze(1)
+
+    def _compute_counterfactual_losses(
+        self,
+        *,
+        example: DrivingExample,
+        adaptor_dict: Dict,
+        contextual_interaction_tokens: Tensor,
+        language_features: Tensor,
+        driving_features: Tensor,
+        question_span_mask: Tensor,
+        language_alignment_valid: Tensor,
+        future_target: Optional[Tensor],
+        future_valid: Tensor,
+    ) -> Tuple[
+        Dict[str, Tuple[Tensor, Tensor]],
+        Dict[str, Tensor],
+    ]:
+        batch_size = int(driving_features.shape[0])
+        empty_losses = self._empty_counterfactual_losses(
+            driving_features,
+            batch_size,
+        )
+        diagnostics = {
+            "counterfactual_selected": torch.zeros(
+                (batch_size,),
+                device=driving_features.device,
+                dtype=torch.bool,
+            )
+        }
+
+        if not bool(
+            getattr(
+                self,
+                "use_counterfactual_intervention_training",
+                False,
+            )
+        ):
+            return empty_losses, diagnostics
+
+        participant_target = (
+            example.driving_label.camera_attention_target
+        )
+        participant_valid = (
+            example.driving_label.camera_attention_valid
+        )
+        counterfactual_waypoints = (
+            example.driving_label.counterfactual_waypoints
+        )
+        counterfactual_waypoints_valid = (
+            example.driving_label.counterfactual_waypoints_valid
+        )
+        counterfactual_causal_score = (
+            example.driving_label.counterfactual_causal_score
+        )
+        required_tensors = {
+            "participant spatial target": participant_target,
+            "participant valid mask": participant_valid,
+            "counterfactual waypoints": counterfactual_waypoints,
+            "counterfactual waypoint valid mask": (
+                counterfactual_waypoints_valid
+            ),
+            "counterfactual causal score": (
+                counterfactual_causal_score
+            ),
+        }
+        for name, value in required_tensors.items():
+            if not isinstance(value, torch.Tensor):
+                raise RuntimeError(
+                    f"Counterfactual intervention requires {name}."
+                )
+
+        participant_target = participant_target.to(
+            device=driving_features.device,
+            dtype=torch.float32,
+        )
+        participant_valid = participant_valid.to(
+            device=driving_features.device,
+            dtype=torch.bool,
+        )
+        counterfactual_waypoints = counterfactual_waypoints.to(
+            device=driving_features.device,
+            dtype=torch.float32,
+        )
+        counterfactual_waypoints_valid = (
+            counterfactual_waypoints_valid.to(
+                device=driving_features.device,
+                dtype=torch.bool,
+            )
+        )
+        counterfactual_causal_score = (
+            counterfactual_causal_score.to(
+                device=driving_features.device,
+                dtype=torch.float32,
+            )
+        )
+
+        expected_participant_shape = (
+            batch_size,
+            self.interaction_reasoner.num_cameras,
+            self.interaction_reasoner.tokens_per_camera,
+        )
+        if participant_target.shape != expected_participant_shape:
+            raise RuntimeError(
+                "Counterfactual participant target must have shape "
+                f"{expected_participant_shape}, but received "
+                f"{tuple(participant_target.shape)}."
+            )
+        if participant_valid.shape != (batch_size,):
+            raise RuntimeError(
+                "Counterfactual participant valid mask must have shape [B]."
+            )
+        if counterfactual_waypoints_valid.shape != (batch_size,):
+            raise RuntimeError(
+                "Counterfactual waypoint valid mask must have shape [B]."
+            )
+        if counterfactual_causal_score.shape != (batch_size,):
+            raise RuntimeError(
+                "Counterfactual causal score must have shape [B]."
+            )
+
+        selected_indices = self._select_counterfactual_indices(
+            participant_valid
+        )
+        if selected_indices.numel() == 0:
+            return empty_losses, diagnostics
+
+        counterfactual_adaptor_dict = (
+            self._build_counterfactual_adaptor_dict(
+                example,
+                adaptor_dict,
+            )
+        )
+        diagnostics["counterfactual_selected"][selected_indices] = True
+        selected_valid = torch.ones(
+            (selected_indices.numel(),),
+            device=driving_features.device,
+            dtype=torch.bool,
+        )
+        counterfactual_outputs = (
+            self._build_pre_language_interaction(
+                counterfactual_adaptor_dict,
+                batch_slice=selected_indices,
+                visual_intervention_target=(
+                    participant_target[selected_indices]
+                ),
+                visual_intervention_valid=selected_valid,
+            )
+        )
+        (
+            counterfactual_tokens,
+            counterfactual_language_features,
+            counterfactual_driving_features,
+        ) = self._forward_joint_transformer(
+            counterfactual_outputs
+        )
+
+        losses = compute_counterfactual_attention_suppression_loss(
+            counterfactual_primary_attention=(
+                counterfactual_outputs[
+                    "primary_spatial_attention"
+                ]
+            ),
+            intervention_mask=(
+                counterfactual_outputs[
+                    "visual_intervention_mask"
+                ]
+            ),
+            valid_mask=selected_valid,
+        )
+
+        original_predictions = (
+            self.adaptors.driving.get_predictions(
+                driving_features[selected_indices]
+            )
+        )
+        counterfactual_predictions = (
+            self.adaptors.driving.get_predictions(
+                counterfactual_driving_features
+            )
+        )
+        if (
+            "speed_wps" not in original_predictions
+            or "speed_wps" not in counterfactual_predictions
+        ):
+            raise RuntimeError(
+                "Counterfactual action training requires speed_wps predictions."
+            )
+
+        action_valid = counterfactual_waypoints_valid[
+            selected_indices
+        ]
+        causal_confidence = torch.where(
+            action_valid,
+            counterfactual_causal_score[selected_indices]
+            .clamp(min=0.25, max=2.0),
+            torch.zeros_like(
+                counterfactual_causal_score[selected_indices]
+            ),
+        )
+        full_scene_target = example.driving_label.waypoints.to(
+            device=driving_features.device,
+            dtype=torch.float32,
+        )[selected_indices]
+        counterfactual_target = counterfactual_waypoints[
+            selected_indices
+        ]
+        original_speed_prediction = original_predictions[
+            "speed_wps"
+        ].float()
+        counterfactual_speed_prediction = (
+            counterfactual_predictions["speed_wps"].float()
+        )
+        expected_action_shape = tuple(
+            counterfactual_speed_prediction.shape
+        )
+        for name, value in (
+            ("original speed prediction", original_speed_prediction),
+            ("full-scene waypoint target", full_scene_target),
+            ("counterfactual waypoint target", counterfactual_target),
+        ):
+            if tuple(value.shape) != expected_action_shape:
+                raise RuntimeError(
+                    f"{name} must have shape {expected_action_shape}, "
+                    f"but received {tuple(value.shape)}."
+                )
+
+        action_target_loss = torch.nn.functional.smooth_l1_loss(
+            counterfactual_speed_prediction,
+            counterfactual_target,
+            reduction="none",
+        ).sum(dim=-1).mean(dim=-1)
+        predicted_effect = (
+            original_speed_prediction
+            - counterfactual_speed_prediction
+        )
+        target_effect = full_scene_target - counterfactual_target
+        action_effect_loss = torch.nn.functional.smooth_l1_loss(
+            predicted_effect,
+            target_effect,
+            reduction="none",
+        ).sum(dim=-1).mean(dim=-1)
+        losses["counterfactual_action_target_loss"] = (
+            action_target_loss * causal_confidence,
+            causal_confidence,
+        )
+        losses["counterfactual_action_effect_loss"] = (
+            action_effect_loss * causal_confidence,
+            causal_confidence,
+        )
+
+        if "route" not in counterfactual_predictions:
+            raise RuntimeError(
+                "Counterfactual route invariance requires route predictions."
+            )
+        route_target = example.driving_label.path.to(
+            device=driving_features.device,
+            dtype=torch.float32,
+        )[selected_indices]
+        route_prediction = counterfactual_predictions["route"].float()
+        if route_prediction.shape != route_target.shape:
+            raise RuntimeError(
+                "Counterfactual route prediction and target shapes differ: "
+                f"{tuple(route_prediction.shape)} vs "
+                f"{tuple(route_target.shape)}."
+            )
+        route_loss = torch.nn.functional.smooth_l1_loss(
+            route_prediction,
+            route_target,
+            reduction="none",
+        ).sum(dim=-1).mean(dim=-1)
+        route_count = torch.ones_like(route_loss)
+        losses["counterfactual_route_invariance_loss"] = (
+            route_loss,
+            route_count,
+        )
+
+        counterfactual_language_input = {
+            "_ids": counterfactual_outputs["language_ids"],
+            "_ids_mask": counterfactual_outputs["answer_mask"],
+        }
+        counterfactual_language_loss = (
+            self.adaptors.language.compute_loss(
+                counterfactual_language_features,
+                None,
+                counterfactual_language_input,
+                example,
+            )["language_loss"]
+        )
+        language_loss_value, language_loss_count = (
+            counterfactual_language_loss
+        )
+        language_weight = causal_confidence.view(
+            -1,
+            *([1] * (language_loss_value.ndim - 1)),
+        )
+        losses["counterfactual_language_supervision_loss"] = (
+            language_loss_value * language_weight,
+            language_loss_count.to(
+                dtype=language_loss_value.dtype
+            ) * language_weight,
+        )
+
+        (
+            counterfactual_question_span_mask,
+            counterfactual_language_alignment_valid,
+        ) = self._build_question_span_masks(
+            counterfactual_outputs["language_ids"],
+            counterfactual_outputs["answer_mask"],
+        )
+        language_confidence = (
+            language_alignment_valid[selected_indices]
+            & counterfactual_language_alignment_valid
+            & action_valid
+        ).to(dtype=causal_confidence.dtype) * causal_confidence
+        losses["counterfactual_language_consistency_loss"] = (
+            self.interaction_reasoner
+            .compute_counterfactual_language_consistency_loss(
+                original_language_features=(
+                    language_features[selected_indices]
+                ),
+                counterfactual_language_features=(
+                    counterfactual_language_features
+                ),
+                original_interaction_tokens=(
+                    contextual_interaction_tokens[selected_indices]
+                ),
+                counterfactual_interaction_tokens=(
+                    counterfactual_tokens
+                ),
+                original_question_span_mask=(
+                    question_span_mask[selected_indices]
+                ),
+                counterfactual_question_span_mask=(
+                    counterfactual_question_span_mask
+                ),
+                full_scene_waypoints=full_scene_target,
+                counterfactual_waypoints=(
+                    counterfactual_target
+                ),
+                valid_mask=language_confidence,
+                minimum_change=float(
+                    getattr(
+                        self,
+                        "counterfactual_language_min_change",
+                        0.02,
+                    )
+                ),
+            )
+        )
+
+        if (
+            self.future_interaction_decoder is not None
+            and future_target is not None
+        ):
+            counterfactual_future_logits = (
+                self.future_interaction_decoder(
+                    counterfactual_tokens
+                )
+            )
+            losses.update(
+                compute_counterfactual_future_world_losses(
+                    counterfactual_logits=(
+                        counterfactual_future_logits
+                    ),
+                    full_scene_target=(
+                        future_target[selected_indices]
+                    ),
+                    valid_mask=(
+                        future_valid[selected_indices]
+                    ),
+                )
+            )
+        else:
+            zero = counterfactual_driving_features.sum(
+                dim=(-2, -1)
+            ) * 0.0
+            zero_count = torch.zeros_like(zero)
+            losses["counterfactual_world_primary_removal_loss"] = (
+                zero,
+                zero_count,
+            )
+            losses["counterfactual_world_invariance_loss"] = (
+                zero,
+                zero_count,
+            )
+
+        full_action_valid = torch.zeros(
+            (batch_size,),
+            device=driving_features.device,
+            dtype=torch.bool,
+        )
+        full_action_valid[selected_indices] = action_valid
+        full_confidence = torch.zeros(
+            (batch_size,),
+            device=driving_features.device,
+            dtype=torch.float32,
+        )
+        full_confidence[selected_indices] = causal_confidence
+        full_intervention_mask = torch.zeros(
+            (
+                batch_size,
+                self.interaction_reasoner.num_cameras,
+                self.interaction_reasoner.tokens_per_camera,
+            ),
+            device=driving_features.device,
+            dtype=torch.float32,
+        )
+        full_intervention_mask[selected_indices] = (
+            counterfactual_outputs[
+                "visual_intervention_mask"
+            ].detach().float()
+        )
+        full_predicted_effect = torch.zeros_like(
+            example.driving_label.waypoints,
+            device=driving_features.device,
+            dtype=torch.float32,
+        )
+        full_target_effect = torch.zeros_like(
+            full_predicted_effect
+        )
+        full_predicted_effect[selected_indices] = (
+            predicted_effect.detach()
+        )
+        full_target_effect[selected_indices] = target_effect.detach()
+        diagnostics.update(
+            {
+                "counterfactual_action_valid": full_action_valid,
+                "counterfactual_causal_confidence": full_confidence,
+                "counterfactual_intervention_mask": (
+                    full_intervention_mask
+                ),
+                "counterfactual_predicted_action_effect": (
+                    full_predicted_effect
+                ),
+                "counterfactual_target_action_effect": (
+                    full_target_effect
+                ),
+            }
+        )
+        for key in self._counterfactual_loss_keys():
+            if key not in losses:
+                losses[key] = empty_losses[key]
+        return losses, diagnostics
 
     def _add_target_point_metadata(
         self,
@@ -881,6 +1502,25 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         )
 
+        counterfactual_loss_dict, counterfactual_diagnostics = (
+            self._compute_counterfactual_losses(
+                example=example,
+                adaptor_dict=adaptor_dict,
+                contextual_interaction_tokens=(
+                    contextual_interaction_tokens
+                ),
+                language_features=language_features,
+                driving_features=driving_features,
+                question_span_mask=question_span_mask,
+                language_alignment_valid=(
+                    language_alignment_valid
+                ),
+                future_target=future_target,
+                future_valid=future_valid,
+            )
+        )
+        loss_dict.update(counterfactual_loss_dict)
+
         loss_dict_only_losses = {
             key: value
             for key, value in loss_dict.items()
@@ -916,6 +1556,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         pred_labels["secondary_actor_exists"] = (
             secondary_exists.detach()
         )
+        pred_labels.update(counterfactual_diagnostics)
 
         self._log_stage2_statistics(
             "train" if self.training else "val",
@@ -958,6 +1599,62 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 getattr(
                     self,
                     "actor_token_separation_loss_weight",
+                    0.02,
+                )
+            ),
+            "counterfactual_visual_suppression_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_visual_suppression_loss_weight",
+                    0.05,
+                )
+            ),
+            "counterfactual_language_supervision_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_language_supervision_loss_weight",
+                    0.10,
+                )
+            ),
+            "counterfactual_language_consistency_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_language_consistency_loss_weight",
+                    0.05,
+                )
+            ),
+            "counterfactual_action_target_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_action_target_loss_weight",
+                    0.10,
+                )
+            ),
+            "counterfactual_action_effect_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_action_effect_loss_weight",
+                    0.10,
+                )
+            ),
+            "counterfactual_route_invariance_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_route_invariance_loss_weight",
+                    0.05,
+                )
+            ),
+            "counterfactual_world_primary_removal_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_world_primary_removal_loss_weight",
+                    0.05,
+                )
+            ),
+            "counterfactual_world_invariance_loss": float(
+                getattr(
+                    self,
+                    "counterfactual_world_invariance_loss_weight",
                     0.02,
                 )
             ),
