@@ -51,11 +51,11 @@ dreamer_dataset:
   lg_label_folder: language_grounded_waypoints  # lg 标签存放的文件夹名称
 
 
-  lg_use_future_interaction_grid: true                         # 是否使用结构化未来世界标签
+  lg_use_future_interaction_grid: true                         # 是否使用结构化未来世界标签,使用的话会加载到训练里
   lg_future_interaction_grid_folder: future_interaction_grids  # 结构化未来世界标签存放的文件夹名称
 
 
-  # 读取主要关键参与者六视角空间投影并生成6×64视觉token监督。
+  # 是否读取主要关键参与者六视角空间投影并生成6×64视觉token监督
   lg_use_participant_spatial_attention_supervision: true
 
   # 读取对象移除后重新规划得到的真实反事实waypoints。
@@ -74,7 +74,7 @@ dreamer_dataset:
   lg_require_four_questions: true    # lg 语言是否要求必须为四个问题(这样可以滤除没有四个问题的lg语言描述)
   lg_skip_expert_fallback: true      # 如果 lg waypoints 轨迹是专家回退的,则滤除该样本
   lg_max_abs_waypoint_m: 100.0       # lg waypoints 和 route 轨迹中最大绝对坐标值超过100米的样本将被滤除
-  lg_print_filter_summary: true
+  lg_print_filter_summary: true      # 数据加载的时候是否打印debug信息,主要在simlingo_training/dataloader/dataset_lg.py文件中使用
 
   # Match the original Dreamer source's official town split.
   lg_match_dreamer_split: true  # 是否使用与Dreamer相同的数据划分,若为相同划分则能够进行公平比较

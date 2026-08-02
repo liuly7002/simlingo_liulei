@@ -71,7 +71,7 @@ data_module:
   base_dataset:
 
     data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置
-    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️训练的时候数据集加载的位置
+    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置
     
     pred_len: 11              
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)

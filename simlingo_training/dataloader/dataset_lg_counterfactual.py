@@ -6,8 +6,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from simlingo_training.dataloader.dataset_lg_spatial import (
-    Data_LG_Spatial,
+from simlingo_training.dataloader.dataset_lg import (
+    Data_LG,
 )
 
 
@@ -22,7 +22,7 @@ _COUNTERFACTUAL_INTENT_TEXT = {
 }
 
 
-class Data_LG_Counterfactual(Data_LG_Spatial):  # pylint: disable=invalid-name
+class Data_LG_Counterfactual(Data_LG):  # pylint: disable=invalid-name
     """
     在LG语言、轨迹、四通道和参与者空间监督之上，读取对象移除后的
     真实反事实重规划结果，并由该结果构造对应的四问语言监督。

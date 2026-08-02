@@ -33,19 +33,27 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
     def __getitem__(self, index):
         cv2.setNumThreads(0) # 禁用opencv多线程
 
+
+
+
         
         
+
+        data = {}
         
-        
+
+
+
+
+
         
         ########################################### 🥭 初始化(父类初始化得到) 🥭 ###########################################
 
-        # 从索引表里取出该sample的元信息(这里说明在父类初始化时,已经提前把整个数据集扫描了一遍,并把每个sample的"索引信息"存到若干列表里,所以这里不是现查目录,而是直接O(1)取出)
-        data = {}
         images = self.images[index]                 # 图像路径
         measurements = self.measurements[index]     # measurement路径
         sample_start = self.sample_start[index]     # 当前样本的帧id
         augment_exists = self.augment_exists[index] # 当前样本是否增强
+        
         # images: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/rgb/0026.jpg'], 
         # measurements: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/measurements'], 
         # sample_start: 26, 
@@ -155,6 +163,12 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         target_point = np.array(current_measurement['target_point'])
         target_point = self.augment_target_point(target_point, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
         # "target_point": [19.075672365994425,-13.26871181961684]
+
+
+
+
+
+
 
         ########################################### 🥭 next target point 🥭 ###########################################
 
@@ -614,7 +628,7 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         
         
         
-        # 最终返回结果
+        ############################################# 🥭 最终返回结果 🥭 #############################################
         data_new = DatasetOutput(
             conversation = conversation_all,         # 完整 user-assistant 对话，给模型做输入格式组织用。
             answer = conversation_answer,            # 只包含监督答案，通常给 loss 计算用。

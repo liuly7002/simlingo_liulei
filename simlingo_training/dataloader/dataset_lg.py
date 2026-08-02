@@ -11,9 +11,8 @@ import numpy as np
 import torch
 import ujson
 
-from simlingo_training.dataloader.dataset_base_surround import (
-    SurroundBaseDataset,
-)
+from simlingo_training.dataloader.dataset_base_surround import SurroundBaseDataset
+from simlingo_training.dataloader.participant_spatial_attention import CAMERA_ORDER,TOKENS_PER_CAMERA,extract_participant_spatial_attention_supervision
 from simlingo_training.utils.custom_types import DatasetOutput
 
 
@@ -115,8 +114,11 @@ class Data_LG(SurroundBaseDataset):
             / f"{frame_id:04d}.json.gz" # 0026.json.gz
         )
 
-    #修改20260726：获得当前帧的结构化未来世界标签路径。
     def _future_interaction_grid_path_for_index(self, index: int,) -> Path:
+        """
+        返回当前样本结构化世界标签路径:
+        ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/future_interaction_grids/0026.json.gz
+        """
         measurement_dir = self._measurement_dir_for_index(index)
         route_dir = measurement_dir.parent
         frame_id = self._current_frame_for_index(index)
@@ -137,23 +139,27 @@ class Data_LG(SurroundBaseDataset):
             raise ValueError("LG label root must be a dictionary")
         return payload
 
-    #修改20260726：读取并检查四通道结构化未来世界标签。
+
     @staticmethod
     def _load_future_interaction_grid(path: Path,) -> Tuple[Optional[np.ndarray], bool]:
+        
+        # 安全性检查,如果文件损坏
         if not path.is_file():
             return None, False
 
+        # 加载结构化世界标签文件
         with np.load(str(path), allow_pickle=False) as payload:
+            
+            # 安全性检查
             if "future_interaction_grid" not in payload.files:
                 raise ValueError(
                     f"Missing future_interaction_grid in {path}"
                 )
 
-            grid = np.asarray(
-                payload["future_interaction_grid"],
-                dtype=np.float32,
-            )
+            # 加载future_interaction_grid内容
+            grid = np.asarray(payload["future_interaction_grid"],dtype=np.float32,)
 
+            # 有效性检查
             valid = False
             if "valid" in payload.files:
                 valid_array = np.asarray(
@@ -175,6 +181,7 @@ class Data_LG(SurroundBaseDataset):
                         f"in {path}: {channel_names}"
                     )
 
+        # 安全性检查
         if grid.ndim != 3 or grid.shape[0] != 4:
             raise ValueError(
                 "future_interaction_grid must have shape "
@@ -182,17 +189,20 @@ class Data_LG(SurroundBaseDataset):
                 f"from {path}"
             )
 
+        # 安全性检查
         if not np.isfinite(grid).all():
             raise ValueError(
                 f"future_interaction_grid contains non-finite values: {path}"
             )
 
+        # 安全性检查
         if np.any(grid < 0.0) or np.any(grid > 1.0):
             raise ValueError(
                 "future_interaction_grid values must be within "
                 f"[0, 1]: {path}"
             )
 
+        # 返回结构化世界标签中的"future_interaction_grid"内容
         return grid.astype(np.float32), valid
 
     def _extract_questions(self, payload: Dict) -> List[Dict[str, str]]:
@@ -281,52 +291,28 @@ class Data_LG(SurroundBaseDataset):
         path = self.equal_spacing_route(path)
         return np.asarray(path, dtype=np.float32)
 
-    #修改20260720：读取并检查LG生成的六视角相机注意力软标签。
-    @staticmethod
-    def _extract_camera_attention_supervision(payload: Dict,) -> Tuple[np.ndarray, bool]:
+    def _extract_participant_spatial_attention_supervision(self,payload: Dict,) -> Tuple[np.ndarray, bool]:
         """
-        返回LG标签中的六视角相机注意力软标签,如果不存在则返回空标签和无效标志
+        将LG标签中的主要关键参与者六视角投影信息转换为
+        与视觉token严格对齐的[6, 64]空间注意力监督。
+
+        DatasetOutput中继续使用camera_attention_target和
+        camera_attention_valid字段名，只是为了兼容现有批处理接口。
         """
 
-        # 创建一个空的六视角注意力标签,如果后续检查失败,则返回该空标签和无效标志
-        empty_target = np.zeros((6,), dtype=np.float32)
+        # 主要关键参与者六视角空间投影并生成6×64视觉token监督
+        if not bool(getattr(self,"lg_use_participant_spatial_attention_supervision",False,)):
+            return (np.zeros((len(CAMERA_ORDER),TOKENS_PER_CAMERA,),dtype=np.float32,),False,)
 
-        # 检查 visual_grounding 字段是否存在且为字典类型
-        visual_grounding = payload.get("visual_grounding", {})
-        if not isinstance(visual_grounding, dict):
-            return empty_target, False
-
-        # 
-        if not bool(visual_grounding.get("camera_attention_valid",False,)):
-            return empty_target, False
-
-        # 预期相机的顺序
-        expected_camera_order = ("front","front_left","front_right","rear","rear_left","rear_right",)
-        # 从 visual_grounding 中获取 camera_order 字段
-        camera_order = tuple(visual_grounding.get("camera_order", []))
-        # 如果相机顺序不一致,则返回空标签和无效标志
-        if camera_order != expected_camera_order:
-            return empty_target, False
-
-        target = np.asarray(visual_grounding.get("camera_attention_target",[],),dtype=np.float32,)
-
-        # 如果 target 的形状不为 (6,), 或者包含非有限值,或者包含负值,则返回空标签和无效标志
-        if target.shape != (6,):
-            return empty_target, False
-        if not np.isfinite(target).all():
-            return empty_target, False
-        if np.any(target < 0.0):
-            return empty_target, False
-
-        # 如果 target 的和小于等于 0,则返回空标签和无效标志
-        target_sum = float(target.sum())
-        if target_sum <= 0.0:
-            return empty_target, False
-
-        # 归一化 target,使其和为 1,并返回有效标志
-        target = target / target_sum
-
-        return target.astype(np.float32), True
+        # 返回的是[6,64]的软监督权重+True/False
+        return extract_participant_spatial_attention_supervision(
+            payload,
+            cut_bottom_quarter=bool(
+                self.cut_bottom_quarter  # 裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
+                or self.img_shift_augmentation  # 进行图像增强
+            ),
+            use_global_img=bool(self.use_global_img),
+        )
 
     def _validate_payload(self, payload: Dict) -> Tuple[bool, str]:
         """
@@ -418,9 +404,10 @@ class Data_LG(SurroundBaseDataset):
         valid_paths: List[str] = []
         reasons = Counter()
 
-        # 统计真正进入当前LG数据集的样本中,有效六视角注意力监督的数量及无效原因。
-        camera_attention_valid_count = 0  # 有效六视角注意力监督数量
-        camera_attention_invalid_reasons = Counter()  # 无效六视角注意力监督的原因统计
+        # 统计真正进入当前LG数据集的样本中，
+        # 有效参与者空间注意力监督的数量及无效原因。
+        participant_spatial_valid_count = 0
+        participant_spatial_invalid_reasons = Counter()
 
         for index in range(len(self.images)):
 
@@ -453,24 +440,23 @@ class Data_LG(SurroundBaseDataset):
                 continue
 
             # 读取并检查六视角注意力监督标签
-            # 如果六视角注意力监督标签有效,那么_camera_attention_target是一个长度为6的numpy数组,表示六个相机的注意力权重,并且权重和为1,camera_attention_valid=True
-            # 如果六视角注意力监督标签无效,那么_camera_attention_target是一个长度为6的零数组,camera_attention_valid=False
-            _camera_attention_target, camera_attention_valid = self._extract_camera_attention_supervision(payload)
+            # 如果六视角注意力监督标签有效,那么_participant_spatial_target是一个[6,64]的数组,表示六个相机的注意力权重,并且权重和为1,participant_spatial_valid=True
+            # 如果六视角注意力监督标签无效,那么_participant_spatial_target是一个[6,64]的零数组,表示六个相机的注意力权重都为0(此时主要是没有主要actor),participant_spatial_valid=False
+            _participant_spatial_target,participant_spatial_valid, = self._extract_participant_spatial_attention_supervision(payload)
 
-            # 如果六视角注意力监督标签有效,则统计有效数量
-            if camera_attention_valid:
-                camera_attention_valid_count += 1
-            # 如果六视角注意力监督标签无效,则统计无效原因
+            # 有效 -> 有效标签数量+1
+            if participant_spatial_valid:
+                participant_spatial_valid_count += 1
+            # 无效 -> 无效标签数量+1并注明原因
             else:
                 visual_grounding = payload.get("visual_grounding",{},)
 
-                # 无效原因
                 if isinstance(visual_grounding, dict):
-                    invalid_reason = str(visual_grounding.get("invalid_reason","unknown",))
+                    invalid_reason = str(visual_grounding.get("invalid_reason", None,) or "unknown")
                 else:
                     invalid_reason = ("missing_visual_grounding")
 
-                camera_attention_invalid_reasons[invalid_reason] += 1
+                participant_spatial_invalid_reasons[invalid_reason] += 1
 
             # 有效样本的索引
             valid_indices.append(index)
@@ -481,15 +467,11 @@ class Data_LG(SurroundBaseDataset):
         indices = np.asarray(valid_indices, dtype=np.int64)
         original_sample_count = len(self.images)
 
-        for attribute in (
-            "images",
-            "surround_images",
-            "boxes",
-            "measurements",
-            "sample_start",
-            "augment_exists",
-        ):
+        for attribute in ("images","surround_images","boxes","measurements","sample_start","augment_exists",):
+
             values = getattr(self, attribute)
+
+            # 安全性检查
             if len(values) != original_sample_count:
                 raise RuntimeError(
                     f"LG index container length mismatch: {attribute} has "
@@ -497,65 +479,45 @@ class Data_LG(SurroundBaseDataset):
                     f"{original_sample_count}"
                 )
 
-            filtered_values = self._filter_container(
-                values,
-                indices,
-                valid_indices,
-            )
+            filtered_values = self._filter_container(values,indices,valid_indices,)
+
             if attribute == "augment_exists":
-                filtered_values = np.asarray(
-                    filtered_values,
-                    dtype=np.bool_,
-                )
+                filtered_values = np.asarray(filtered_values,dtype=np.bool_,)
+            
             setattr(self, attribute, filtered_values)
 
-        self.lg_label_paths = np.asarray(
-            valid_paths,
-            dtype=np.string_,
-        )
+        # 有效样本的路径
+        self.lg_label_paths = np.asarray(valid_paths,dtype=np.string_,)
 
-        if bool(
-            getattr(
-                self,
-                "lg_print_filter_summary",
-                True,
-            )
-        ):
+        # 打印debug信息
+        if bool(getattr(self,"lg_print_filter_summary",True,)):
+
             print(
                 f"[{self.split} LG samples]: kept "
-                f"{len(valid_indices)} samples; "
-                f"filtered={dict(reasons)}"
+                f"{len(valid_indices)} samples; "  # 有效样本的数量
+                f"filtered={dict(reasons)}"        # 无效的原因
             )
 
-            #修改20260721：输出六视角注意力标签的实际覆盖率。
+            # 输出存在主要参与者空间注意力标签的实际覆盖率。
             kept_sample_count = len(valid_indices)
-            camera_attention_valid_ratio = (
-                camera_attention_valid_count
-                / kept_sample_count
-                if kept_sample_count > 0
-                else 0.0
-            )
+            participant_spatial_valid_ratio = (participant_spatial_valid_count / kept_sample_count if kept_sample_count > 0 else 0.0)
 
-            bucket_name = str(
-                getattr(
-                    self,
-                    "bucket_name",
-                    "unknown",
-                )
-            )
+            # bucket 名
+            bucket_name = str(getattr(self,"bucket_name","unknown",))
 
+            # 打印内容
             print(
-                f"[{self.split} LG camera attention]"
+                f"[{self.split} LG participant spatial attention]"
                 f"[bucket={bucket_name}]: "
-                f"valid={camera_attention_valid_count}, "
+                f"valid={participant_spatial_valid_count}, "
                 f"invalid="
-                f"{kept_sample_count - camera_attention_valid_count}, "
+                f"{kept_sample_count - participant_spatial_valid_count}, "
                 f"total={kept_sample_count}, "
                 f"valid_ratio="
-                f"{camera_attention_valid_ratio:.4f} "
-                f"({camera_attention_valid_ratio * 100.0:.2f}%), "
+                f"{participant_spatial_valid_ratio:.4f} "
+                f"({participant_spatial_valid_ratio * 100.0:.2f}%), "
                 f"invalid_reasons="
-                f"{dict(camera_attention_invalid_reasons)}"
+                f"{dict(participant_spatial_invalid_reasons)}"
             )
 
     @staticmethod
@@ -582,17 +544,16 @@ class Data_LG(SurroundBaseDataset):
         ).astype(np.float32)
 
     def _build_language_text(self, payload: Dict, prefix: str,) -> Tuple[str, str]:
+        
+        # 是否使用 lg 语言
         use_language = bool(
             getattr(self, "lg_use_language", True)
         )
-        mode = str(
-            getattr(
-                self,
-                "lg_language_mode",
-                "four_questions",
-            )
-        ).lower()
 
+        # 获取配置中的lg语言模式,默认四问题模式不变
+        mode = str(getattr(self, "lg_language_mode", "four_questions",)).lower()
+
+        # 1. 不使用lg语言或者lg语言模式为none,这是一个保底问题
         if not use_language or mode == "none":
             return (
                 f"{prefix} Predict the waypoints.",
@@ -606,12 +567,8 @@ class Data_LG(SurroundBaseDataset):
                 "four questions"
             )
 
+        # 随机模式
         if mode == "random_question":
-            # selected = (
-            #     random.choice(questions)
-            #     if self.split == "train"
-            #     else questions[0]
-            # )
             selected = random.choice(questions)
             prompt = (
                 f"{prefix} Q: {selected['question']} "
@@ -622,6 +579,7 @@ class Data_LG(SurroundBaseDataset):
             )
             return prompt, answer
 
+        # 异常
         if mode != "four_questions":
             raise ValueError(
                 f"Unsupported lg_language_mode={mode!r}; "
@@ -653,177 +611,233 @@ class Data_LG(SurroundBaseDataset):
         return prompt, answer
 
     def __getitem__(self, index):
-        cv2.setNumThreads(0)
+
+        cv2.setNumThreads(0)  # 禁止opencv多线程
+
+
+
 
         data = {}
-        surround_images = self.surround_images[index]
+
+
+
+
+        ########################################### 🥭 初始化(父类的父类初始化得到) 🥭 ###########################################
+
+        surround_images = self.surround_images[index]  # 六视角图像路径.../rgb_front/0026.jpg  .../rgb_front_left/0026.jpg  .../rgb_front_right/0026.jpg  .../rgb_rear/0026.jpg  .../rgb_rear_left/0026.jpg  .../rgb_rear_right/0026.jpg
         measurements = self.measurements[index]
         sample_start = self.sample_start[index]
-        lg_path = Path(self._decode_path(self.lg_label_paths[index]))
+        lg_path = Path(self._decode_path(self.lg_label_paths[index]))  # lg 标签文件路径
+        
+        # images: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/rgb/0026.jpg'], 
+        # measurements: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/measurements'], 
+        # sample_start: 26, 
+        # lg_path: ....../Town12_Rep0_493_route0_02_28_11_00_43/language_grounded_waypoints/0026.json.gz
 
-        (
-            loaded_measurements,
-            current_measurement,
-            measurement_file_current,
-        ) = self.load_current_and_future_measurements(
-            measurements,
-            sample_start,
-        )
+
+
+
+        ########################################### 🥭 measurements 🥭 ###########################################
+
+        loaded_measurements,current_measurement,measurement_file_current = self.load_current_and_future_measurements(measurements,sample_start,)
         data["measurement_path"] = measurement_file_current
+        
+        # loaded_measurements: 当前帧及未来11帧的 .json 内容 总共12帧
+        # current_measurement: 当前帧的 .json.gz 内容
+        # measurement_file_current: 当前 measurement .json.gz 文件路径
 
-        # LG data does not use geometric camera augmentation.
+        # current_measurement[0] = {'pos_global': [-1932.94677734375, 6059.3369140625], 'theta': 2.716931982836451, 'speed': 10.893928527832031, 'target_speed': 10.0, 'speed_limit': 13.88888888888889, 'target_point': [166.21953678063582, -1.4034610299303338], 'target_point_next': [292.23548401248064, -4.342632889987669], 'command': 4, 'next_command': 4, 'aim_wp': [3.9551499024618035, 0.0007044955744153203], 'route': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'route_original': [[2.4544338729054394, 0.001334758810199066], [3.45489382915608, 0.001178228841105744], [4.45530941054533, 0.00044431978983006104], [5.455462377914564, 0.00014897731342955467], [6.455837259630751, -0.0007319459886239166], [7.456450110816944, -0.001226608638614568], [8.456802089316398, -0.002246499088830234], [9.45680703690629, -0.003423308025632288], [10.457292488832373, -0.0043828452118344075], [11.457613323532335, -0.005416818090294484], [12.457733948091944, -0.006541320864964284], [13.45801853223297, -0.007720296218779232], [14.458442006321436, -0.00937234785163632], [15.45912646937736, -0.011056433010823596], [16.4552730284497, -0.012434575571900197], [17.453081922137564, -0.014250703843281087], [18.45291606253329, -0.015772686794809587], [19.45341345977995, -0.017798580123078445], [20.453905537485518, -0.01996084850029245], [21.454136713433837, -0.02250902934549437], [22.454383848005413, -0.02464808504385907], [23.454714403468685, -0.02674941995219271], [24.455156186787544, -0.028800460473815903], [25.45528145442136, -0.031262560656781346], [26.45560789960201, -0.034169572262111814], [27.455783461622538, -0.036742900300669845], [28.45644479962843, -0.040168330393921536], [29.45702150748416, -0.042962179629153496], [30.457035547262382, -0.04547457419882939], [31.457073283721886, -0.04878007186882449], [32.457305668928676, -0.05199755436207809], [33.457593668063254, -0.055189889661976466], [34.45806035732186, -0.05870333493197144], [35.45899565468412, -0.06280870575544562], [36.45900558417972, -0.06612677702211833], [37.45917171637654, -0.06964215680661745], [38.45955619400193, -0.07386262451469605], [39.45984008285389, -0.07786063651159125], [40.45992279415901, -0.0814137370861232], [41.4604409870628, -0.085707711859758]], 'changed_route': False, 'speed_reduced_by_obj_type': None, 'speed_reduced_by_obj_id': None, 'speed_reduced_by_obj_distance': None, 'steer': 0.0, 'throttle': 0.0, 'brake': False, 'control_brake': True, 'junction': False, 'vehicle_hazard': False, 'vehicle_affecting_id': None, 'light_hazard': False, 'walker_hazard': False, 'walker_affecting_id': None, 'stop_sign_hazard': False, 'stop_sign_close': False, 'walker_close': False, 'walker_close_id': None, 'angle': 0.00011339540056267717, 'augmentation_translation': 0.36125444482272595, 'augmentation_rotation': 5.24434331572315, 'ego_matrix': [[-0.9111607074737549, -0.4120118319988251, 0.005693943705409765, -1932.94677734375], [0.4120037257671356, -0.9111785292625427, -0.002586618298664689, 6059.3369140625], [0.0062539163045585155, -1.0898917935264762e-05, 0.9999804496765137, 377.0238952636719], [0.0, 0.0, 0.0, 1.0]]}
+        # measurement_file_current: /root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/Town12_Rep0_532_route0_02_28_11_05_28/measurements/0010.json.gz
+
+
+
+
+        ########################################### 🥭 是否进行几何增强 🥭 ###########################################
+
+        # lg 数据不使用几何增强,故将旋转、平移设置为0
         aug_rotation = 0.0
         aug_translation = 0.0
 
-        data = self.load_waypoints(
-            data,
-            loaded_measurements,
-            aug_translation,
-            aug_rotation,
-        )
 
-        data["speed"] = current_measurement["speed"]
-        speed_rounded = round(
-            current_measurement["speed"],
-            1,
-        )
 
-        data = self.load_route(
-            data,
-            current_measurement,
-            aug_translation,
-            aug_rotation,
-        )
 
-        target_point = np.asarray(
-            current_measurement["target_point"],
-            dtype=np.float32,
-        )
-        target_point = self.augment_target_point(
-            target_point,
-            y_augmentation=aug_translation,
-            yaw_augmentation=aug_rotation,
-        )
+        ########################################### 🥭 waypoints(来自专家) 🥭 ###########################################
 
-        next_target_point = np.asarray(
-            current_measurement["target_point_next"],
-            dtype=np.float32,
-        )
-        next_target_point = self.augment_target_point(
-            next_target_point,
-            y_augmentation=aug_translation,
-            yaw_augmentation=aug_rotation,
-        )
+        data = self.load_waypoints(data, loaded_measurements, aug_translation, aug_rotation,)
 
-        target_options, placeholder_values = (
-            self.get_navigational_conditioning(
-                data,
-                current_measurement,
-                target_point,
-                next_target_point,
-            )
-        )
+        # data['waypoints']            : 自车坐标系下自车未来10帧(不包括当前帧)自车的位置 [x,y](无增强)
+        # dsta['waypoints_org']        : 自车坐标系下自车未来10帧(不包括当前帧)自车的位置 [x,y]（无增强）
+        # dsta['waypoints_1d']         : 自车坐标系下 10 帧距离 [x,0] (x是自车当前帧与第1、2、、、11帧之间的欧式距离)(无增强)
+        # dsta['ego_waypoints']        : 11 个 4×4 矩阵（无增强）包括当前帧及未来 10 帧
+        # dsta['ego_waypoints_org']    : 11 个 4×4 矩阵（无增强）包括当前帧及未来 10 帧
+
+        
+
+
+        ########################################### 🥭 当前帧的车速 🥭 ###########################################
+
+        # 速度
+        speed_rounded = round(current_measurement["speed"],1,)  # 用于 prompt 文本里显示 小数后一位
+        data["speed"] = current_measurement["speed"]            # 用于模型输入或监督保留原始数值
+
+
+
+
+        ########################################### 🥭 route 🥭###########################################
+
+        data = self.load_route(data,current_measurement,aug_translation,aug_rotation,)
+
+
+
+
+        ########################################### 🥭 target point 🥭 ###########################################
+
+        target_point = np.asarray(current_measurement["target_point"],dtype=np.float32,)
+        target_point = self.augment_target_point(target_point,y_augmentation=aug_translation,yaw_augmentation=aug_rotation,)
+        
+        # "target_point": [19.075672365994425,-13.26871181961684]
+
+
+
+
+
+        ########################################### 🥭 next target point 🥭 ###########################################
+        next_target_point = np.asarray(current_measurement["target_point_next"],dtype=np.float32,)
+        next_target_point = self.augment_target_point(next_target_point,y_augmentation=aug_translation,yaw_augmentation=aug_rotation,)
+        # "next_target_point": [19.703241532357737,-43.26213909836339]
+
+
+
+
+
+        ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
+        target_options, placeholder_values = (self.get_navigational_conditioning(data,current_measurement,target_point,next_target_point,))
+
+        """
+        target_options = 
+        [
+        "Target waypoint: <TARGET_POINT><TARGET_POINT>.",                # 这就是网络框架中的输入 TP
+        "Command: {command} in {dist_to_command} meter{next_command}.",  # 这就是网络框架中的输入 HLC
+        "Command: {lmdrive_command}."                                    # lmdrive_command 来自"/data/augmented_templates/lmdrive.json"语言增强模板文件
+        ]   
+        
+        placeholder_values = { '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]] }
+        """
+
+
+
+
+        
+        ########################################### 🥭 lg 标签文件 🥭 ###########################################
 
         payload = self._load_gzip_json(lg_path)
+
+
+        # 检查 lg 标签数据的有效性,返回是否有效以及无效原因
         valid, reason = self._validate_payload(payload)
+        
+        # 如果标签无效
         if not valid:
             raise ValueError(
                 f"Invalid LG label at {lg_path}: {reason}"
             )
 
-        #修改20260726：读取当前帧的四通道结构化未来世界标签。
+
+
+
+        ########################################### 🥭 当前帧的四通道结构化未来世界标签 🥭 ###########################################
         future_interaction_grid = None
         future_interaction_valid = False
 
+        # 如果使用未来结构化世界标签
         if self.lg_use_future_interaction_grid:
-            future_interaction_path = (
-                self._future_interaction_grid_path_for_index(index)
-            )
-            (
-                future_interaction_grid,
-                future_interaction_valid,
-            ) = self._load_future_interaction_grid(
-                future_interaction_path
-            )
-
-        #修改20260720：无有效因果actor时返回全零目标和False掩码，
-        # 但不丢弃该LG语言/轨迹样本。
-        (
-            camera_attention_target,
-            camera_attention_valid,
-        ) = self._extract_camera_attention_supervision(
-            payload
-        )
-
-        if bool(
-            getattr(
-                self,
-                "lg_use_waypoints",
-                True,
-            )
-        ):
-            waypoints = self._extract_lg_waypoints(payload)
-            path = self._extract_lg_path(payload)
-        else:
-            waypoints = np.asarray(
-                data["waypoints_org"],
-                dtype=np.float32,
-            )
-            path = np.asarray(
-                data["route_adjusted_org"],
-                dtype=np.float32,
-            )
-
-        waypoints_1d = self._compute_waypoints_1d(
-            waypoints
-        )
-
-        prefix = f"Current speed: {speed_rounded} m/s."
-        if (
-            bool(
-                getattr(
-                    self,
-                    "lg_include_navigation_conditioning",
-                    True,
-                )
-            )
-            and len(target_options) > 0
-        ):
-            # navigation_text = (
-            #     random.choice(target_options)
-            #     if self.split == "train"
-            #     else target_options[0]
-            # )
-            # navigation_text = random.choice(target_options)
-            # prefix = f"{prefix} {navigation_text}"
             
-            # 导航类型由route_as唯一确定，
-            # LG训练和验证均不再随机切换导航表达。
-            navigation_text = target_options[0]
+            # 当前样本的结构化世界标签文件路径
+            # ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/future_interaction_grids/0026.json.gz
+            future_interaction_path = self._future_interaction_grid_path_for_index(index)
+            
+            # future_interaction_grid 为4通道结构化世界标签内容
+            # future_interaction_valid 为是都有效
+            future_interaction_grid, future_interaction_valid = self._load_future_interaction_grid(future_interaction_path)
+
+        # 读取并检查六视角注意力监督标签
+        # 如果六视角注意力监督标签有效,那么_participant_spatial_target是一个[6,64]的数组,表示六个相机的注意力权重,并且权重和为1,participant_spatial_valid=True
+        # 如果六视角注意力监督标签无效,那么_participant_spatial_target是一个[6,64]的零数组,表示六个相机的注意力权重都为0(此时主要是没有主要actor),participant_spatial_valid=False
+        participant_spatial_target, participant_spatial_valid = self._extract_participant_spatial_attention_supervision(payload)
+
+        
+        
+
+        ########################################### 🥭 waypoints && path && waypoints_1d 🥭 ###########################################
+
+        # 如果使用lg自己生成的自车未来的waypoints的话
+        if bool(getattr(self, "lg_use_waypoints", True,)):
+            
+            # 自车未来的 waypoints (这是lg生成的)
+            waypoints = self._extract_lg_waypoints(payload)
+            
+            # 参考路径 (这是lg生成的)
+            path = self._extract_lg_path(payload)
+        
+        # 如果不使用lg自己生成的自车未来的waypoints的话
+        else:
+            
+            # 自车未来的 waypoints (这是专家的,无几何增强)
+            waypoints = np.asarray(data["waypoints_org"], dtype=np.float32,)
+            
+            # 参考路径 (这是专家的,无几何增强)
+            path = np.asarray(data["route_adjusted_org"],dtype=np.float32,)
+
+        # 1d 形式的自车未来的 waypoints
+        waypoints_1d = self._compute_waypoints_1d(waypoints)
+
+        
+
+
+        ########################################### 🥭 生成 prompt & answer 🥭 ###########################################
+        
+        # 速度提示
+        prefix = f"Current speed: {speed_rounded} m/s."
+
+        # 这里的意思是：如果"lg_include_navigation_conditioning = True",那么提示词中的导航信息采用两个导航点的形式
+        if (bool(getattr(self,"lg_include_navigation_conditioning",True,)) and len(target_options) > 0):
+
+            # 导航提示
+            navigation_text = target_options[0]   # navigation_text = "Target waypoint: <TARGET_POINT><TARGET_POINT>."
+            
+            # 更新
             prefix = f"{prefix} {navigation_text}"
 
-        prompt, answer = self._build_language_text(
-            payload,
-            prefix,
-        )
-        prompt = (
-            prompt.replace("..", ".")
-            .replace("  ", " ")
-            .strip()
-        )
-        answer = (
-            answer.replace("..", ".")
-            .replace("  ", " ")
-            .strip()
-        )
+
+        # 构建 prompt 和 answer
+        prompt, answer = self._build_language_text(payload, prefix,)
+
+        # 整理 prompt 和 answer
+        prompt = (prompt.replace("..", ".").replace("  ", " ").strip())
+        answer = (answer.replace("..", ".").replace("  ", " ").strip())
+
+
+
+
+
+        ############################################# 🥭 六视角图像 🥭 #############################################
 
         # Load all six views once. The legacy front fields are taken directly
         # from view index 0, keeping front and surround inputs identical.
-        data = self.load_surround_images(
-            data,
-            surround_images,
-        )
 
+        data = self.load_surround_images(data, surround_images,)
+
+        # data['rgb'] = 增强(高斯模糊、高斯噪声等)的并且裁减了原图(images)底部包含自车引擎盖部分的 新图像  [T,C,H,W]
+        # data['rgb_org_size'] = 增强(高斯模糊、高斯噪声等)的但是并未进行裁减的原图(images)  [T,C,H,W]
+
+        # data['rgb_surround'] = 增强(高斯模糊、高斯噪声等)的并且裁减了原图(images)底部包含自车引擎盖部分的 新六视角图像  [T,V,C,H,W]
+        # data['rgb_org_size'] = 增强(高斯模糊、高斯噪声等)的但是并未进行裁减的六视角图像原图(images)  [T,V,C,H,W]
+        # data['camera_order'] = 六视角图像的顺序,内容为["front","front_left","front_right","rear","rear_left","rear_right"]
+
+
+        ############################################# 🥭 构造对话格式 🥭 #############################################
+
+        # 1. 只包含答案的版本  这是仅包含 assistant 输出的部分，通常用于监督目标
         conversation_answer = [
             {
                 "role": "assistant",
@@ -835,6 +849,9 @@ class Data_LG(SurroundBaseDataset):
                 ],
             }
         ]
+
+        # 2. 完整对话版本
+        # 这是标准的多模态对话格式：user 发出文字 prompt，并附一张图片  assistant 输出文字答案
         conversation_all = [
             {
                 "role": "user",
@@ -859,52 +876,43 @@ class Data_LG(SurroundBaseDataset):
             },
         ]
 
-        data_new = DatasetOutput(
-            conversation=conversation_all,
-            answer=conversation_answer,
-            image_ff=data["rgb"],
-            image_ff_org_size=data["rgb_org_size"],
-            waypoints=waypoints,
-            waypoints_1d=waypoints_1d,
-            path=path,
-            target_points=data["target_points"],
-            speed=data["speed"],
-            placeholder_values=placeholder_values,
-            measurement_path=data["measurement_path"],
-            dataset="driving",
-            image_surround=data["rgb_surround"],
-            image_surround_org_size=(
-                data["rgb_surround_org_size"]
-            ),
-            camera_order=data["camera_order"],
-            #修改20260720：传递LG六视角注意力软标签。
-            camera_attention_target=(
-                camera_attention_target
-            ),
-            camera_attention_valid=(
-                camera_attention_valid
-            ),
 
-            #修改20260726：传递四通道结构化未来世界标签。
-            future_interaction_grid=(
-                future_interaction_grid
-            ),
-            future_interaction_valid=(
-                future_interaction_valid
-            ),
+
+
+        ############################################# 🥭 最终返回结果 🥭 #############################################
+        data_new = DatasetOutput(
+            conversation=conversation_all,                           # 完整的对话内容,包含问题和答案 
+            answer=conversation_answer,                              # 只包含答案的对话内容
+
+            image_ff=data["rgb"],                                    # 当前帧的图像(T,C,H,W),裁减掉了图像底部包含自车引擎盖的部分(并进行了图像本身的随机增强,高斯模糊、噪声等)
+            image_ff_org_size=data["rgb_org_size"],                  # 当前帧的图像(T,C,H,W),是数字,并未进行裁减,是原始图像(并进行了图像本身的随机增强,高斯模糊、噪声等)
+
+            waypoints=waypoints,                                     # 自车未来位置waypoints
+            waypoints_1d=waypoints_1d,                               # 1d 形式的自车未来位置waypoints
+            path=path,                                               # 参考路径
+
+            target_points=data["target_points"],                     # 当前target point和下一个target point的组合  [[x_0,y_0], [x_1,y_1]],这里的[[x_0,y_0], [x_1,y_1]]是在自车坐标系下的位置(无几何增强)
+            
+            speed=data["speed"],                                     # 当前帧车速
+            placeholder_values=placeholder_values,                   # { '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]] }
+            measurement_path=data["measurement_path"],               #  当前帧 .json.gz 的路径
+
+            dataset="driving",
+
+            image_surround=data["rgb_surround"],                     # 裁减底部之后的六视角图像.jpg文件路径
+            image_surround_org_size=(data["rgb_surround_org_size"]), # 未裁减的原始的六视角图像.jpg文件路径
+            camera_order=data["camera_order"],                       # 相机顺序
+
+            camera_attention_target=(participant_spatial_target),    # [6,64]的软标签
+            camera_attention_valid=(participant_spatial_valid),      # 对应的是否有效
+
+            future_interaction_grid=(future_interaction_grid),       # 4通道结构化世界标签内容
+            future_interaction_valid=(future_interaction_valid),     # 对应的是否有效
         )
 
+        # 是否可视化
         if VIZ_DATA:
-            self.visualise_cameras(
-                data_new,
-                None,
-                path,
-                waypoints,
-                options=None,
-                name="lg_",
-                prompt=prompt,
-                answer=answer,
-            )
+            self.visualise_cameras(data_new, None, path, waypoints, options=None, name="lg_", prompt=prompt, answer=answer,)
 
         return data_new
 
@@ -942,3 +950,11 @@ if __name__ == "__main__":
         print(sample.image_surround.shape)
         print(sample.camera_order)
         print(sample.conversation)
+        print(
+            "participant spatial target shape:",
+            sample.camera_attention_target.shape,
+        )
+        print(
+            "participant spatial valid:",
+            sample.camera_attention_valid,
+        )
