@@ -881,33 +881,32 @@ class Data_LG(SurroundBaseDataset):
 
         ############################################# 🥭 最终返回结果 🥭 #############################################
         data_new = DatasetOutput(
-            conversation=conversation_all,                           # 完整的对话内容,包含问题和答案 
-            answer=conversation_answer,                              # 只包含答案的对话内容
+            conversation=conversation_all,                           # 完整多模态对话列表，包含user提示与assistant监督答案
+            answer=conversation_answer,                              # 仅包含assistant监督答案的对话列表
 
-            image_ff=data["rgb"],                                    # 当前帧的图像(T,C,H,W),裁减掉了图像底部包含自车引擎盖的部分(并进行了图像本身的随机增强,高斯模糊、噪声等)
-            image_ff_org_size=data["rgb_org_size"],                  # 当前帧的图像(T,C,H,W),是数字,并未进行裁减,是原始图像(并进行了图像本身的随机增强,高斯模糊、噪声等)
+            image_ff=data["rgb"],                                    # 裁剪底部后的前视图像数组[T,C,H,W]；训练阶段且开启时应用光度增强
+            image_ff_org_size=data["rgb_org_size"],                  # 保留原始尺寸、未裁剪的前视图像数组[T,C,H,W]；与image_ff使用相同光度增强结果
 
-            waypoints=waypoints,                                     # 自车未来位置waypoints
-            waypoints_1d=waypoints_1d,                               # 1d 形式的自车未来位置waypoints
-            path=path,                                               # 参考路径
+            waypoints=waypoints,                                     # 最终用于监督的未来轨迹[F,2]；默认来自LG重规划轨迹，关闭lg_use_waypoints时使用专家轨迹
+            waypoints_1d=waypoints_1d,                               # 累计轨迹长度表示[F,2]，每个点为[从原点累计行驶距离,0]
+            path=path,                                               # 等距采样后的参考路径[N,2]；默认来自LG标签，关闭lg_use_waypoints时使用专家参考路径
 
-            target_points=data["target_points"],                     # 当前target point和下一个target point的组合  [[x_0,y_0], [x_1,y_1]],这里的[[x_0,y_0], [x_1,y_1]]是在自车坐标系下的位置(无几何增强)
-            
-            speed=data["speed"],                                     # 当前帧车速
-            placeholder_values=placeholder_values,                   # { '<TARGET_POINT>': [[x_0, y_0], [x_1, y_1]] }
-            measurement_path=data["measurement_path"],               #  当前帧 .json.gz 的路径
+            target_points=data["target_points"],                     # 当前与下一导航点组成的[[x0,y0],[x1,y1]]，位于自车坐标系且无几何增强
+            speed=data["speed"],                                     # 当前帧自车速度，单位m/s
+            placeholder_values=placeholder_values,                   # 语言占位符取值：{"<TARGET_POINT>":[[x0,y0],[x1,y1]]}
+            measurement_path=data["measurement_path"],               # 当前帧measurement .json.gz文件路径
 
             dataset="driving",
 
-            image_surround=data["rgb_surround"],                     # 裁减底部之后的六视角图像.jpg文件路径
-            image_surround_org_size=(data["rgb_surround_org_size"]), # 未裁减的原始的六视角图像.jpg文件路径
-            camera_order=data["camera_order"],                       # 相机顺序
+            image_surround=data["rgb_surround"],                     # 裁剪底部后的六视角RGB图像数组[T,V,C,H,W]；训练阶段且开启时应用同步光度增强
+            image_surround_org_size=data["rgb_surround_org_size"],   # 保留原始尺寸、未裁剪的六视角RGB图像数组[T,V,C,H,W]
+            camera_order=data["camera_order"],                       # 六视角顺序：(front,front_left,front_right,rear,rear_left,rear_right)
 
-            camera_attention_target=(participant_spatial_target),    # [6,64]的软标签
-            camera_attention_valid=(participant_spatial_valid),      # 对应的是否有效
+            camera_attention_target=participant_spatial_target,      # 主要关键参与者的六视角视觉token空间软目标[6,64]；有效时全局权重和为1
+            camera_attention_valid=participant_spatial_valid,        # 当前样本是否存在可用的主要关键参与者空间监督
 
-            future_interaction_grid=(future_interaction_grid),       # 4通道结构化世界标签内容
-            future_interaction_valid=(future_interaction_valid),     # 对应的是否有效
+            future_interaction_grid=future_interaction_grid,         # 四通道结构化未来世界监督[4,H,W]；未启用时为None
+            future_interaction_valid=future_interaction_valid,       # 当前结构化未来世界监督是否有效
         )
 
         # 是否可视化
