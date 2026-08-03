@@ -13,11 +13,11 @@ driving_dataset:
   _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
   # 普通Driving结构化未来世界监督开关。
-  driving_use_future_interaction_grid: true
-  driving_future_interaction_grid_folder: driving_future_interaction_grids
+  driving_use_future_interaction_grid: true    # 使用四通道结构化世界标签
+  driving_future_interaction_grid_folder: driving_future_interaction_grids  # driving数据对应的四通道结构化世界标签的存放文件夹名称
 
-  # 普通Driving主要关键参与者视觉token级空间监督。
-  driving_use_participant_spatial_attention_supervision: true
+  # 普通Driving主要关键参与者视觉token级空间监督
+  driving_use_participant_spatial_attention_supervision: true  # 使用[6,64]软标签监督
   driving_participant_attention_label_folder: driving_expert_conditioned_actor_selection
 
 # Keep the ordinary SimLingo driving source and bucket proportions unchanged.
@@ -58,8 +58,8 @@ dreamer_dataset:
   # 是否读取主要关键参与者六视角空间投影并生成6×64视觉token监督
   lg_use_participant_spatial_attention_supervision: true
 
-  # 读取对象移除后重新规划得到的真实反事实waypoints。
-  lg_use_counterfactual_supervision: true
+  # 读取对象移除后重新规划得到的真实反事实waypoints
+  lg_use_counterfactual_supervision: true   # 是否使用反事实监督
   lg_counterfactual_min_effect_m: 0.03
 
   lg_use_language: true  # 是否使用lg语言描述

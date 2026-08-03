@@ -19,31 +19,36 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     qa_templates: Optional[Tuple[str, str]] = None
     eval_infos: Optional[Dict] = None
 
-    # Common six-view visual input used by ordinary driving and LG data.
-    # Defaults preserve compatibility with unrelated auxiliary datasets.
+
+
+
+    ########################################## 新增标签 ##########################################
+
+    # 1. 六视角图像输入(driving + lg)
     image_surround: Optional[Tensor] = None
     image_surround_org_size: Optional[Tensor] = None
     camera_order: Optional[Tuple[str, ...]] = None
 
-    # 第一阶段兼容字段：实际保存主要关键参与者的[6,64]视觉token空间目标。
+    # 2. 主要关键参与者的[6,64]视觉token空间注意力监督(driving + lg) 算是一种中间表示,不破坏driving数据的原始分布
     camera_attention_target: Optional[Tensor] = None
     camera_attention_valid: Optional[bool] = None
 
-    #修改20260726：LG单样本的结构化未来世界监督。
+    # 3. LG单样本的结构化未来世界监督(driving + lg) 算是一种中间表示,不破坏driving数据的原始分布
     future_interaction_grid: Optional[Tensor] = None
     future_interaction_valid: Optional[bool] = None
 
-    # 反事实对象移除后的真实重规划轨迹监督。
+    # 4. 反事实对象移除后的真实重规划轨迹监督(仅lg)
     counterfactual_waypoints: Optional[List[Tuple[float, float]]] = None
     counterfactual_waypoints_valid: Optional[bool] = None
     counterfactual_causal_score: Optional[float] = None
     counterfactual_conversation: Optional[list] = None
 
+    ########################################## 新增标签 ##########################################
 
 class LanguageLabel(NamedTuple):
-    phrase_ids: Tensor  # [B, max(len(tokens))] int64
-    phrase_valid: Tensor  # [B, max(len(tokens))] bool, valid, true => is fed into model
-    phrase_mask: Tensor  # [B, max(len(tokens))] bool, mask, true => takes part in loss
+    phrase_ids: Tensor       # [B, max(len(tokens))] int64
+    phrase_valid: Tensor     # [B, max(len(tokens))] bool, valid, true => is fed into model
+    phrase_mask: Tensor      # [B, max(len(tokens))] bool, mask, true => takes part in loss
     placeholder_values: list
     language_string: list
     loss_masking: Tensor

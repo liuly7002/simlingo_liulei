@@ -43,7 +43,7 @@ class Data_LG(SurroundBaseDataset):
         base_cfg = dict(cfg)
         base_cfg["use_qa"] = False                 # lg 不使用 QA
         base_cfg["use_commentary"] = False         # lg 不使用 commentary
-        base_cfg["img_shift_augmentation"] = False # lg 与普通 Driving 统一使用无几何增强六视角图像。
+        base_cfg["img_shift_augmentation"] = False # lg 与普通 Driving 统一使用无几何增强六视角图像
 
         #修改20260728：启用统一官方route划分后，
         # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑。
@@ -56,13 +56,13 @@ class Data_LG(SurroundBaseDataset):
         # 调用父类构造函数，初始化数据集
         super().__init__(dreamer=False, **base_cfg)
 
-        # lg标签存放的文件夹名称
+        # lg标签存放的文件夹名称,默认"language_grounded_waypoints"
         self.lg_label_folder = str(getattr(self,"lg_label_folder","language_grounded_waypoints",))
 
         # 是否使用结构化未来世界标签
         self.lg_use_future_interaction_grid = bool(getattr( self, "lg_use_future_interaction_grid",False,))
 
-        # 结构化未来世界标签存放的文件夹名称
+        # 结构化未来世界标签存放的文件夹名称,默认"future_interaction_grids"
         self.lg_future_interaction_grid_folder = str(getattr(self,"lg_future_interaction_grid_folder","future_interaction_grids",))
 
         # LG语言问题的键值顺序,必须与生成顺序一致
@@ -79,6 +79,7 @@ class Data_LG(SurroundBaseDataset):
             )
         )
 
+        # 调用成员函数
         self._filter_samples_with_valid_lg_labels()
 
     @staticmethod
@@ -400,26 +401,27 @@ class Data_LG(SurroundBaseDataset):
 
     def _filter_samples_with_valid_lg_labels(self) -> None:
 
-        valid_indices: List[int] = []
-        valid_paths: List[str] = []
+        valid_indices: List[int] = []  # 用于存放在所有样本中有效样本的 index
+        valid_paths: List[str] = []    # 用于存放在所有样本中有效样本的路径 path/to/0026.json.gz path/to/0027.json.gz ...
         reasons = Counter()
 
-        # 统计真正进入当前LG数据集的样本中，
-        # 有效参与者空间注意力监督的数量及无效原因。
-        participant_spatial_valid_count = 0
-        participant_spatial_invalid_reasons = Counter()
+        # 统计真正进入当前 lg 数据集的样本中,有效参与者空间注意力监督的数量及无效原因
+        participant_spatial_valid_count = 0                # 有效样本的数量
+        participant_spatial_invalid_reasons = Counter()    # 无效样本的数量及无效原因
 
+        
+        # 遍历所有样本中的每一个样本
         for index in range(len(self.images)):
 
-            # ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/language_grounded_waypoints/0026.json.gz
+            # lg标签文件路径, label_path = ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/language_grounded_waypoints/0026.json.gz
             label_path = self._lg_path_for_index(index)
-            # 文件缺失
+            # 如果文件缺失
             if not label_path.is_file():
                 reasons["missing_label"] += 1
                 continue
 
             try:
-                # 加载lg标签数据
+                # 加载并解析lg标签数据,payload就为0026.json.gz文件本身了
                 payload = self._load_gzip_json(label_path)
                 # 检查lg标签数据的有效性,如果有效则valid=True,reason=ok,否则为valid=False,reason=无效原因
                 valid, reason = self._validate_payload(payload)
@@ -486,26 +488,27 @@ class Data_LG(SurroundBaseDataset):
             
             setattr(self, attribute, filtered_values)
 
-        # 有效样本的路径
+        # 数据集的所有样本中有效样本的路径集合  path/to/0026.json.gz, path/to/0027.json.gz,path/to/0028.json.gz...
         self.lg_label_paths = np.asarray(valid_paths,dtype=np.string_,)
 
-        # 打印debug信息
+        # 打印debug信息  lg_print_filter_summary在"simlingo_training/config/data_module/carla_bucket_v12_lg.yaml"文件中配置
         if bool(getattr(self,"lg_print_filter_summary",True,)):
 
+            # 含义是：保留了多少有效样本,无效样本的原因及数量是多少
             print(
                 f"[{self.split} LG samples]: kept "
                 f"{len(valid_indices)} samples; "  # 有效样本的数量
                 f"filtered={dict(reasons)}"        # 无效的原因
             )
 
-            # 输出存在主要参与者空间注意力标签的实际覆盖率。
+            # 输出存在主要参与者空间注意力标签的实际覆盖率
             kept_sample_count = len(valid_indices)
             participant_spatial_valid_ratio = (participant_spatial_valid_count / kept_sample_count if kept_sample_count > 0 else 0.0)
 
             # bucket 名
             bucket_name = str(getattr(self,"bucket_name","unknown",))
 
-            # 打印内容
+            # 含义是：有效注意力标签有多少，无效的有多少
             print(
                 f"[{self.split} LG participant spatial attention]"
                 f"[bucket={bucket_name}]: "
@@ -612,6 +615,9 @@ class Data_LG(SurroundBaseDataset):
 
     def __getitem__(self, index):
 
+
+
+
         cv2.setNumThreads(0)  # 禁止opencv多线程
 
 
@@ -674,7 +680,7 @@ class Data_LG(SurroundBaseDataset):
         
 
 
-        ########################################### 🥭 当前帧的车速 🥭 ###########################################
+        ########################################### 🥭 当前帧的车速(来自专家数据,也是lg规划的时候的起始速度) 🥭 ###########################################
 
         # 速度
         speed_rounded = round(current_measurement["speed"],1,)  # 用于 prompt 文本里显示 小数后一位
@@ -683,14 +689,17 @@ class Data_LG(SurroundBaseDataset):
 
 
 
-        ########################################### 🥭 route 🥭###########################################
+        ########################################### 🥭 route(来自专家数据) 🥭###########################################
 
         data = self.load_route(data,current_measurement,aug_translation,aug_rotation,)
+        # data["route"]                 自车坐标系下的参考路径点(一定为20个,每个都是[x,y]两点之间相距1m)(无几何增强)
+        # data["route_adjusted_org"]    自车坐标系下的原始参考路径点(40个,每个都是[x,y]两点之间相距1m)(无几何增强)
+        # data["route_adjusted"]        自车坐标系下的原始参考路径点(40个,每个都是[x,y]两点之间相距1m)(无几何增强)
 
 
 
 
-        ########################################### 🥭 target point 🥭 ###########################################
+        ########################################### 🥭 target point(来自专家数据) 🥭 ###########################################
 
         target_point = np.asarray(current_measurement["target_point"],dtype=np.float32,)
         target_point = self.augment_target_point(target_point,y_augmentation=aug_translation,yaw_augmentation=aug_rotation,)
@@ -701,9 +710,11 @@ class Data_LG(SurroundBaseDataset):
 
 
 
-        ########################################### 🥭 next target point 🥭 ###########################################
+        ########################################### 🥭 next target point(来自专家数据) 🥭 ###########################################
+        
         next_target_point = np.asarray(current_measurement["target_point_next"],dtype=np.float32,)
         next_target_point = self.augment_target_point(next_target_point,y_augmentation=aug_translation,yaw_augmentation=aug_rotation,)
+        
         # "next_target_point": [19.703241532357737,-43.26213909836339]
 
 
@@ -711,6 +722,7 @@ class Data_LG(SurroundBaseDataset):
 
 
         ########################################### 🥭 target_options, placeholder_values 🥭 ###########################################
+        
         target_options, placeholder_values = (self.get_navigational_conditioning(data,current_measurement,target_point,next_target_point,))
 
         """
@@ -746,6 +758,7 @@ class Data_LG(SurroundBaseDataset):
 
 
         ########################################### 🥭 当前帧的四通道结构化未来世界标签 🥭 ###########################################
+       
         future_interaction_grid = None
         future_interaction_valid = False
 
@@ -759,6 +772,11 @@ class Data_LG(SurroundBaseDataset):
             # future_interaction_grid 为4通道结构化世界标签内容
             # future_interaction_valid 为是都有效
             future_interaction_grid, future_interaction_valid = self._load_future_interaction_grid(future_interaction_path)
+
+
+
+
+        ########################################### 🥭 当前帧的六视角注意力标签 🥭 ###########################################
 
         # 读取并检查六视角注意力监督标签
         # 如果六视角注意力监督标签有效,那么_participant_spatial_target是一个[6,64]的数组,表示六个相机的注意力权重,并且权重和为1,participant_spatial_valid=True
@@ -786,7 +804,7 @@ class Data_LG(SurroundBaseDataset):
             waypoints = np.asarray(data["waypoints_org"], dtype=np.float32,)
             
             # 参考路径 (这是专家的,无几何增强)
-            path = np.asarray(data["route_adjusted_org"],dtype=np.float32,)
+            path = np.asarray(data["route_adjusted"],dtype=np.float32,)
 
         # 1d 形式的自车未来的 waypoints
         waypoints_1d = self._compute_waypoints_1d(waypoints)
@@ -799,7 +817,7 @@ class Data_LG(SurroundBaseDataset):
         # 速度提示
         prefix = f"Current speed: {speed_rounded} m/s."
 
-        # 这里的意思是：如果"lg_include_navigation_conditioning = True",那么提示词中的导航信息采用两个导航点的形式
+        # 这里的意思是：如果"lg_include_navigation_conditioning = True", 那么提示词中的导航信息采用两个导航点的形式
         if (bool(getattr(self,"lg_include_navigation_conditioning",True,)) and len(target_options) > 0):
 
             # 导航提示
@@ -860,8 +878,6 @@ class Data_LG(SurroundBaseDataset):
                         "type": "text",
                         "text": prompt,
                     },
-                    # Keep one image placeholder until datamodule.py is changed
-                    # to expand six views into visual tokens.
                     {"type": "image"},
                 ],
             },
@@ -880,6 +896,7 @@ class Data_LG(SurroundBaseDataset):
 
 
         ############################################# 🥭 最终返回结果 🥭 #############################################
+        
         data_new = DatasetOutput(
             conversation=conversation_all,                           # 完整多模态对话列表，包含user提示与assistant监督答案
             answer=conversation_answer,                              # 仅包含assistant监督答案的对话列表

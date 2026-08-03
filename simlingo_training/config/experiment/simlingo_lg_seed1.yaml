@@ -27,6 +27,23 @@ model:
   actor_attention_overlap_margin: 0.35
   actor_token_cosine_margin: 0.30
 
+  # 对主要因果参与者视觉token执行对象移除干预，并进行第二次联合前向。
+  use_counterfactual_intervention_training: true
+  counterfactual_intervention_probability: 1.0
+  counterfactual_intervention_strength: 1.0
+  counterfactual_intervention_mask_gamma: 0.5
+  counterfactual_language_min_change: 0.02
+
+  # 反事实视觉、语言、动作和未来世界损失权重。
+  counterfactual_visual_suppression_loss_weight: 0.05
+  counterfactual_language_supervision_loss_weight: 0.10
+  counterfactual_language_consistency_loss_weight: 0.05
+  counterfactual_action_target_loss_weight: 0.10
+  counterfactual_action_effect_loss_weight: 0.10
+  counterfactual_route_invariance_loss_weight: 0.05
+  counterfactual_world_primary_removal_loss_weight: 0.05
+  counterfactual_world_invariance_loss_weight: 0.02
+
   # 主要关键参与者六视角视觉token级空间监督。
   use_participant_spatial_attention_supervision: true
   participant_spatial_attention_loss_weight: 0.05
@@ -70,8 +87,8 @@ data_module:
 
   base_dataset:
 
-    data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置
-    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置
+    data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
     
     pred_len: 11              
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
@@ -110,7 +127,7 @@ val_every_n_epochs: 2   # 每2轮训练验证一次
 
 gpus: 1
 seed: 9876
-name: interaction_grounded_stage2
+name: interaction_grounded_counterfactual
 resume: false
 
 # Local validation records are saved under the current Hydra run directory.
