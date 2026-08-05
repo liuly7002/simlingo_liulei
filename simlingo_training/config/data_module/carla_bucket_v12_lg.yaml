@@ -1,26 +1,22 @@
+#################################################
+
+######       数据集加载的时候的相关配置        ######
+
+#################################################
+
+
 defaults:
   - driving
 
-# Use the interaction-aware collate path while retaining the original
-# DataModule setup, sampler and loader behavior.
+
+
+
 _target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataModule
 
-# Use SimLingo's original Data_Driving implementation for training, while
-# replacing only validation prompts with a deterministic waypoint task.
-driving_dataset:
 
-  # driving 数据集相关的内容在 dataset_driving_surround.py 中实现 
-  _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
-  # 普通Driving结构化未来世界监督开关。
-  driving_use_future_interaction_grid: true    # 使用四通道结构化世界标签
-  driving_future_interaction_grid_folder: driving_future_interaction_grids  # driving数据对应的四通道结构化世界标签的存放文件夹名称
 
-  # 普通Driving主要关键参与者视觉token级空间监督
-  driving_use_participant_spatial_attention_supervision: true  # 使用[6,64]软标签监督
-  driving_participant_attention_label_folder: driving_expert_conditioned_actor_selection
 
-# Keep the ordinary SimLingo driving source and bucket proportions unchanged.
 train_partitions:
   all: 0.082
   acceleration_negative_5: 0.03
@@ -36,11 +32,32 @@ train_partitions:
   leading_object_traffic.stop: 0.07
   changed_route: 0.08
 
-# Reuse the original auxiliary/Dreamer sampling slot. DataModule therefore
-# retains its original 50% driving + 50% auxiliary sampling behavior.
+
+
+
 train_partitions_dreamer:
   all: 1.0
 
+
+
+
+############################################### 普通driving数据集相关的配置 ###############################################
+driving_dataset:
+
+  # driving 数据集相关的内容在 dataset_driving_surround.py 中实现 
+  _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
+
+  # 普通Driving结构化未来世界监督开关
+  driving_use_future_interaction_grid: true                                 # 是否使用四通道结构化世界标签
+  driving_future_interaction_grid_folder: driving_future_interaction_grids  # driving数据对应的四通道结构化世界标签的存放文件夹名称
+
+  # 普通Driving主要关键参与者视觉token级空间监督
+  driving_use_participant_spatial_attention_supervision: true                             # 是否使用[6,64]软标签监督
+  driving_participant_attention_label_folder: driving_expert_conditioned_actor_selection  # [6,64]软标签监督存放文件夹名称
+
+
+
+############################################### lg数据集相关的配置 ###############################################
 dreamer_dataset:
 
   # lg 数据集相关的内容在 dataset_lg_counterfactual.py 中实现

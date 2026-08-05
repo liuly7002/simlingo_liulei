@@ -1,8 +1,6 @@
-# Standard library imports
 import itertools
 from typing import List
 
-# Third-party imports
 import hydra
 import line_profiler
 import numpy as np
@@ -11,9 +9,6 @@ from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor
 
-# Local/project specific imports
-# from simlingo_training.dataloader.dataset_driving import Data_Driving # is called directly by hydra.utils.instantiate, keeping here to make it easier to find
-# from simlingo_training.dataloader.dataset_dreamer import Data_Dreamer # is called directly by hydra.utils.instantiate, keeping here to make it easier to find
 from simlingo_training.utils.custom_types import DrivingExample, DrivingInput, DrivingLabel, LanguageLabel
 from simlingo_training.utils.internvl2_utils import preprocess_image_batch, get_custom_chat_template, get_num_image_tokens_per_patch
 from simlingo_training.utils.projection import get_camera_intrinsics, get_camera_extrinsics
@@ -29,8 +24,10 @@ class DataModule(LightningDataModule):
 
     def __init__(self,base_dataset,processor,predict=False,**cfg,):
 
+        # 调用父类的__init__()函数
         super().__init__()
 
+        # 将配置文件加载为类成员
         for key, value in cfg.items():
             setattr(self, key, value)
             
@@ -44,12 +41,12 @@ class DataModule(LightningDataModule):
         
         self.printed = False
 
-        self.NUM_CAMERAS = 6   # 相机数量(前、左前、右前、后、左后、右后)
-        self.NUM_IMAGE_PATCHES = 2             # 一张原始输入图像会被拆成2个patch
-        self.IMAGES_TO_CONSIDER = ['image_surround'] # 六视角图像，顺序由DatasetOutput.camera_order固定
-        self.NUM_IMAGE_PATCHES_TOTAL = self.NUM_CAMERAS * self.NUM_IMAGE_PATCHES  # 总计12=2x6个patch
+        self.NUM_CAMERAS = 6                          # 相机数量(前、左前、右前、后、左后、右后)
+        self.NUM_IMAGE_PATCHES = 2                    # 一张原始输入图像会被拆成 2 个 patch
+        self.IMAGES_TO_CONSIDER = ['image_surround']  # 六视角图像，顺序由DatasetOutput.camera_order固定
+        self.NUM_IMAGE_PATCHES_TOTAL = self.NUM_CAMERAS * self.NUM_IMAGE_PATCHES  # 总计 12=2x6 个 patch
 
-        # 每个原始视觉patch包含256个token，池化后保留32个token。
+        # 每个原始视觉patch包含256个token，池化后保留32(H:4 W:8)个token。
         # 因此每个相机保留2×32=64个token，六个相机共384个token。
         self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL = 32
 
@@ -69,10 +66,10 @@ class DataModule(LightningDataModule):
         ######################################## 🥬 图像 tokens 🥬 ########################################
 
         self.num_image_tokens_per_patch = get_num_image_tokens_per_patch(self.encoder_variant)  # self.encoder_variant=OpenGVLab/InternVL2-1B
-        # self.num_image_tokens_total = self.num_image_tokens_per_patch * self.NUM_IMAGE_PATCHES_TOTAL
-        self.num_image_tokens_total = (self.NUM_IMAGE_PATCHES_TOTAL * self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL)  # 384
+        
+        self.num_image_tokens_total = (self.NUM_IMAGE_PATCHES_TOTAL * self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL)  # 384个token
             
-        #
+        # 加载 tokenizer
         if 'tokenizer' in self.processor.__dict__:
             self.tokenizer = self.processor.tokenizer
         else:
@@ -84,6 +81,7 @@ class DataModule(LightningDataModule):
         self.tokenizer.padding_side = "left"  # padding 加在左边，而不是右边。
 
     def setup(self, stage=None):  
+
         # setup() 是 PyTorch Lightning 在训练、验证或预测前调用的数据准备函数
         # stage表示当前运行阶段 Lightning 会传入不同的值：fit-训练 validate-验证 test-测试 predict-推理
         # 但是当前函数内部并没有真正使用 stage，而是通过 self.predict 判断当前要构建训练、验证数据，而不是预测数据
@@ -342,7 +340,7 @@ class DataModule(LightningDataModule):
             # shuffle=True, # we use custom sampler instead
             num_workers=self.num_workers,
             drop_last=True,
-            collate_fn=self.dl_collate_fn,
+            collate_fn=self.dl_collate_fn,                      # ⚠️ 重点
             sampler=self.sampler_train,
             pin_memory=True,
         )
@@ -354,7 +352,7 @@ class DataModule(LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             drop_last=True,
-            collate_fn=self.dl_collate_fn,
+            collate_fn=self.dl_collate_fn,                      # ⚠️ 重点
             pin_memory=True,
         )
 
@@ -365,7 +363,7 @@ class DataModule(LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             drop_last=True,
-            collate_fn=self.dl_collate_fn,
+            collate_fn=self.dl_collate_fn,                      # ⚠️ 重点
             pin_memory=True,
         )
 
@@ -383,19 +381,14 @@ class DataModule(LightningDataModule):
         
         
         
-        
-        BS = len(data)  # 这里就是取 batch size, 比如说此时 batch size=4 那么 BS=4, data=[sample1, sample2, sample3, sample4]
-        grid_nums = [self.NUM_IMAGE_PATCHES] # we split the front forward into two patches (1x2)
-        # 为什么写成列表？
-            # 因为代码是按 self.IMAGES_TO_CONSIDER 循环处理图像的.
-            # 虽然当前只支持 ['image_ff'] 一种图像，但simlingo作者把接口写成了多图像输入可扩展的形式。
-            # 也就是说：
-            # 第 1 种图像对应一个 patch 数
-            # 第 2 种图像也可以对应另一个 patch 数
-            # 只是现在只有前视图一种。
-        
-        
-        
+        # batch size
+        BS = len(data)
+
+
+
+
+        # 每张图像会被分为2个patch
+        grid_nums = [self.NUM_IMAGE_PATCHES]
         
         
         
@@ -417,27 +410,31 @@ class DataModule(LightningDataModule):
         
         ################################################### 🦺 1.图像预处理 🦺 ###################################################
 
-        # 实际上当前只循环一次,indx=0,img_to_consider= 'image_ff',因为 self.IMAGES_TO_CONSIDER 里只有 'image_ff' 这一种图像. self.IMAGES_TO_CONSIDER=['image_ff']
-        # 写成循环的原因仍然是:为了以后支持多路相机
         for idx, img_to_consider in enumerate(self.IMAGES_TO_CONSIDER):
+            # idx = 0, img_to_consider = image_surround 
             
             
-            # img_tmp是经过裁减之后的前视图像,就是将image_ff_org的图像的底部包含自车引擎盖的那部分裁减掉了
-            img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_ff  也就是从 batch 第一个样本里取出前视图图像
+            # 获取裁减底部后的六视角图像 [T,V,C,H,W]
+            img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_surround  也就是从 batch 第一个样本里取出六视角图像
 
+            # 如果考虑的是六视角图像
             if img_to_consider == 'image_surround':
                 T, V, C, H, W = img_tmp.shape
+
+                # 安全性检查,检查视角数量是否为6个
                 assert V == self.NUM_CAMERAS, f"Expected {self.NUM_CAMERAS} camera views, received {V}"
+                
+                # 安全性检查,检查相机顺序是否满足要求
                 camera_order = tuple(data[0].camera_order)
-                assert len(camera_order) == self.NUM_CAMERAS, (
-                    f"Expected {self.NUM_CAMERAS} camera names, received {len(camera_order)}"
-                )
+                assert len(camera_order) == self.NUM_CAMERAS, (f"Expected {self.NUM_CAMERAS} camera names, received {len(camera_order)}")
                 for sample in data:
                     assert tuple(sample.camera_order) == camera_order, "Camera order mismatch inside the batch"
+            # 如果只考虑前视图像
             else:
-                T, C, H, W = img_tmp.shape                  # img_tmp 的 shape 是 [T, C, H, W] 也就是说每个样本的这一种图像是一个有 T 帧的图像序列. 例如 T=4 就是4帧图像(但是当前只支持一帧图像). C=3 是通道数,H和W是图像尺寸.
+                T, C, H, W = img_tmp.shape
                 V = 1
 
+            # 安全性检查,时间步是1
             assert T == 1, "Only one timestep as input supported"
             
             # 对于当前 batch 中每个样本：
@@ -450,7 +447,7 @@ class DataModule(LightningDataModule):
             images_batch_tensor = torch.tensor(np.asarray([getattr(data[i], img_to_consider) if getattr(data[i], img_to_consider) is not None else np.zeros_like(img_tmp) for i in range(len(data))])).float()
             images_batch_tensor = images_batch_tensor.view(BS*T*V, C, H, W)  # 六视角时把 [BS,T,V,C,H,W] 变成 [BS*T*V,C,H,W]
             
-            images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，每一个元素的形状是 [C,H,W], 一共有BS*T个元素.
+            images_batch_list = list(images_batch_tensor)  # list 中每个元素是一张图像，每一个元素的形状是 [C,H,W], 一共有BS*T*V个元素.
             # print(f"images batch list 0: {images_batch_list[0]}")
             # images batch list 0: tensor([[[ 5., 20.,  7.,  ...,  0., 16.,  4.],
                                         #  [ 7.,  6.,  0.,  ...,  4., 15., 19.],
@@ -477,22 +474,31 @@ class DataModule(LightningDataModule):
                                         #  [21., 17.,  8.,  ...,  4.,  3.,  0.]]])
 
 
-            # 根据视觉编码器类型做图像预处理
+            # 将 images_batch_list 中的每一张图像且分为 patch
             if 'internvl2' in self.encoder_variant.lower():  # OpenGVLab/InternVL2-1B 转小写 包含 internvl2
-                # get image patches
                 images_processed = preprocess_image_batch(images_batch_list, input_size=448, use_global_img=self.use_global_img, max_num_grid=grid_nums[idx])    
             else:
                 raise ValueError(f"Image preprocessing for {self.encoder_variant} not implemented")
                 
-            images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
-            image_sizes = images_processed['image_sizes']    # 当前帧图像的尺寸信息 形状为 [BS*T, 2]，每行是一个 [原图高度 H, 原图宽度 W]
+            images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T*V, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
+            image_sizes = images_processed['image_sizes']    # 当前帧图像的尺寸信息 形状为 [BS*T*V, 2]，每行是一个 [原图高度 H, 原图宽度 W]
             
+            
+            
+            
+            # 安全性检查
             assert images_pixel.shape[0] == BS * T * V   # 检查预处理后第一维是否仍然和输入图像数一致,也就是确保没有多图少图
+            
+            # 安全性检查
             num_patches = images_pixel.shape[1]      # 取出每张图像被切成多少个 patch
             assert num_patches == self.NUM_IMAGE_PATCHES
+            
+            # 安全性检查
             assert images_pixel.shape[2] == C        # 检查通道数有没有变
-            new_height = images_pixel.shape[3]       # 取patch高度
-            new_width = images_pixel.shape[4]        # 取patch宽度
+            
+            # 整形 resize
+            new_height = images_pixel.shape[3]       # 取patch高度  448
+            new_width = images_pixel.shape[4]        # 取patch宽度  448
             images_pixel = images_pixel.view(BS, T, V, num_patches, C, new_height, new_width)
             images_pixel = images_pixel.view(BS, T, V * num_patches, C, new_height, new_width)  # 六视角按固定顺序展开为 [BS,T,12,C,H,W]
             # images_pixel 就是 DrivingInput.camera_images 的标准格式
@@ -584,21 +590,21 @@ class DataModule(LightningDataModule):
 
 
         prompt_languagelabel = LanguageLabel(
-            phrase_ids=conversation_dict['phrase_ids'],           # token ids，也就是 tokenizer 编码后的整数序列
-            phrase_valid=conversation_dict['phrase_valid'],       # 标记哪些 token 不是padding的
-            phrase_mask=conversation_dict['phrase_mask'],         # 标记哪些 token 不是padding的(同phrase_valid)
+            phrase_ids=conversation_dict['phrase_ids'],           # token id
+            phrase_valid=conversation_dict['phrase_valid'],       # 标记哪些 token 不是 padding 的
+            phrase_mask=conversation_dict['phrase_mask'],         # 标记哪些 token 不是 padding 的 (同phrase_valid)
             placeholder_values=placeholder_batch_list,            # {151662:[[16.18833904, -1.86136625],[72.12040229, -4.63741635]]}
             language_string=conversation_dict['language_string'], # 原始文本字符串(包括问题和答案)
             loss_masking=conversation_dict['loss_masking'],       # 当前language_string里哪些位置需要计算loss
         )
 
         prompt_question_languagelabel = LanguageLabel(
-            phrase_ids=question_dict['phrase_ids'],
-            phrase_valid=question_dict['phrase_valid'],
-            phrase_mask=question_dict['phrase_mask'],
+            phrase_ids=question_dict['phrase_ids'],               # token id
+            phrase_valid=question_dict['phrase_valid'],           # 标记哪些 token 不是 padding 的
+            phrase_mask=question_dict['phrase_mask'],             # 标记哪些 token 不是 padding 的 (同phrase_valid)
             placeholder_values=placeholder_batch_list,            # {151662: [[16.18833904, -1.86136625],[72.12040229, -4.63741635]]}
-            language_string=question_dict['language_string'],     #
-            loss_masking=question_dict['loss_masking'],
+            language_string=question_dict['language_string'],     # 原始文本字符串(仅包括问题)
+            loss_masking=question_dict['loss_masking'],           # 当前 language_string 里哪些位置需要计算loss
         )
 
         # 从当前batch中的每个样本中抽出文本答案
@@ -625,7 +631,7 @@ class DataModule(LightningDataModule):
         # 构造 waypoints 标签 这里的 waypoints 是未来轨迹标签，通常是一个点序列，形状是 [B, F, 2]，其中 F 是未来轨迹点的数量，每个点有 x,y 两个坐标
         if self.base_dataset.use_1d_wps:
             waypoints = torch.tensor(np.asarray([data[i].waypoints_1d for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
-        else:
+        else:  # 执行
             waypoints = torch.tensor(np.asarray([data[i].waypoints for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         
 
@@ -634,53 +640,45 @@ class DataModule(LightningDataModule):
 
         
         
-        #修改20260720：把LG单样本的六视角注意力标签组成batch。
-        # 普通Driving样本和无有效因果actor的LG样本保持valid=False。
-        camera_attention_target = torch.zeros(
-            (BS, self.NUM_CAMERAS),
-            dtype=torch.float32,
-        )
-        camera_attention_valid = torch.zeros(
-            (BS,),
-            dtype=torch.bool,
-        )
+        ################################################### 🦺 单样本的六视角相机级注意力标签 🦺 ###################################################
 
+        """
+        把 batch 中每个样本携带的“六个相机注意力软标签”，整理成统一的 [BS, 6] 张量，同时生成 [BS] 的有效性标记
+        """
+
+        # 初始化六个视角的相机级的注意力 [0,0,0,0,0,0] 表示当前应该更关注哪个相机
+        camera_attention_target = torch.zeros((BS, self.NUM_CAMERAS),dtype=torch.float32,)
+
+        # 表示当前样本有无可靠的相机注意力监督(因为并不是每个 LG 样本都能找到经过验证的因果对象，也就不一定能生成可靠的六相机注意力标签。不能简单地把无效样本的全零标签拿去训练，否则模型会被错误监督为“六个相机都不要关注”)
+        camera_attention_valid = torch.zeros((BS,),dtype=torch.bool,)
+
+        # 遍历batch中的每一个样本
         for sample_index, sample in enumerate(data):
-            sample_valid = getattr(
-                sample,
-                "camera_attention_valid",
-                None,
-            )
+
+            # 当前样本有无可靠的相机注意力监督
+            sample_valid = getattr(sample,"camera_attention_valid",None,)
             if not bool(sample_valid):
                 continue
 
-            sample_target = np.asarray(
-                getattr(
-                    sample,
-                    "camera_attention_target",
-                    None,
-                ),
-                dtype=np.float32,
-            )
+            # [6,] 读取当前六相机注意力标签
+            sample_target = np.asarray(getattr(sample,"camera_attention_target",None,),dtype=np.float32,)
 
-            if sample_target.shape != (
-                self.NUM_CAMERAS,
-            ):
+            # 安全性检查
+            if sample_target.shape != (self.NUM_CAMERAS,):
                 raise ValueError(
                     "LG camera_attention_target must have "
                     f"shape ({self.NUM_CAMERAS},), but received "
                     f"{tuple(sample_target.shape)}."
                 )
 
-            if (
-                not np.isfinite(sample_target).all()
-                or np.any(sample_target < 0.0)
-            ):
+            # 安全性检查
+            if (not np.isfinite(sample_target).all() or np.any(sample_target < 0.0)):
                 raise ValueError(
                     "LG camera_attention_target contains "
                     "non-finite or negative values."
                 )
 
+            # 安全性检查
             target_sum = float(sample_target.sum())
             if target_sum <= 0.0:
                 raise ValueError(
@@ -688,38 +686,32 @@ class DataModule(LightningDataModule):
                     "have a positive sum."
                 )
 
-            camera_attention_target[
-                sample_index
-            ] = torch.from_numpy(
-                sample_target / target_sum
-            )
-            camera_attention_valid[
-                sample_index
-            ] = True
+            # 保存归一化结果
+            camera_attention_target[sample_index] = torch.from_numpy(sample_target / target_sum)
+            # 保存有效
+            camera_attention_valid[sample_index] = True
 
-        #修改20260726：把LG单样本的四通道结构化未来世界标签组成batch。
-        # 普通Driving样本或缺少该标签的样本保持valid=False。
+
+
+
+
+
+
+
+        ################################################### 🦺 单样本的四通道结构化未来世界标签 🦺 ###################################################
+
         future_interaction_grid = None
-        future_interaction_valid = torch.zeros(
-            (BS,),
-            dtype=torch.bool,
-        )
+        future_interaction_valid = torch.zeros((BS,),dtype=torch.bool,)
         future_interaction_shape = None
 
         for sample_index, sample in enumerate(data):
-            sample_grid = getattr(
-                sample,
-                "future_interaction_grid",
-                None,
-            )
+            sample_grid = getattr(sample,"future_interaction_grid",None,)
             if sample_grid is None:
                 continue
 
-            sample_grid = np.asarray(
-                sample_grid,
-                dtype=np.float32,
-            )
+            sample_grid = np.asarray(sample_grid,dtype=np.float32,)
 
+            # 安全性检查
             if sample_grid.ndim != 3 or sample_grid.shape[0] != 4:
                 raise ValueError(
                     "LG future_interaction_grid must have shape "
@@ -727,31 +719,24 @@ class DataModule(LightningDataModule):
                     f"{tuple(sample_grid.shape)}."
                 )
 
+            # 安全性检查
             if not np.isfinite(sample_grid).all():
                 raise ValueError(
                     "LG future_interaction_grid contains "
                     "non-finite values."
                 )
 
-            if np.any(sample_grid < 0.0) or np.any(
-                sample_grid > 1.0
-            ):
+            # 安全性检查
+            if np.any(sample_grid < 0.0) or np.any(sample_grid > 1.0):
                 raise ValueError(
                     "LG future_interaction_grid values must "
                     "be within [0, 1]."
                 )
 
             if future_interaction_grid is None:
-                future_interaction_shape = tuple(
-                    sample_grid.shape
-                )
-                future_interaction_grid = torch.zeros(
-                    (BS, *future_interaction_shape),
-                    dtype=torch.float32,
-                )
-            elif tuple(sample_grid.shape) != (
-                future_interaction_shape
-            ):
+                future_interaction_shape = tuple(sample_grid.shape)
+                future_interaction_grid = torch.zeros((BS, *future_interaction_shape),dtype=torch.float32,)
+            elif tuple(sample_grid.shape) != (future_interaction_shape):
                 raise ValueError(
                     "future_interaction_grid shape mismatch "
                     "inside the batch: expected "
@@ -759,19 +744,11 @@ class DataModule(LightningDataModule):
                     f"{tuple(sample_grid.shape)}."
                 )
 
-            future_interaction_grid[
-                sample_index
-            ] = torch.from_numpy(sample_grid)
+            # 保存四通道结构化世界标签
+            future_interaction_grid[sample_index] = torch.from_numpy(sample_grid)
 
-            future_interaction_valid[
-                sample_index
-            ] = bool(
-                getattr(
-                    sample,
-                    "future_interaction_valid",
-                    False,
-                )
-            )
+            # 保存有效性
+            future_interaction_valid[sample_index] = bool(getattr(sample,"future_interaction_valid",False,))
         
         
 
@@ -798,10 +775,10 @@ class DataModule(LightningDataModule):
         ################################################### 🦺 7.最终形态 🦺 ###################################################
 
 
-        # 这是整个函数最重要的结构之一: 模型输入对象
+        # 1. 这是整个函数最重要的结构之一: 模型输入对象
         driving_input=DrivingInput(
-                camera_images=image_ff_pixel,  # [B, T, N, C, H, W] uint8 [0, 255]  这是视觉主输入
-                image_sizes=image_ff_sizes,    # 每个 patch 的尺寸信息
+                camera_images=image_ff_pixel,  # [B, T, V, 3, 448, 448] uint8 [0, 255]  这是视觉主输入
+                image_sizes=image_ff_sizes,    # [12, 2]，每行是一个 [原图高度 H 1024, 原图宽度 W 512裁减底部]
                 camera_intrinsics = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), BS, dim=0).view(BS, 3, 3).float(),  # 相机内参
                 camera_extrinsics = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), BS, dim=0).view(BS, 4, 4).float(),           # 相机外参
                 vehicle_speed=torch.tensor(np.asarray([data[i].speed for i in range(len(data))])).float(),  # [B, S] float32                     速度
@@ -810,47 +787,25 @@ class DataModule(LightningDataModule):
                 prompt_inference=prompt_question_languagelabel,         # 推理用 prompt 包含问题但不包含答案
             )
 
-        # if not self.printed:
-        #     print("========================================")
-        #     print("[Six-view datamodule check]")
-        #     print("camera_images:", driving_input.camera_images.shape)
-        #     print("image_sizes:", driving_input.image_sizes.shape)
-        #     print("camera_intrinsics:", driving_input.camera_intrinsics.shape)
-        #     print("camera_extrinsics:", driving_input.camera_extrinsics.shape)
-        #     print("num_image_tokens_per_patch:", self.num_image_tokens_per_patch)
-        #     print(
-        #         "num_image_tokens_per_patch_after_pool:",
-        #         self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL,
-        #     )
-        #     print("num_image_tokens_total:", self.num_image_tokens_total)
-        #     print("camera_order:", data[0].camera_order)
-        #     print("========================================")
-        #     self.printed = True
 
-        # 整个 batch 的监督信号对象
+        # 2. 整个 batch 的监督信号对象
         driving_label=DrivingLabel(
-                waypoints=waypoints,        # waypoints 未来轨迹监督 [B, F, 2] float32
-                path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # [B, 3, RH, RW] uint8 [0, 255]
+                waypoints=waypoints,        # waypoints 未来轨迹监督 [B, 10, 2] float32
+                path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # [B, 20, 2]
                 answer=answer_label,        # 文本答案监督
-                image_ff_org=image_ff_org,  # 没有经过裁剪的原始图像
+                image_ff_org=image_ff_org,  # 没有经过裁剪的原始前视图像
                 eval_infos=eval_infos,      # 预测模式下的额外评估信息
                 
-                #修改20260720：batch级六视角注意力监督。
-                camera_attention_target=(
-                    camera_attention_target
-                ),
-                camera_attention_valid=(
-                    camera_attention_valid
-                ),
-                #修改20260726：batch级四通道结构化未来世界监督。
-                future_interaction_grid=(
-                    future_interaction_grid
-                ),
-                future_interaction_valid=(
-                    future_interaction_valid
-                ),
+                # 六视角相机级别的注意力权重监督
+                camera_attention_target=(camera_attention_target),
+                camera_attention_valid=(camera_attention_valid),
+                # 四通道结构化未来世界监督
+                future_interaction_grid=(future_interaction_grid),
+                future_interaction_valid=(future_interaction_valid),
             )
             
+        
+        # 3. 整合 1 和 2 然后组成新的数据形式并返回
         return DrivingExample(
             driving_input=driving_input,  # 把刚才整理好的"模型输入"塞进去
             driving_label=driving_label,  # 把刚才整理好的"监督标签"塞进去
@@ -858,9 +813,11 @@ class DataModule(LightningDataModule):
             qa_templates=qa_templates,    # 保留预测模式下的问题模板信息
         )
 
+    # 没有用
     def dl_collate_fn_val(self, data):
         pass
 
+    # 没有用
     def dl_collate_fn_test(self, data):
         pass
 

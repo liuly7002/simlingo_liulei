@@ -570,12 +570,7 @@ def get_custom_chat_template(conversations: List[Dict], tokenizer, encoder_varia
 
 
 
-def preprocess_image_batch(
-        images_batch_list, 
-        input_size=448, 
-        use_global_img=False, 
-        max_num_grid=2
-    ):
+def preprocess_image_batch(images_batch_list, input_size=448, use_global_img=False, max_num_grid=2):
     """
     把一个 batch 的原始图像列表，转换成视觉编码器可以直接吃的标准化张量
 
@@ -618,17 +613,20 @@ def preprocess_image_batch(
 
 
 
-    # 开始处理 batch 中的每张图像
+    # 开始处理 batch 中的每张图像, 也就是每一个视角的都处理
     for idx, img in enumerate(images_batch_list):
+
         image_np = img.numpy().astype(np.uint8)        # 把 PyTorch float tensor 变成 NumPy 数组，并强制转成 uint8
         image_np = np.transpose(image_np, (1, 2, 0))   # 调整维度顺序，从 (C, H, W) 变成 (H, W, C)，因为 PIL 处理的图像是 (H, W, C) 格式
         image = Image.fromarray(image_np)              # 变成 PIL 图像
         
         # 📸 把一张大图 → 切成很多小照片(这里是2张)
         images = dynamic_preprocess(image, image_size=input_size, use_thumbnail=use_global_img, max_num=max_num_grid)
+
         pixel_values = [transform(image) for image in images]  # 对每个 patch 做标准变换
         pixel_values = torch.stack(pixel_values)               # 把 patch 堆叠起来, 如果一张图有 2 个 patch，那么这里得到：[2, 3, 448, 448]
-        images_processed_tmp.append(pixel_values)              # 保存这一张原图的处理结果,images_processed_tmp 里每个元素都代表一张原图处理后的 patch 张量
+        
+        images_processed_tmp.append(pixel_values)              # 保存这一视角图像的处理结果,images_processed_tmp 里每个元素都代表一张原图处理后的 patch 张量
         images_sizes_tmp.append([image.size[1], image.size[0]])# 记录当前图像的尺寸信息  [原图高度 H, 原图宽度 W]
     
     images_processed = {
@@ -669,9 +667,10 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
 def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
 
     """
-    将任意尺寸、任意长宽比的图像,切分成若干个固定大小(448x448)的patch,供视觉模型输入使用
+    根据原图的长宽比，自动选择合适的网格布局，把一张图切成若干个固定大小的 448×448 图像块；必要时再增加一张全局缩略图
 
     返回：
+    processed_images = 
         [
         patch1 (448×448),
         patch2 (448×448),
@@ -679,14 +678,32 @@ def dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbna
         patchN (448×448),
         (optional) thumbnail
         ]
+
+    示例：
+        输入图像
+        1024 × 358
+        长宽比约2.86
+                ↓
+        选择最接近的3:1网格
+                ↓
+        缩放为1344 × 448
+                ↓
+        横向切成3块
+                ↓
+        patch 0：左侧448×448
+        patch 1：中间448×448
+        patch 2：右侧448×448
+                ↓
+        若use_thumbnail=True
+        再追加一张全局448×448图
     """
 
 
 
 
 
-    orig_width, orig_height = image.size
-    aspect_ratio = orig_width / orig_height
+    orig_width, orig_height = image.size      # 每张图像原始的宽和高
+    aspect_ratio = orig_width / orig_height   # 宽高比
 
     # calculate the existing image aspect ratio
     target_ratios = set(

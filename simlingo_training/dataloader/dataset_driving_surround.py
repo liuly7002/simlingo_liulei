@@ -30,7 +30,7 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
 
         image_data = {}
 
-        # 六视角图像的.jpg文件目录
+        # 六视角图像的
         self.load_surround_images(image_data,self.surround_images[index],)
 
         future_interaction_grid = None
