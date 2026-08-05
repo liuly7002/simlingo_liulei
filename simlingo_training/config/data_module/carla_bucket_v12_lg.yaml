@@ -11,7 +11,7 @@ defaults:
 
 
 
-_target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataModule
+_target_: simlingo_training.dataloader.datamodule.DataModule
 
 
 

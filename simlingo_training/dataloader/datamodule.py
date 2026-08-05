@@ -1,3 +1,4 @@
+import copy
 import itertools
 from typing import List
 
@@ -12,6 +13,11 @@ from transformers import AutoProcessor
 from simlingo_training.utils.custom_types import DrivingExample, DrivingInput, DrivingLabel, LanguageLabel
 from simlingo_training.utils.internvl2_utils import preprocess_image_batch, get_custom_chat_template, get_num_image_tokens_per_patch
 from simlingo_training.utils.projection import get_camera_intrinsics, get_camera_extrinsics
+
+from simlingo_training.dataloader.participant_spatial_attention import (
+    CAMERA_ORDER,
+    TOKENS_PER_CAMERA,  # 4x8x2=64
+)
 
 def encode_uint8(strings: List[str], common_length: int) -> torch.Tensor:
     max_len = max(len(s) for s in strings)
@@ -79,6 +85,301 @@ class DataModule(LightningDataModule):
         # 给 tokenizer 增加任务专用标记，让语言模型能识别自动驾驶结构化信息。
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
         self.tokenizer.padding_side = "left"  # padding 加在左边，而不是右边。
+
+
+    @staticmethod
+    def _collate_participant_spatial_attention(data):
+        """
+        将单样本的[6,64]参与者空间注意力标签整理为batch。
+
+        返回：
+            spatial_target: [B,6,64]
+            spatial_valid:  [B]
+        """
+
+        batch_size = len(data)
+
+        spatial_target = torch.zeros(
+            (
+                batch_size,
+                len(CAMERA_ORDER),
+                TOKENS_PER_CAMERA,
+            ),
+            dtype=torch.float32,
+        )
+
+        spatial_valid = torch.zeros(
+            (batch_size,),
+            dtype=torch.bool,
+        )
+
+        expected_shape = (
+            len(CAMERA_ORDER),
+            TOKENS_PER_CAMERA,
+        )
+
+        for sample_index, sample in enumerate(data):
+
+            sample_valid = bool(
+                getattr(
+                    sample,
+                    "camera_attention_valid",
+                    False,
+                )
+            )
+
+            sample_target = getattr(
+                sample,
+                "camera_attention_target",
+                None,
+            )
+
+            # 没有标签时使用全零占位；
+            # 是否参与损失由sample_valid决定。
+            if sample_target is None:
+                sample_target_array = np.zeros(
+                    expected_shape,
+                    dtype=np.float32,
+                )
+            else:
+                sample_target_array = np.asarray(
+                    sample_target,
+                    dtype=np.float32,
+                )
+
+            # 当前统一要求单样本标签为[6,64]。
+            if sample_target_array.shape != expected_shape:
+                raise ValueError(
+                    "Participant spatial attention target must have "
+                    f"shape {expected_shape}, but received "
+                    f"{tuple(sample_target_array.shape)}."
+                )
+
+            if (
+                not np.isfinite(sample_target_array).all()
+                or np.any(sample_target_array < 0.0)
+            ):
+                raise ValueError(
+                    "Participant spatial attention target contains "
+                    "non-finite or negative values."
+                )
+
+            if not sample_valid:
+                continue
+
+            target_sum = float(
+                sample_target_array.sum()
+            )
+
+            if target_sum <= 0.0:
+                raise ValueError(
+                    "A valid participant spatial attention target "
+                    "must have a positive probability sum."
+                )
+
+            spatial_target[
+                sample_index
+            ] = torch.from_numpy(
+                sample_target_array / target_sum
+            )
+
+            spatial_valid[
+                sample_index
+            ] = True
+
+        return spatial_target, spatial_valid
+
+    @staticmethod
+    def _collate_counterfactual_waypoints(data,waypoint_shape,):
+        """
+        整理对象移除后的反事实重规划轨迹。
+
+        返回：
+            counterfactual_waypoints:       [B,F,2]
+            counterfactual_waypoints_valid: [B]
+            counterfactual_causal_score:    [B]
+        """
+
+        batch_size = len(data)
+
+        counterfactual_waypoints = torch.zeros(
+            (batch_size, *waypoint_shape),
+            dtype=torch.float32,
+        )
+
+        counterfactual_waypoints_valid = torch.zeros(
+            (batch_size,),
+            dtype=torch.bool,
+        )
+
+        counterfactual_causal_score = torch.zeros(
+            (batch_size,),
+            dtype=torch.float32,
+        )
+
+        for sample_index, sample in enumerate(data):
+
+            sample_valid = bool(
+                getattr(
+                    sample,
+                    "counterfactual_waypoints_valid",
+                    False,
+                )
+            )
+
+            if not sample_valid:
+                continue
+
+            sample_waypoints = np.asarray(
+                getattr(
+                    sample,
+                    "counterfactual_waypoints",
+                    None,
+                ),
+                dtype=np.float32,
+            )
+
+            if sample_waypoints.shape != waypoint_shape:
+                raise ValueError(
+                    "Counterfactual waypoints must have shape "
+                    f"{waypoint_shape}, but received "
+                    f"{tuple(sample_waypoints.shape)}."
+                )
+
+            if not np.isfinite(
+                sample_waypoints
+            ).all():
+                raise ValueError(
+                    "Counterfactual waypoints contain "
+                    "non-finite values."
+                )
+
+            counterfactual_waypoints[
+                sample_index
+            ] = torch.from_numpy(
+                sample_waypoints
+            )
+
+            counterfactual_waypoints_valid[
+                sample_index
+            ] = True
+
+            causal_score = float(
+                getattr(
+                    sample,
+                    "counterfactual_causal_score",
+                    0.0,
+                )
+            )
+
+            if (
+                not np.isfinite(causal_score)
+                or causal_score < 0.0
+            ):
+                raise ValueError(
+                    "counterfactual_causal_score must be "
+                    "finite and non-negative."
+                )
+
+            counterfactual_causal_score[
+                sample_index
+            ] = causal_score
+
+        return (
+            counterfactual_waypoints,
+            counterfactual_waypoints_valid,
+            counterfactual_causal_score,
+        )
+
+    def _build_counterfactual_prompt(self,data,placeholder_values,):
+        """
+        构造独立反事实文本序列。
+
+        有真实反事实语言标签的LG样本使用反事实四问答案；
+        其他样本仅使用中性的Waypoints:前缀。
+        """
+
+        counterfactual_conversations = []
+
+        for sample in data:
+
+            counterfactual_conversation = getattr(
+                sample,
+                "counterfactual_conversation",
+                None,
+            )
+
+            # LG样本存在真实反事实四问文本。
+            if counterfactual_conversation is not None:
+                counterfactual_conversations.append(
+                    copy.deepcopy(
+                        counterfactual_conversation
+                    )
+                )
+                continue
+
+            # 普通Driving或没有反事实语言标签的样本，
+            # 复用原始user问题，但不使用原始assistant答案。
+            user_message = next(
+                (
+                    copy.deepcopy(message)
+                    for message in sample.conversation
+                    if str(
+                        message.get("role", "")
+                    ) == "user"
+                ),
+                None,
+            )
+
+            if user_message is None:
+                raise ValueError(
+                    "A counterfactual prompt requires "
+                    "a user message."
+                )
+
+            counterfactual_conversations.append(
+                [
+                    user_message,
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Waypoints:",
+                            }
+                        ],
+                    },
+                ]
+            )
+
+        counterfactual_dict, _ = (
+            get_custom_chat_template(
+                counterfactual_conversations,
+                self.tokenizer,
+                self.encoder_variant,
+                self.num_image_tokens_total,
+            )
+        )
+
+        return LanguageLabel(
+            phrase_ids=counterfactual_dict[
+                "phrase_ids"
+            ],
+            phrase_valid=counterfactual_dict[
+                "phrase_valid"
+            ],
+            phrase_mask=counterfactual_dict[
+                "phrase_mask"
+            ],
+            placeholder_values=placeholder_values,
+            language_string=counterfactual_dict[
+                "language_string"
+            ],
+            loss_masking=counterfactual_dict[
+                "loss_masking"
+            ],
+        )
+
 
     def setup(self, stage=None):  
 
@@ -619,7 +920,13 @@ class DataModule(LightningDataModule):
         )
         
         
-        
+
+
+
+
+        ################################################### 🦺 独立反事实文本序列 🦺 ###################################################
+
+        counterfactual_prompt = (self._build_counterfactual_prompt(data=data,placeholder_values=(prompt_languagelabel.placeholder_values),))
         
 
 
@@ -638,58 +945,21 @@ class DataModule(LightningDataModule):
 
 
 
+
+        ################################################### 🦺 反事实对象移除后的重规划轨迹 🦺 ###################################################
+
+        waypoint_shape = tuple(waypoints.shape[1:])
+
+        counterfactual_waypoints,counterfactual_waypoints_valid,counterfactual_causal_score = self._collate_counterfactual_waypoints(data=data,waypoint_shape=waypoint_shape,)
+
         
         
-        ################################################### 🦺 单样本的六视角相机级注意力标签 🦺 ###################################################
 
-        """
-        把 batch 中每个样本携带的“六个相机注意力软标签”，整理成统一的 [BS, 6] 张量，同时生成 [BS] 的有效性标记
-        """
 
-        # 初始化六个视角的相机级的注意力 [0,0,0,0,0,0] 表示当前应该更关注哪个相机
-        camera_attention_target = torch.zeros((BS, self.NUM_CAMERAS),dtype=torch.float32,)
 
-        # 表示当前样本有无可靠的相机注意力监督(因为并不是每个 LG 样本都能找到经过验证的因果对象，也就不一定能生成可靠的六相机注意力标签。不能简单地把无效样本的全零标签拿去训练，否则模型会被错误监督为“六个相机都不要关注”)
-        camera_attention_valid = torch.zeros((BS,),dtype=torch.bool,)
+        ################################################### 🦺 参与者视觉token空间注意力监督 🦺 ###################################################
 
-        # 遍历batch中的每一个样本
-        for sample_index, sample in enumerate(data):
-
-            # 当前样本有无可靠的相机注意力监督
-            sample_valid = getattr(sample,"camera_attention_valid",None,)
-            if not bool(sample_valid):
-                continue
-
-            # [6,] 读取当前六相机注意力标签
-            sample_target = np.asarray(getattr(sample,"camera_attention_target",None,),dtype=np.float32,)
-
-            # 安全性检查
-            if sample_target.shape != (self.NUM_CAMERAS,):
-                raise ValueError(
-                    "LG camera_attention_target must have "
-                    f"shape ({self.NUM_CAMERAS},), but received "
-                    f"{tuple(sample_target.shape)}."
-                )
-
-            # 安全性检查
-            if (not np.isfinite(sample_target).all() or np.any(sample_target < 0.0)):
-                raise ValueError(
-                    "LG camera_attention_target contains "
-                    "non-finite or negative values."
-                )
-
-            # 安全性检查
-            target_sum = float(sample_target.sum())
-            if target_sum <= 0.0:
-                raise ValueError(
-                    "Valid LG camera_attention_target must "
-                    "have a positive sum."
-                )
-
-            # 保存归一化结果
-            camera_attention_target[sample_index] = torch.from_numpy(sample_target / target_sum)
-            # 保存有效
-            camera_attention_valid[sample_index] = True
+        camera_attention_target,camera_attention_valid = self._collate_participant_spatial_attention(data)
 
 
 
@@ -785,6 +1055,7 @@ class DataModule(LightningDataModule):
                 target_point=torch.tensor(np.asarray([data[i].target_points for i in range(len(data))])).float(),  # [B, 2] float32              target point
                 prompt=prompt_languagelabel,                            # 训练用 prompt 包含问题和答案
                 prompt_inference=prompt_question_languagelabel,         # 推理用 prompt 包含问题但不包含答案
+                counterfactual_prompt=counterfactual_prompt,            # 反事实 prompt
             )
 
 
@@ -799,9 +1070,16 @@ class DataModule(LightningDataModule):
                 # 六视角相机级别的注意力权重监督
                 camera_attention_target=(camera_attention_target),
                 camera_attention_valid=(camera_attention_valid),
+
                 # 四通道结构化未来世界监督
                 future_interaction_grid=(future_interaction_grid),
                 future_interaction_valid=(future_interaction_valid),
+
+                # [B,10,2]对象移除后的重规划轨迹
+                counterfactual_waypoints=(counterfactual_waypoints),
+                counterfactual_waypoints_valid=(counterfactual_waypoints_valid),
+                # [B]主要参与者反事实因果强度
+                counterfactual_causal_score=(counterfactual_causal_score),
             )
             
         
