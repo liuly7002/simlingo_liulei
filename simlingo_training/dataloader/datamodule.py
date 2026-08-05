@@ -90,64 +90,42 @@ class DataModule(LightningDataModule):
     @staticmethod
     def _collate_participant_spatial_attention(data):
         """
-        将单样本的[6,64]参与者空间注意力标签整理为batch。
+        将单样本的[6,64]参与者空间注意力标签整理为batch
 
         返回：
             spatial_target: [B,6,64]
             spatial_valid:  [B]
         """
 
+        # batch size
         batch_size = len(data)
 
-        spatial_target = torch.zeros(
-            (
-                batch_size,
-                len(CAMERA_ORDER),
-                TOKENS_PER_CAMERA,
-            ),
-            dtype=torch.float32,
-        )
+        # 初始化[BS, 6, 64]的全0监督,用于占位
+        spatial_target = torch.zeros((batch_size,len(CAMERA_ORDER),TOKENS_PER_CAMERA,),dtype=torch.float32,)
 
-        spatial_valid = torch.zeros(
-            (batch_size,),
-            dtype=torch.bool,
-        )
+        # 初始化[BS,]的有效性标志 True表示当前样本是有效监督
+        spatial_valid = torch.zeros((batch_size,),dtype=torch.bool,)
 
-        expected_shape = (
-            len(CAMERA_ORDER),
-            TOKENS_PER_CAMERA,
-        )
+        # 形状 [6, 64]
+        expected_shape = (len(CAMERA_ORDER),TOKENS_PER_CAMERA,)
 
         for sample_index, sample in enumerate(data):
 
-            sample_valid = bool(
-                getattr(
-                    sample,
-                    "camera_attention_valid",
-                    False,
-                )
-            )
+            # 获取有效性标志[1,]
+            sample_valid = bool(getattr(sample,"camera_attention_valid",False,))
 
-            sample_target = getattr(
-                sample,
-                "camera_attention_target",
-                None,
-            )
+            # 获取[6,64]的监督标签
+            sample_target = getattr(sample,"camera_attention_target",None,)
 
-            # 没有标签时使用全零占位；
-            # 是否参与损失由sample_valid决定。
+            # 没有标签时使用全零占位[6,64]
+            # 是否参与损失由sample_valid决定
             if sample_target is None:
-                sample_target_array = np.zeros(
-                    expected_shape,
-                    dtype=np.float32,
-                )
+                sample_target_array = np.zeros(expected_shape,dtype=np.float32,)
+            # 有标签时就写入
             else:
-                sample_target_array = np.asarray(
-                    sample_target,
-                    dtype=np.float32,
-                )
+                sample_target_array = np.asarray(sample_target,dtype=np.float32,)
 
-            # 当前统一要求单样本标签为[6,64]。
+            # 安全性检查,当前统一要求单样本标签为[6,64]
             if sample_target_array.shape != expected_shape:
                 raise ValueError(
                     "Participant spatial attention target must have "
@@ -155,37 +133,32 @@ class DataModule(LightningDataModule):
                     f"{tuple(sample_target_array.shape)}."
                 )
 
-            if (
-                not np.isfinite(sample_target_array).all()
-                or np.any(sample_target_array < 0.0)
-            ):
+            # 安全性检查
+            if (not np.isfinite(sample_target_array).all() or np.any(sample_target_array < 0.0)):
                 raise ValueError(
                     "Participant spatial attention target contains "
                     "non-finite or negative values."
                 )
 
+            # 样本无效 直接下一个样本
             if not sample_valid:
                 continue
 
-            target_sum = float(
-                sample_target_array.sum()
-            )
+            # 六视角求和
+            target_sum = float(sample_target_array.sum())
 
+            # 安全性检查
             if target_sum <= 0.0:
                 raise ValueError(
                     "A valid participant spatial attention target "
                     "must have a positive probability sum."
                 )
 
-            spatial_target[
-                sample_index
-            ] = torch.from_numpy(
-                sample_target_array / target_sum
-            )
+            # 写入,保存 [6,64]
+            spatial_target[sample_index] = torch.from_numpy(sample_target_array / target_sum)
 
-            spatial_valid[
-                sample_index
-            ] = True
+            # 写入,保存 [1]
+            spatial_valid[sample_index] = True
 
         return spatial_target, spatial_valid
 
@@ -200,45 +173,30 @@ class DataModule(LightningDataModule):
             counterfactual_causal_score:    [B]
         """
 
+        # batch size
         batch_size = len(data)
 
-        counterfactual_waypoints = torch.zeros(
-            (batch_size, *waypoint_shape),
-            dtype=torch.float32,
-        )
+        # 初始化全0反事实waypoints [BS,10,2] 用于占位
+        counterfactual_waypoints = torch.zeros((batch_size, *waypoint_shape),dtype=torch.float32,)
 
-        counterfactual_waypoints_valid = torch.zeros(
-            (batch_size,),
-            dtype=torch.bool,
-        )
+        # 初始化有效性 [B,]
+        counterfactual_waypoints_valid = torch.zeros((batch_size,),dtype=torch.bool,)
 
-        counterfactual_causal_score = torch.zeros(
-            (batch_size,),
-            dtype=torch.float32,
-        )
+        # 初始化全0得分 [B,]
+        counterfactual_causal_score = torch.zeros((batch_size,),dtype=torch.float32,)
 
         for sample_index, sample in enumerate(data):
 
-            sample_valid = bool(
-                getattr(
-                    sample,
-                    "counterfactual_waypoints_valid",
-                    False,
-                )
-            )
+            # 有效性 [1,]
+            sample_valid = bool(getattr(sample,"counterfactual_waypoints_valid",False,))
 
             if not sample_valid:
                 continue
 
-            sample_waypoints = np.asarray(
-                getattr(
-                    sample,
-                    "counterfactual_waypoints",
-                    None,
-                ),
-                dtype=np.float32,
-            )
+            # 反事实waypoints [10,2]
+            sample_waypoints = np.asarray(getattr(sample,"counterfactual_waypoints",None,),dtype=np.float32,)
 
+            # 安全性检查
             if sample_waypoints.shape != waypoint_shape:
                 raise ValueError(
                     "Counterfactual waypoints must have shape "
@@ -246,82 +204,61 @@ class DataModule(LightningDataModule):
                     f"{tuple(sample_waypoints.shape)}."
                 )
 
-            if not np.isfinite(
-                sample_waypoints
-            ).all():
+            # 安全性检查
+            if not np.isfinite(sample_waypoints).all():
                 raise ValueError(
                     "Counterfactual waypoints contain "
                     "non-finite values."
                 )
 
-            counterfactual_waypoints[
-                sample_index
-            ] = torch.from_numpy(
-                sample_waypoints
-            )
+            # 写入 保存 [10,2]
+            counterfactual_waypoints[sample_index] = torch.from_numpy(sample_waypoints)
 
-            counterfactual_waypoints_valid[
-                sample_index
-            ] = True
+            # 写入 保存 [1,]
+            counterfactual_waypoints_valid[sample_index] = True
 
-            causal_score = float(
-                getattr(
-                    sample,
-                    "counterfactual_causal_score",
-                    0.0,
-                )
-            )
+            # 得分
+            causal_score = float(getattr(sample,"counterfactual_causal_score",0.0,))
 
-            if (
-                not np.isfinite(causal_score)
-                or causal_score < 0.0
-            ):
+            # 安全性检查
+            if (not np.isfinite(causal_score) or causal_score < 0.0):
                 raise ValueError(
                     "counterfactual_causal_score must be "
                     "finite and non-negative."
                 )
 
-            counterfactual_causal_score[
-                sample_index
-            ] = causal_score
+            # 写入 保存 [1,]
+            counterfactual_causal_score[sample_index] = causal_score
 
         return (
-            counterfactual_waypoints,
-            counterfactual_waypoints_valid,
-            counterfactual_causal_score,
+            counterfactual_waypoints,         # [BS,10,2] 反事实waypoints
+            counterfactual_waypoints_valid,   # [BS]      有效性
+            counterfactual_causal_score,      # [BS]      得分
         )
 
     def _build_counterfactual_prompt(self,data,placeholder_values,):
         """
-        构造独立反事实文本序列。
+        构造独立反事实文本序列
 
-        有真实反事实语言标签的LG样本使用反事实四问答案；
-        其他样本仅使用中性的Waypoints:前缀。
+        有真实反事实语言标签的LG样本使用反事实四问答案
+        其他样本仅使用中性的Waypoints:前缀
         """
 
         counterfactual_conversations = []
 
         for sample in data:
 
-            counterfactual_conversation = getattr(
-                sample,
-                "counterfactual_conversation",
-                None,
-            )
+            # 反事实文本标签
+            counterfactual_conversation = getattr(sample,"counterfactual_conversation",None,)
 
-            # LG样本存在真实反事实四问文本。
+            # LG样本存在真实反事实四问文本
             if counterfactual_conversation is not None:
-                counterfactual_conversations.append(
-                    copy.deepcopy(
-                        counterfactual_conversation
-                    )
-                )
+                counterfactual_conversations.append(copy.deepcopy(counterfactual_conversation))
                 continue
 
             # 普通Driving或没有反事实语言标签的样本，
             # 复用原始user问题，但不使用原始assistant答案。
-            user_message = next(
-                (
+            user_message = next((
                     copy.deepcopy(message)
                     for message in sample.conversation
                     if str(
@@ -331,12 +268,14 @@ class DataModule(LightningDataModule):
                 None,
             )
 
+            # 安全性检查
             if user_message is None:
                 raise ValueError(
                     "A counterfactual prompt requires "
                     "a user message."
                 )
 
+            # 写入 保存
             counterfactual_conversations.append(
                 [
                     user_message,
@@ -352,32 +291,15 @@ class DataModule(LightningDataModule):
                 ]
             )
 
-        counterfactual_dict, _ = (
-            get_custom_chat_template(
-                counterfactual_conversations,
-                self.tokenizer,
-                self.encoder_variant,
-                self.num_image_tokens_total,
-            )
-        )
+        counterfactual_dict, _ = get_custom_chat_template(counterfactual_conversations,self.tokenizer,self.encoder_variant,self.num_image_tokens_total,)
 
         return LanguageLabel(
-            phrase_ids=counterfactual_dict[
-                "phrase_ids"
-            ],
-            phrase_valid=counterfactual_dict[
-                "phrase_valid"
-            ],
-            phrase_mask=counterfactual_dict[
-                "phrase_mask"
-            ],
-            placeholder_values=placeholder_values,
-            language_string=counterfactual_dict[
-                "language_string"
-            ],
-            loss_masking=counterfactual_dict[
-                "loss_masking"
-            ],
+            phrase_ids=counterfactual_dict["phrase_ids"],            # [BS,L] token id 
+            phrase_valid=counterfactual_dict["phrase_valid"],        # [BS,L] 有效性
+            phrase_mask=counterfactual_dict["phrase_mask"],          # [BS,L] 有效性
+            placeholder_values=placeholder_values,                   # {151662: [[x_0,  y_0],[x_1,  y_1]]}
+            language_string=counterfactual_dict["language_string"],  # 文本
+            loss_masking=counterfactual_dict["loss_masking"],        # [BS,L] 有效性
         )
 
 
