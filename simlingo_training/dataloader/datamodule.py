@@ -326,8 +326,7 @@ class DataModule(LightningDataModule):
             # datasets['all_dreamer'] = 某个dataset对象
 
             # 2. 检查有哪些训练源. 支持两类数据集来源: (1)driving dataset (2)dreamer dataset
-            # self.driving_dataset={"_target_":"simlingo_training.dataloader.dataset_driving.Data_Driving"}
-            # self.dreamer_dataset={"_target_":"simlingo_training.dataloader.dataset_dreamer.Data_Dreamer"}
+
             if self.driving_dataset is not None or self.dreamer_dataset is not None:
                 # Create lists of datasets and their corresponding training partitions
                 # 先把"存在的数据源"筛出来 这里准备两个并行列表
@@ -591,6 +590,7 @@ class DataModule(LightningDataModule):
         )
 
 
+    ################ 如何将batch内的数据加载打包在一起 ################
     @line_profiler.profile
     def dl_collate_fn(self, data):
 
@@ -967,7 +967,7 @@ class DataModule(LightningDataModule):
         ################################################### 🦺 7.最终形态 🦺 ###################################################
 
 
-        # 1. 这是整个函数最重要的结构之一: 模型输入对象
+        # 1. 模型输入
         driving_input=DrivingInput(
                 camera_images=image_ff_pixel,  # [B, T, V, 3, 448, 448] uint8 [0, 255]  这是视觉主输入
                 image_sizes=image_ff_sizes,    # [12, 2]，每行是一个 [原图高度 H 1024, 原图宽度 W 512裁减底部]
@@ -981,8 +981,9 @@ class DataModule(LightningDataModule):
             )
 
 
-        # 2. 整个 batch 的监督信号对象
+        # 2. 模型监督
         driving_label=DrivingLabel(
+                
                 waypoints=waypoints,        # waypoints 未来轨迹监督 [B, 10, 2] float32
                 path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # [B, 20, 2]
                 answer=answer_label,        # 文本答案监督
@@ -991,21 +992,21 @@ class DataModule(LightningDataModule):
                 
                 # 六视角相机级别的注意力权重监督
                 camera_attention_target=(camera_attention_target),
-                camera_attention_valid=(camera_attention_valid),
+                camera_attention_valid=(camera_attention_valid),  # false 就不会参与损失计算
 
                 # 四通道结构化未来世界监督
                 future_interaction_grid=(future_interaction_grid),
-                future_interaction_valid=(future_interaction_valid),
+                future_interaction_valid=(future_interaction_valid),  # false 就不会参与损失计算
 
                 # [B,10,2]对象移除后的重规划轨迹
                 counterfactual_waypoints=(counterfactual_waypoints),
-                counterfactual_waypoints_valid=(counterfactual_waypoints_valid),
+                counterfactual_waypoints_valid=(counterfactual_waypoints_valid),  # false 就不会参与损失计算
                 # [B]主要参与者反事实因果强度
                 counterfactual_causal_score=(counterfactual_causal_score),
             )
             
         
-        # 3. 整合 1 和 2 然后组成新的数据形式并返回
+        # 3. 整合 "模型输入" 和 "模型监督" 然后组成新的数据形式并返回
         return DrivingExample(
             driving_input=driving_input,  # 把刚才整理好的"模型输入"塞进去
             driving_label=driving_label,  # 把刚才整理好的"监督标签"塞进去

@@ -8,8 +8,10 @@ model:
   _target_: simlingo_training.models.driving_interaction.InteractionGroundedDrivingModel
 
   lr: 3e-5
-  predict_route_as_wps: true
-  speed_wps_mode: 2d
+
+  # 预测 waypoints 相关配置
+  predict_route_as_wps: true # 是否预测path(参考路径)
+  speed_wps_mode: 2d         # 表示预测自车未来waypoints是预测的二维的点信息,也就是xy
 
   # 统一决策交互表示：route、ego future、primary actor、secondary actor。
   interaction_attention_dim: 128
@@ -79,8 +81,8 @@ model:
 
 data_module:
 
-  # 普通Driving和LG统一处理在 datamodule_interaction.py 中实现
-  _target_: simlingo_training.dataloader.datamodule_interaction.InteractionDataModule
+  # 普通Driving和LG统一处理在 datamodule.py 中实现
+  _target_: simlingo_training.dataloader.datamodule.DataModule
 
   batch_size: 6
   num_workers: 8

@@ -16,7 +16,7 @@ from hydra.utils import get_original_cwd
 
 
 from simlingo_training.models.adaptors.adaptors import DrivingAdaptor, LanguageAdaptor, WaypointInputAdaptor, AdaptorList
-#修改20260726：结构化未来世界预测分支。
+# 结构化未来世界预测分支
 from simlingo_training.models.future_interaction import (
     FUTURE_INTERACTION_CHANNEL_KEYS,
     FutureInteractionDecoder,
@@ -44,16 +44,14 @@ class NormZeroOne(nn.Module):
 
 
 class DrivingModel(pl.LightningModule):
-    def __init__(
-        self,
-        cfg_data_module,
-        processor,
-        cache_dir,
-        **cfg,
-    ):
+    
+    def __init__(self,cfg_data_module,processor,cache_dir,**cfg,):
+
+        # 调用父类__init__()函数
         super().__init__()
         self.save_hyperparameters()
         
+        # 将配置文件内的变量变为类成员变量
         for key, value in cfg.items():
             setattr(self, key, value)
             
@@ -65,6 +63,7 @@ class DrivingModel(pl.LightningModule):
         
         self.cfg_data_module = cfg_data_module
         
+        # 视觉模型
         self.vision_model = hydra.utils.instantiate(
             self.vision_model,
             cfg_data_module=cfg_data_module,
@@ -73,6 +72,7 @@ class DrivingModel(pl.LightningModule):
             _recursive_=False
         )
             
+        # 语言模型  
         self.language_model = hydra.utils.instantiate(
             self.language_model,
             cache_dir=cache_dir,
@@ -87,8 +87,8 @@ class DrivingModel(pl.LightningModule):
         # 预测头 + 计算损失
         driving = None
         driving = DrivingAdaptor(
-            self.language_model.hidden_size, 
-            speed_wps_mode=self.speed_wps_mode,
+            self.language_model.hidden_size,   # 11
+            speed_wps_mode=self.speed_wps_mode,# 2d
             predict_route_as_wps=self.predict_route_as_wps,
         )
         self.adaptors = AdaptorList(
@@ -98,28 +98,17 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        #修改20260726：四通道结构化未来世界辅助预测头。
+        # 四通道结构化未来世界辅助预测头
         self.future_interaction_decoder = None
 
-        if bool(
-            getattr(
-                self,
-                "use_future_interaction_prediction",
-                False,
-            )
-        ):
+        # 如果使用四通道结构化未来世界辅助预测,那么构造解码器
+        if bool(getattr(self,"use_future_interaction_prediction",False,)):
+            
             self.future_interaction_decoder = (
                 FutureInteractionDecoder(
-                    hidden_size=(
-                        self.language_model.hidden_size
-                    ),
-                    output_channels=4,
-                    output_size=int(
-                        getattr(
-                            self,
-                            "future_interaction_output_size",
-                            128,
-                        )
+                    hidden_size=(self.language_model.hidden_size),  # 1 表示只使用当前1帧
+                    output_channels=4,                              # 表示是四通道
+                    output_size=int(getattr(self,"future_interaction_output_size",128,)  # 结构化世界大小是 128x128
                     ),
                 )
             )
@@ -129,12 +118,15 @@ class DrivingModel(pl.LightningModule):
 
 
         self.wp_encoder = WaypointInputAdaptor(
-            token_size=self.language_model.hidden_size,
+            token_size=self.language_model.hidden_size,  # 语言模型的隐状态尺寸
             hidden_size=256,
             hidden_size2=512,
-            # norm_layer=NormZeroOne(min_max=(-32.0, 32.0)),
         )
 
+        
+        
+        
+        # 加载模型的 tokenizer
         if 'tokenizer' in self.processor.__dict__:
             self.tokenizer = self.processor.tokenizer
         else:
@@ -201,14 +193,8 @@ class DrivingModel(pl.LightningModule):
 
 
     ########################################### 推理接口 ###########################################
-    def forward(self,
-        example: DrivingExample,                 # dataloader产生的batch
-        return_language: Optional[bool] = None,
-        prompt_ids: Optional[Tensor] = None,
-    ) -> DrivingOutput:
-        """
-        Samples a trajectory from the model.
-        """
+    def forward(self,example: DrivingExample,return_language: Optional[bool] = None,prompt_ids: Optional[Tensor] = None,) -> DrivingOutput:
+
         self.speed_wps, self.route, self.language = None, None, []
         try:
             driving_input = example.driving_input
@@ -219,9 +205,9 @@ class DrivingModel(pl.LightningModule):
             adaptor_dict = self.adaptors(example, inference=True)  # 推理(inference=True)
             adaptor_dict = self.vision_model.image_encoder.replace_placeholder_tokens(
                     adaptor_dict = adaptor_dict,
-                    pixel_values = driving_input.camera_images,                               # 图像
-                    placeholder_values = driving_input.prompt_inference.placeholder_values,   # waypoint是list类型
-                    wp_encoder = self.wp_encoder,                                             # waypoint编码器
+                    pixel_values = driving_input.camera_images,                               # [BS*T,12,3,488,488] 六视角图像
+                    placeholder_values = driving_input.prompt_inference.placeholder_values,   # {151662: [[x_0,  y_0],[x_1,  y_1]]}
+                    wp_encoder = self.wp_encoder,                                             # 导航点编码器
                 )
             
             input_embeds_all = adaptor_dict["language_inputs"]
@@ -337,77 +323,37 @@ class DrivingModel(pl.LightningModule):
     
     
     
-    ########################################### 负责“把输入送进模型，得到特征和 logits” ###########################################
-    def forward_model(self, 
-                      driving_input: DrivingInput, 
-                      adaptor_dict: Dict, 
-                      driving_labels: DrivingLabel = None,
-                    #   language_embeds: Tensor = None
-                      ) -> Tensor:
-        """
-        Forward model conditioned on the given driving input.
-        """
+    ########################################### 💡 一、负责“把输入送进模型，得到特征和 logits” 💡 ###########################################
+    def forward_model(self,driving_input: DrivingInput,adaptor_dict: Dict,driving_labels: DrivingLabel = None,) -> Tensor:
         
+        # 在送入语言Transformer前需要将<IMG_CONTEXT>和<TARGET_POINTS>占位的embedding替换成真正的embedding
         adaptor_dict = self.vision_model.image_encoder.replace_placeholder_tokens(
             adaptor_dict = adaptor_dict,
-            pixel_values = driving_input.camera_images,
-            placeholder_values = driving_input.prompt.placeholder_values,
-            wp_encoder = self.wp_encoder,
+            pixel_values = driving_input.camera_images,                    # [BS*T,12,3,488,488] 六视角图像
+            placeholder_values = driving_input.prompt.placeholder_values,  # {151662: [[x_0,  y_0],[x_1,  y_1]]}
+            wp_encoder = self.wp_encoder,                                  # 导航点编码器
         )
 
         position_ids = None
         adaptor_embeds = adaptor_dict["inputs"]    # 这是最终的完整的embedding，图像的也替换了,target point的也替换了,同时包含了 language 和 driving 的 embedding
-        adaptor_mask = adaptor_dict['inputs_mask']
+        adaptor_mask = adaptor_dict['inputs_mask'] # 对应的mask
 
         input_embeds = adaptor_embeds
-        input_embeds = input_embeds.to(
-            dtype=self.language_model.model.dtype
-        )
+        input_embeds = input_embeds.to(dtype=self.language_model.model.dtype)
+        
         attention_mask = adaptor_mask
 
-
-        
-        # outputs = self.language_model.model(   # 把拼好的多模态 embedding 序列，送进 Transformer（LLM），得到每个 token 的“理解表示”和“预测分布”
-        #     attention_mask=attention_mask,
-        #     position_ids=position_ids,
-        #     inputs_embeds=input_embeds,
-        #     output_hidden_states=True,
-        #     return_dict=True,
-        # )
-        # features = outputs.hidden_states[-1]  # 最后一层 Transformer 的输出特征 
-        # logits = outputs[0]  # 等价于logits = outputs.logits, 含义:每个 token → 下一个 token 的概率分布  实际上logits就是每个 hidden state 经过输出 head（线性层）得到的预测结果，和 RNN 中的输出层是等价的
-        # """
-        # 在 Transformer 中，每一层都会为每个 token 生成一个 D 维的 hidden state，因此 outputs.hidden_states 是一个包含所有层输出的列表，其中每一项的 shape 为 [B, L, D]。
-        # 通过 features = outputs.hidden_states[-1] 可以获取最后一层的 hidden states，即每个 token 的最终语义表示。
-        # 而 logits = outputs[0] 则是将这些最终 hidden states 逐 token 通过输出 head 映射到输出空间（如词表或类别空间）后的结果，因此 logits 的 shape 为 [B, L, V]，表示每个 token 的预测分布。
-        # """
-
-        # # 把 Transformer 输出的整条序列，按“token来源”拆成两部分：vision部分 和 adaptor部分
-        # vision_features, adaptor_features = features.split([features.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
-        # vision_logits, adaptor_logits = logits.split([logits.size(1) - adaptor_embeds.size(1), adaptor_embeds.size(1)], dim=1)
-        # """
-        # features.size(1)          # 总token数 L
-        # adaptor_embeds.size(1)    # adaptor token数
-        # 所以,features.size(1) - adaptor_embeds.size(1) = vision token 数量
-        # split等价于features = [ vision部分 | adaptor部分 ]
-        # 张量形式:
-        # features:         [B, L, D]
-        # vision_features:  [B, L_vision, D]
-        # adaptor_features: [B, L_adaptor, D]
-        # """
 
         # 训练阶段只运行语言模型的Transformer主干。
         # 不再为视觉token、问题token和Driving query生成整词表logits，
         # 从而避免保存巨大的[B, L, vocab_size]张量。
         features = self.language_model.forward_features(
-            embeddings=input_embeds,
-            attention_mask=attention_mask,
+            embeddings=input_embeds,         # 输入语言Transformer的embedding [B,L+20+10,D]
+            attention_mask=attention_mask,   # 对应的mask [B,L]
             position_ids=position_ids,
             return_dict=True,
         )
 
-        # 当前图像特征已经写入adaptor_embeds中的<IMG_CONTEXT>位置，
-        # 因此Transformer输出的整条序列就是后续adaptor需要的特征。
         adaptor_features = features
 
         # LanguageAdaptor将在真正计算语言loss的位置局部生成logits。
@@ -419,11 +365,7 @@ class DrivingModel(pl.LightningModule):
         return adaptor_features, adaptor_logits
     
 
-    
-
-
-    ########################################### 训练/验证阶段内部使用的注意力日志函数 ###########################################
-
+    ########################################### 💡 二、训练/验证阶段内部使用的注意力日志函数 💡 ###########################################
     def log_target_point_camera_attention(self, mode: str,) -> None:
         """
         将目标点引导的六视角相机注意力记录到W&B。
@@ -535,45 +477,40 @@ class DrivingModel(pl.LightningModule):
             )
 
     
-    ########################################### 训练/验证阶段内部使用的“前向 + 算损失”函数 ###########################################
-    
+    ########################################### 💡 三、训练/验证阶段内部使用的“前向 + 算损失”函数 💡 ###########################################
     def forward_loss(self, example: DrivingExample, per_sample=False) -> TrainingOutput:
-        """
-        Forward pass of the model for a driving input, followed by
-        computing the next token cross-entropy loss.
 
-        Args:
-            driving_input: input to the vision encoder.
-            text_ids: Text ids tensor of shape [B, T]. These are input to the model and used in the loss.
-            text_mask: Text mask tensor of shape [B, T].
-        """
+        # example 就是一个batch内的所有数据
 
         adaptor_dict = self.adaptors(example)
-        adaptor_embeds = adaptor_dict["inputs"]
-        adaptor_mask = adaptor_dict['inputs_mask']
 
+        # 这是送入语言Transformer前的输入
+        adaptor_embeds = adaptor_dict["inputs"]    # prompt、route和speed_wps的 embedding[B, L+30, D]
+        
+        # 这是送入语言Transformer前的输入对应的mask,他决定了哪些embedding需要送入,哪些不需要送入
+        adaptor_mask = adaptor_dict['inputs_mask'] # prompt、route和speed_wps的有效性[B, L+30] 30全为True
+
+        # 送入网络 获得输出  [B, L+30, D]
         adaptor_features, adaptor_logits = self.forward_model(example.driving_input, adaptor_dict, driving_labels=example.driving_label)
+        
+        # 计算损失
         loss_dict = self.adaptors.compute_loss(adaptor_features, adaptor_logits, adaptor_dict, example)
 
 
 
 
 
-        #修改20260726：四通道结构化未来世界辅助预测。
-        if bool(
-            getattr(
-                self,
-                "use_future_interaction_prediction",
-                False,
-            )
-        ):
+        # 是否使用四通道结构化未来世界辅助预测
+        if bool(getattr(self,"use_future_interaction_prediction",False,)):
+            
+            # 安全性检查 检查解码器是否已经创建
             if self.future_interaction_decoder is None:
                 raise RuntimeError(
                     "Future interaction prediction is enabled, "
                     "but the decoder was not initialized."
                 )
 
-            # 恢复language和driving各自对应的Transformer输出。
+            # 恢复language和driving各自对应的Transformer输出[B, L+30, D] 然后拆解成[B, L, D] [B, 30, D]
             features_by_adaptor = (
                 self.adaptors.split_outputs_by_adaptor(
                     adaptor_dict,
@@ -581,20 +518,17 @@ class DrivingModel(pl.LightningModule):
                 )
             )
 
-            driving_features = features_by_adaptor.get(
-                "driving",
-                None,
-            )
+            # route 和 speed_wps 的特征[B, 30, D]
+            driving_features = features_by_adaptor.get("driving",None,)
 
-            if not isinstance(
-                driving_features,
-                torch.Tensor,
-            ):
+            # 安全性检查
+            if not isinstance(driving_features,torch.Tensor,):
                 raise RuntimeError(
                     "Driving query features are required for "
                     "future interaction prediction."
                 )
 
+            # 解码四通道结构化世界
             future_interaction_logits = (
                 self.future_interaction_decoder(
                     driving_features
@@ -617,7 +551,7 @@ class DrivingModel(pl.LightningModule):
                 future_interaction_logits.shape[0]
             )
 
-            # 普通Driving独立batch没有future_interaction_grid。
+            # 普通Driving独立batch没有future_interaction_grid
             # 为保持所有batch的loss键一致，构造零目标和零valid掩码。
             if future_interaction_target is None:
                 if (
@@ -699,8 +633,7 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        #修改20260720：使用LG因果actor投影得到的六维软标签，
-        # 显式监督目标点引导的六视角相机注意力。
+        #使用LG因果actor投影得到的六维软标签,显式监督目标点引导的六视角相机注意力。
         if bool(
             getattr(
                 self,

@@ -37,13 +37,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
     后处理分支读取交互信息，而是在同一次因果Transformer前向中共享证据。
     """
 
-    def __init__(
-        self,
-        cfg_data_module,
-        processor,
-        cache_dir,
-        **cfg,
-    ):
+    def __init__(self,cfg_data_module,processor,cache_dir,**cfg,):
+        
         super().__init__(
             cfg_data_module=cfg_data_module,
             processor=processor,

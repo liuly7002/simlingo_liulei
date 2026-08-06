@@ -725,12 +725,12 @@ class BaseDataset(Dataset):
             
 
         ############################# 🍒 40个点进行等间距采样,两点之间相距1m 🍒 #############################
-        route_adjusted = self.equal_spacing_route(route_adjusted) # [40,2]
+        route_adjusted = self.equal_spacing_route(route_adjusted) # [20,2]
 
 
 
         ############################# 🍒 40个点进行等间距采样,两点之间相距1m 🍒 #############################
-        route_adjusted_org = self.equal_spacing_route(route_adjusted_org)  # [40,2]
+        route_adjusted_org = self.equal_spacing_route(route_adjusted_org)  # [20,2]
         
         
         
