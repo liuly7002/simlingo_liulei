@@ -16,16 +16,11 @@ from hydra.utils import get_original_cwd
 
 
 from simlingo_training.models.adaptors.adaptors import DrivingAdaptor, LanguageAdaptor, WaypointInputAdaptor, AdaptorList
-# 结构化未来世界预测分支
-from simlingo_training.models.future_interaction import (
-    FUTURE_INTERACTION_CHANNEL_KEYS,
-    FutureInteractionDecoder,
-    compute_future_interaction_losses,
-)
+
+from simlingo_training.models.future_interaction import FutureInteractionDecoder
+
 from simlingo_training.models.utils import summarise_losses
-from simlingo_training.utils.custom_types import (DrivingExample, DrivingInput,
-                                                DrivingLabel, DrivingOutput,
-                                                TrainingOutput)
+from simlingo_training.utils.custom_types import DrivingExample, DrivingInput, DrivingLabel, DrivingOutput, TrainingOutput
 
 
 pprint = PrettyPrinter().pprint
@@ -84,7 +79,7 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        # 预测头 + 计算损失
+        # language 和 driving 的内容
         driving = None
         driving = DrivingAdaptor(
             self.language_model.hidden_size,   # 11
@@ -117,6 +112,7 @@ class DrivingModel(pl.LightningModule):
 
 
 
+        # TARGET POINTS 的编码器
         self.wp_encoder = WaypointInputAdaptor(
             token_size=self.language_model.hidden_size,  # 语言模型的隐状态尺寸
             hidden_size=256,
@@ -131,65 +127,6 @@ class DrivingModel(pl.LightningModule):
             self.tokenizer = self.processor.tokenizer
         else:
             self.tokenizer = self.processor
-
-
-
-
-
-
-
-
-
-
-    """
-    1. 训练时最外层流程:
-
-        Trainer.fit(...)
-        ↓
-        Lightning 自动调用 training_step(batch)
-        ↓
-        training_step 里调用 forward_loss(batch)
-        ↓
-        forward_loss 里调用 self.adaptors(example)
-        ↓
-        forward_loss 里调用 forward_model(...)
-        ↓
-        forward_model 里调用 language_model.model(...)
-        ↓
-        forward_loss 再调用 self.adaptors.compute_loss(...)
-        ↓
-        返回 loss
-
-
-    2. 验证时最外层流程:
-
-        Trainer.validate(...) 或 fit 中的 val loop
-        ↓
-        Lightning 自动调用 validation_step(batch)
-        ↓
-        validation_step 调 forward_loss(batch)
-        ↓
-        forward_loss 调 forward_model(...)
-        ↓
-        forward_loss 调 compute_loss(...)
-
-
-    3. 推理时最外层流程:
-
-        Trainer.predict(...)
-        ↓
-        Lightning 自动调用 predict_step(batch)
-        ↓
-        predict_step 调 self.forward(batch, return_language=True)
-        ↓
-        forward 内部做推理
-        ↓
-        得到 speed_wps, route, language
-        ↓
-        predict_step 再把预测结果和GT整理保存
-
-    """
-
 
 
     ########################################### 推理接口 ###########################################
@@ -484,363 +421,15 @@ class DrivingModel(pl.LightningModule):
 
         adaptor_dict = self.adaptors(example)
 
-        # 这是送入语言Transformer前的输入
-        adaptor_embeds = adaptor_dict["inputs"]    # prompt、route和speed_wps的 embedding[B, L+30, D]
-        
-        # 这是送入语言Transformer前的输入对应的mask,他决定了哪些embedding需要送入,哪些不需要送入
-        adaptor_mask = adaptor_dict['inputs_mask'] # prompt、route和speed_wps的有效性[B, L+30] 30全为True
-
         # 送入网络 获得输出  [B, L+30, D]
         adaptor_features, adaptor_logits = self.forward_model(example.driving_input, adaptor_dict, driving_labels=example.driving_label)
         
         # 计算损失
         loss_dict = self.adaptors.compute_loss(adaptor_features, adaptor_logits, adaptor_dict, example)
 
-
-
-
-
-        # 是否使用四通道结构化未来世界辅助预测
-        if bool(getattr(self,"use_future_interaction_prediction",False,)):
-            
-            # 安全性检查 检查解码器是否已经创建
-            if self.future_interaction_decoder is None:
-                raise RuntimeError(
-                    "Future interaction prediction is enabled, "
-                    "but the decoder was not initialized."
-                )
-
-            # 恢复language和driving各自对应的Transformer输出[B, L+30, D] 然后拆解成[B, L, D] [B, 30, D]
-            features_by_adaptor = (
-                self.adaptors.split_outputs_by_adaptor(
-                    adaptor_dict,
-                    adaptor_features,
-                )
-            )
-
-            # route 和 speed_wps 的特征[B, 30, D]
-            driving_features = features_by_adaptor.get("driving",None,)
-
-            # 安全性检查
-            if not isinstance(driving_features,torch.Tensor,):
-                raise RuntimeError(
-                    "Driving query features are required for "
-                    "future interaction prediction."
-                )
-
-            # 解码四通道结构化世界
-            future_interaction_logits = (
-                self.future_interaction_decoder(
-                    driving_features
-                )
-            )
-
-            future_interaction_target = (
-                example
-                .driving_label
-                .future_interaction_grid
-            )
-
-            future_interaction_valid = (
-                example
-                .driving_label
-                .future_interaction_valid
-            )
-
-            batch_size = int(
-                future_interaction_logits.shape[0]
-            )
-
-            # 普通Driving独立batch没有future_interaction_grid
-            # 为保持所有batch的loss键一致，构造零目标和零valid掩码。
-            if future_interaction_target is None:
-                if (
-                    isinstance(
-                        future_interaction_valid,
-                        torch.Tensor,
-                    )
-                    and bool(
-                        future_interaction_valid.any().item()
-                    )
-                ):
-                    raise RuntimeError(
-                        "future_interaction_valid contains True, "
-                        "but future_interaction_grid is None."
-                    )
-
-                future_interaction_target = torch.zeros(
-                    (
-                        batch_size,
-                        4,
-                        future_interaction_logits.shape[-2],
-                        future_interaction_logits.shape[-1],
-                    ),
-                    device=(
-                        future_interaction_logits.device
-                    ),
-                    dtype=torch.float32,
-                )
-
-                future_interaction_valid = torch.zeros(
-                    (batch_size,),
-                    device=(
-                        future_interaction_logits.device
-                    ),
-                    dtype=torch.bool,
-                )
-
-            elif not isinstance(
-                future_interaction_valid,
-                torch.Tensor,
-            ):
-                raise RuntimeError(
-                    "A future interaction target exists, but "
-                    "future_interaction_valid is missing."
-                )
-
-            future_interaction_loss_dict = (
-                compute_future_interaction_losses(
-                    prediction_logits=(
-                        future_interaction_logits
-                    ),
-                    target_grid=(
-                        future_interaction_target
-                    ),
-                    valid_mask=(
-                        future_interaction_valid
-                    ),
-                    positive_weights=tuple(
-                        float(value)
-                        for value in getattr(
-                            self,
-                            "future_interaction_positive_weights",
-                            (
-                                20.0,
-                                20.0,
-                                80.0,
-                                100.0,
-                            ),
-                        )
-                    ),
-                )
-            )
-
-            loss_dict.update(
-                future_interaction_loss_dict
-            )
-
-
-
-
-
-        #使用LG因果actor投影得到的六维软标签,显式监督目标点引导的六视角相机注意力。
-        if bool(
-            getattr(
-                self,
-                "use_lg_camera_attention_supervision",
-                False,
-            )
-        ):
-            predicted_camera_weights = adaptor_dict.get(
-                "target_point_camera_weights_for_loss",
-                None,
-            )
-            camera_attention_target = (
-                example
-                .driving_label
-                .camera_attention_target
-            )
-            camera_attention_valid = (
-                example
-                .driving_label
-                .camera_attention_valid
-            )
-
-            if not isinstance(
-                predicted_camera_weights,
-                torch.Tensor,
-            ):
-                raise RuntimeError(
-                    "LG camera attention supervision is "
-                    "enabled, but target-point camera "
-                    "attention weights were not produced. "
-                    "Set model.vision_model."
-                    "use_target_point_camera_attention=true."
-                )
-
-            if (
-                not isinstance(
-                    camera_attention_target,
-                    torch.Tensor,
-                )
-                or not isinstance(
-                    camera_attention_valid,
-                    torch.Tensor,
-                )
-            ):
-                raise RuntimeError(
-                    "LG camera attention supervision is "
-                    "enabled, but the batch does not contain "
-                    "camera attention labels."
-                )
-
-            predicted_camera_weights = (
-                predicted_camera_weights.float()
-            )
-            camera_attention_target = (
-                camera_attention_target.to(
-                    device=(
-                        predicted_camera_weights.device
-                    ),
-                    dtype=torch.float32,
-                )
-            )
-            camera_attention_valid = (
-                camera_attention_valid.to(
-                    device=(
-                        predicted_camera_weights.device
-                    ),
-                    dtype=torch.bool,
-                )
-            )
-
-            if (
-                predicted_camera_weights.ndim != 2
-                or predicted_camera_weights.shape[-1] != 6
-            ):
-                raise RuntimeError(
-                    "Predicted camera attention must have "
-                    "shape [B,6], but received "
-                    f"{tuple(predicted_camera_weights.shape)}."
-                )
-
-            if (
-                camera_attention_target.shape
-                != predicted_camera_weights.shape
-            ):
-                raise RuntimeError(
-                    "LG camera attention target shape does "
-                    "not match prediction shape: "
-                    f"{tuple(camera_attention_target.shape)} "
-                    "vs "
-                    f"{tuple(predicted_camera_weights.shape)}."
-                )
-
-            if camera_attention_valid.shape != (
-                predicted_camera_weights.shape[0],
-            ):
-                raise RuntimeError(
-                    "LG camera attention valid mask must "
-                    "have shape [B], but received "
-                    f"{tuple(camera_attention_valid.shape)}."
-                )
-
-            target_sum = (
-                camera_attention_target.sum(dim=-1)
-            )
-
-            invalid_valid_target = (
-                camera_attention_valid
-                & (target_sum <= 0.0)
-            )
-            if bool(
-                invalid_valid_target.any().item()
-            ):
-                raise RuntimeError(
-                    "A valid LG camera attention target has "
-                    "a non-positive probability sum."
-                )
-
-            # 无效样本保持全零，不参与该损失。
-            normalized_target = torch.where(
-                camera_attention_valid.unsqueeze(-1),
-                camera_attention_target
-                / target_sum.clamp_min(1e-8).unsqueeze(-1),
-                torch.zeros_like(
-                    camera_attention_target
-                ),
-            )
-
-            # 软标签交叉熵，每个样本得到一个标量。
-            per_sample_camera_attention_loss = -(
-                normalized_target
-                * predicted_camera_weights
-                .clamp_min(1e-8)
-                .log()
-            ).sum(dim=-1)
-
-            camera_attention_loss_count = (
-                camera_attention_valid.float()
-            )
-
-            #修改20260721：记录当前batch中真正参与
-            # LG相机注意力监督的样本数量和比例。
-            valid_attention_count = (
-                camera_attention_loss_count.sum()
-            )
-            valid_attention_ratio = (
-                valid_attention_count
-                / max(
-                    int(
-                        camera_attention_loss_count.numel()
-                    ),
-                    1,
-                )
-            )
-
-            attention_log_mode = (
-                "train"
-                if self.training
-                else "val"
-            )
-
-            self.log(
-                f"{attention_log_mode}_lg_camera_attention/"
-                "valid_sample_count",
-                valid_attention_count,
-                on_step=self.training,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=int(
-                    camera_attention_loss_count.numel()
-                ),
-                sync_dist=True,
-            )
-
-            self.log(
-                f"{attention_log_mode}_lg_camera_attention/"
-                "valid_sample_ratio",
-                valid_attention_ratio,
-                on_step=self.training,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=int(
-                    camera_attention_loss_count.numel()
-                ),
-                sync_dist=True,
-            )
-
-            loss_dict[
-                "lg_camera_attention_loss"
-            ] = (
-                per_sample_camera_attention_loss
-                * camera_attention_loss_count,
-                camera_attention_loss_count,
-            )
-
-
-
-
-
-
         loss_dict_only_losses = {k:v for k, v in loss_dict.items() if k.endswith("loss")}
         loss_logs = {k:v for k, v in loss_dict.items() if k.endswith("log")}
         
-        # pred_labels = {k:v for k, v in loss_dict.items() if not k.endswith("loss") and not k.endswith("log")}
-        # if per_sample:
-        #     return loss_dict_only_losses, pred_labels
 
         pred_labels = {
             k: v
@@ -850,38 +439,18 @@ class DrivingModel(pl.LightningModule):
 
         image_encoder = self.vision_model.image_encoder
 
-        target_point_camera_weights = getattr(
-            image_encoder,
-            "latest_target_point_camera_weights",
-            None,
-        )
+        target_point_camera_weights = getattr(image_encoder,"latest_target_point_camera_weights",None,)
 
-        if isinstance(
-            target_point_camera_weights,
-            torch.Tensor,
-        ):
-            pred_labels[
-                "target_point_camera_weights"
-            ] = target_point_camera_weights
+        if isinstance(target_point_camera_weights,torch.Tensor,):
+            pred_labels["target_point_camera_weights"] = target_point_camera_weights
 
-        target_point_attention_entropy = getattr(
-            image_encoder,
-            "latest_target_point_attention_entropy",
-            None,
-        )
+        target_point_attention_entropy = getattr(image_encoder,"latest_target_point_attention_entropy",None,)
 
-        if isinstance(
-            target_point_attention_entropy,
-            torch.Tensor,
-        ):
-            pred_labels[
-                "target_point_attention_entropy"
-            ] = target_point_attention_entropy
+        if isinstance(target_point_attention_entropy,torch.Tensor,):
+            pred_labels["target_point_attention_entropy"] = target_point_attention_entropy
 
-        # 训练和验证都记录六视角注意力统计。
-        self.log_target_point_camera_attention(
-            "train" if self.training else "val"
-        )
+        # 训练和验证都记录六视角注意力统计
+        self.log_target_point_camera_attention("train" if self.training else "val")
 
         if per_sample:
             # LocalValidationMetricsCallback需要保存每个样本真正参与
@@ -1011,100 +580,8 @@ class DrivingModel(pl.LightningModule):
 
             return loss_dict_only_losses, pred_labels
 
-        # return summarise_losses(loss_dict_only_losses), loss_logs
 
-        #修改20260726：统一整理所有辅助任务的损失权重。
-        # 原有语言、waypoint和route损失仍保持默认权重1.0。
-        loss_weights = {}
-
-        if bool(
-            getattr(
-                self,
-                "use_lg_camera_attention_supervision",
-                False,
-            )
-        ):
-            loss_weights[
-                "lg_camera_attention_loss"
-            ] = float(
-                getattr(
-                    self,
-                    "lg_camera_attention_loss_weight",
-                    0.05,
-                )
-            )
-
-        if bool(
-            getattr(
-                self,
-                "use_future_interaction_prediction",
-                False,
-            )
-        ):
-            channel_weights = tuple(
-                float(value)
-                for value in getattr(
-                    self,
-                    "future_interaction_channel_weights",
-                    (
-                        1.0,
-                        1.0,
-                        2.0,
-                        4.0,
-                    ),
-                )
-            )
-
-            if len(channel_weights) != 4:
-                raise ValueError(
-                    "future_interaction_channel_weights "
-                    "must contain exactly 4 values."
-                )
-
-            future_interaction_loss_weight = float(
-                getattr(
-                    self,
-                    "future_interaction_loss_weight",
-                    0.05,
-                )
-            )
-
-            future_interaction_dice_loss_weight = float(
-                getattr(
-                    self,
-                    "future_interaction_dice_loss_weight",
-                    1.0,
-                )
-            )
-
-            for channel_key, channel_weight in zip(
-                FUTURE_INTERACTION_CHANNEL_KEYS,
-                channel_weights,
-            ):
-                loss_weights[
-                    f"future_interaction_"
-                    f"{channel_key}_bce_loss"
-                ] = (
-                    future_interaction_loss_weight
-                    * channel_weight
-                )
-
-                loss_weights[
-                    f"future_interaction_"
-                    f"{channel_key}_dice_loss"
-                ] = (
-                    future_interaction_loss_weight
-                    * channel_weight
-                    * future_interaction_dice_loss_weight
-                )
-
-        if len(loss_weights) == 0:
-            loss_weights = None
-
-        return summarise_losses(
-            loss_dict_only_losses,
-            weights=loss_weights,
-        ), loss_logs
+        return summarise_losses(loss_dict_only_losses), loss_logs
 
     
     
