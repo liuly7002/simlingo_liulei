@@ -431,11 +431,7 @@ class DrivingModel(pl.LightningModule):
         loss_logs = {k:v for k, v in loss_dict.items() if k.endswith("log")}
         
 
-        pred_labels = {
-            k: v
-            for k, v in loss_dict.items()
-            if not k.endswith("loss") and not k.endswith("log")
-        }
+        pred_labels = {k: v for k, v in loss_dict.items() if not k.endswith("loss") and not k.endswith("log")}
 
         image_encoder = self.vision_model.image_encoder
 

@@ -39,12 +39,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
 
     def __init__(self,cfg_data_module,processor,cache_dir,**cfg,):
         
-        super().__init__(
-            cfg_data_module=cfg_data_module,
-            processor=processor,
-            cache_dir=cache_dir,
-            **cfg,
-        )
+        super().__init__(cfg_data_module=cfg_data_module,processor=processor,cache_dir=cache_dir,**cfg,)
 
         driving_adaptor = self.adaptors.driving
         if driving_adaptor is None:
@@ -52,6 +47,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 "Stage-2 interaction reasoning requires DrivingAdaptor."
             )
 
+        # 构造四个交互token [B,4,D]
         self.interaction_reasoner = PreLanguageInteractionReasoner(
             hidden_size=self.language_model.hidden_size,
             num_route_queries=int(
@@ -92,8 +88,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
 
     def _tokenize_marker_variants(
         self,
-        marker: str,
-    ) -> Tuple[Tuple[int, ...], ...]:
+        marker: str,) -> Tuple[Tuple[int, ...], ...]:
         variants: List[Tuple[int, ...]] = []
         for text in (marker, f" {marker}", f"\n{marker}"):
             token_ids = tuple(
@@ -114,8 +109,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
     @staticmethod
     def _append_tensor(
         current: Optional[Tensor],
-        value: Tensor,
-    ) -> Tensor:
+        value: Tensor,) -> Tensor:
         if current is None:
             return value
         return torch.cat((current, value), dim=0)
@@ -123,21 +117,18 @@ class InteractionGroundedDrivingModel(DrivingModel):
     def _model_dtype(self) -> torch.dtype:
         return self.adaptors.language.embed_tokens.weight.dtype
 
-    def _replace_multimodal_placeholders(
-        self,
-        example: DrivingExample,
-        *,
-        inference: bool,
-    ) -> Dict:
-        adaptor_dict = self.adaptors(
-            example,
-            inference=inference,
-        )
-        prompt = (
-            example.driving_input.prompt_inference
-            if inference
-            else example.driving_input.prompt
-        )
+    def _replace_multimodal_placeholders(self,example: DrivingExample,*,inference: bool,) -> Dict:
+        """
+        
+        """
+
+        # 创建language和driving adaptor
+        adaptor_dict = self.adaptors(example,inference=inference,)
+        
+        # 获取batch输入数据中的"问题+答案"的prompt
+        prompt = (example.driving_input.prompt_inference if inference else example.driving_input.prompt)
+        
+        # 将<IMG_CONTEXT>和<TARGET_POINT>占位embedding替换为真正的embedding  [B,L,D]
         return self.vision_model.image_encoder.replace_placeholder_tokens(
             adaptor_dict=adaptor_dict,
             pixel_values=example.driving_input.camera_images,
@@ -148,8 +139,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
     def _build_counterfactual_adaptor_dict(
         self,
         example: DrivingExample,
-        source_adaptor_dict: Dict,
-    ) -> Dict:
+        source_adaptor_dict: Dict,) -> Dict:
         """
         构造独立反事实文本序列，并复用完整场景已经编码的视觉与导航
         placeholder特征，避免第二次运行视觉编码器。
@@ -222,71 +212,74 @@ class InteractionGroundedDrivingModel(DrivingModel):
         counterfactual_dict["language_inputs"] = target_features
         return counterfactual_dict
 
-    def _build_pre_language_interaction(
-        self,
-        adaptor_dict: Dict,
-        *,
-        batch_slice=slice(None),
-        visual_intervention_target: Optional[Tensor] = None,
-        visual_intervention_valid: Optional[Tensor] = None,
-    ) -> Dict[str, Tensor]:
-        raw_language_features = adaptor_dict[
-            "language_inputs"
-        ][batch_slice]
-        raw_driving_queries = adaptor_dict[
-            "driving_inputs"
-        ][batch_slice]
-        language_ids = adaptor_dict[
-            "language__ids"
-        ][batch_slice]
-        language_valid = adaptor_dict[
-            "language_inputs_mask"
-        ][batch_slice].bool()
+    def _build_pre_language_interaction(self,adaptor_dict: Dict,*,batch_slice=slice(None),visual_intervention_target: Optional[Tensor] = None,visual_intervention_valid: Optional[Tensor] = None,) -> Dict[str, Tensor]:
 
-        answer_mask = adaptor_dict.get(
-            "language__ids_mask",
-            None,
-        )
+        """
+        核心任务，就是从已经完成多模态占位符替换的 Language 序列中,
+        把视觉证据、导航证据和允许读取的语言上下文重新拆出来,
+        再结合 30 个 Driving queries,
+        构造进入 Language Transformer 之前的 4 个统一 interaction tokens;
+        在反事实情况下，它还负责先对视觉证据实施主要 actor 删除干预.
+        """
+
+        # [B,L,D] 这是已经完成<IMG_CONTEXT>和<TARGET_POINT>占位embedding替换的语言embedding序列,这里我们可以称之为多模态Language embeddign序列
+        raw_language_features = adaptor_dict["language_inputs"][batch_slice]
+        
+        # [B,30,D] 这是driving的30个可学习query
+        raw_driving_queries = adaptor_dict["driving_inputs"][batch_slice]
+        
+        # [B,L] 语言token id
+        language_ids = adaptor_dict["language__ids"][batch_slice]
+        
+        # [B,L] 语言有效位置,解决的是padding的问题
+        language_valid = adaptor_dict["language_inputs_mask"][batch_slice].bool()
+
+        # [B,L] 哪些位置的语言token是答案
+        answer_mask = adaptor_dict.get("language__ids_mask",None,)
         if isinstance(answer_mask, torch.Tensor):
             answer_mask = answer_mask[batch_slice].bool()
         else:
             answer_mask = torch.zeros_like(language_valid)
 
+        # 视觉编码器
         image_encoder = self.vision_model.image_encoder
-        image_context_token_id = getattr(
-            image_encoder,
-            "img_context_token_id",
-            None,
-        )
-        target_point_token_id = getattr(
-            image_encoder,
-            "target_point_token_id",
-            None,
-        )
+
+        # 获取<IMG_CONTEXT>对应的token id
+        image_context_token_id = getattr(image_encoder,"img_context_token_id",None,)
+        
+        # 获取<TARGET_POINT>对应的token id
+        target_point_token_id = getattr(image_encoder,"target_point_token_id",None,)
+        
+        # 安全性检查
         if image_context_token_id is None:
             raise RuntimeError(
                 "The image encoder did not initialize IMG_CONTEXT token id."
             )
+
+        # 安全性检查
         if target_point_token_id is None:
             raise RuntimeError(
                 "The image encoder did not initialize TARGET_POINT token id."
             )
 
-        visual_mask = (
-            language_ids == int(image_context_token_id)
-        )
-        expected_visual_tokens = int(
-            self.interaction_reasoner.num_visual_tokens
-        )
+        # 384个视觉token [B,L]
+        visual_mask = (language_ids == int(image_context_token_id))
+        
+        # 384
+        expected_visual_tokens = int(self.interaction_reasoner.num_visual_tokens)
+        
+        # 384
         visual_token_count = visual_mask.sum(dim=1)
-        if not torch.all(
-            visual_token_count == expected_visual_tokens
-        ):
+
+        # 安全性检查
+        if not torch.all(visual_token_count == expected_visual_tokens):
             raise RuntimeError(
                 "Stage-2 interaction reasoning requires exactly "
                 f"{expected_visual_tokens} visual tokens per sample, "
                 f"but received counts={visual_token_count.tolist()}."
             )
+
+        # 真正把视觉embedding从多模态Language embedding中抽出来 [B,384,D] 
         visual_features = raw_language_features[
             visual_mask
         ].reshape(
@@ -295,19 +288,27 @@ class InteractionGroundedDrivingModel(DrivingModel):
             raw_language_features.shape[-1],
         )
 
+
+
+
+        ########################################################## 反事实视觉删除 ##########################################################
         intervention_mask = None
-        if visual_intervention_target is not None:
+        if visual_intervention_target is not None:  # 正常场景训练时,visual_intervention_target is None,所以只有反事实训练的时候才会执行以下内容
+            
+            # 反事实时检查valid mask,因为如果告诉函数"我要删除主要actor",就必须同时告诉函数"哪些样本的actor空间标签有效"
             if visual_intervention_valid is None:
                 raise ValueError(
                     "visual_intervention_valid is required when a "
                     "counterfactual target is provided."
                 )
+            
+            # 构造删除主要actor之后的视觉特征
             (
-                visual_features,
-                intervention_mask,
+                visual_features,   # [B,384,D] 新的视觉特征
+                intervention_mask, # [B,6,64]  记录了到底哪些视觉区域被干预了
             ) = self.interaction_reasoner.build_counterfactual_visual_features(
-                visual_features=visual_features,
-                participant_target=visual_intervention_target,
+                visual_features=visual_features,                # [B,384,D]
+                participant_target=visual_intervention_target,  # [B,6,64] 这个参数是告诉网络"主要actor在六视角的哪些patch里"
                 valid_mask=visual_intervention_valid,
                 strength=float(
                     getattr(
@@ -324,6 +325,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     )
                 ),
             )
+
+            # 将新的视觉特征重新放回raw_language_features对应的<IMG_CONTEXT>的位置
             raw_language_features = raw_language_features.clone()
             raw_language_features[visual_mask] = (
                 visual_features.to(
@@ -331,9 +334,14 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 ).reshape(-1, raw_language_features.shape[-1])
             )
 
-        navigation_mask = (
-            language_ids == int(target_point_token_id)
-        )
+
+
+
+
+        ########################################################## Target Point 上下文 ##########################################################
+
+        # 找到两个target point
+        navigation_mask = (language_ids == int(target_point_token_id))
         navigation_count = navigation_mask.sum(dim=1)
         if not torch.all(navigation_count == 2):
             raise RuntimeError(
@@ -341,6 +349,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 "TARGET_POINT embeddings per sample, but received "
                 f"counts={navigation_count.tolist()}."
             )
+        
+        # 把两个 Target Point embedding 汇聚成一个导航上下文(实际上就是求均值) [B,D]
         navigation_context = raw_language_features[
             navigation_mask
         ].reshape(
@@ -349,64 +359,78 @@ class InteractionGroundedDrivingModel(DrivingModel):
             raw_language_features.shape[-1],
         ).mean(dim=1)
 
-        # 交互token只读取用户问题、导航和视觉证据，不能读取训练答案。
+
+
+
+
+        ########################################################## 哪些语言内容允许4个交互token看 ##########################################################
+
+        # 交互token只读取用户问题、导航，不能读取视觉特征和训练答案
         language_context_mask = (
             language_valid
-            & ~visual_mask
-            & ~answer_mask
+            & ~visual_mask   # 不能读取视觉特征,因为视觉特征已经通过visual_features进入Reasoner了,没有必要再把这些视觉embedding当成语言上下文平均一次了
+            & ~answer_mask   # 不能读取答案
         )
 
-        reasoner_dtype = next(
-            self.interaction_reasoner.parameters()
-        ).dtype
+
+
+
+
+
+        ########################################################## 调用 Interaction Reasoner 构造输出 ##########################################################
+
+        reasoner_dtype = next(self.interaction_reasoner.parameters()).dtype
         outputs = self.interaction_reasoner(
-            interaction_query_features=raw_driving_queries.to(
-                dtype=reasoner_dtype
-            ),
-            visual_features=visual_features.to(
-                dtype=reasoner_dtype
-            ),
-            language_features=raw_language_features.to(
-                dtype=reasoner_dtype
-            ),
-            language_context_mask=language_context_mask,
-            navigation_context=navigation_context.to(
-                dtype=reasoner_dtype
-            ),
+            interaction_query_features=raw_driving_queries.to(dtype=reasoner_dtype),  # [B,30,D]  driving query
+            visual_features=visual_features.to(dtype=reasoner_dtype),                 # [B,384,D] 视觉特征
+            language_features=raw_language_features.to(dtype=reasoner_dtype),         # [B,L,D]   语言embedding
+            language_context_mask=language_context_mask,                              # [B,L]     交互token读取信息的位置
+            navigation_context=navigation_context.to(dtype=reasoner_dtype),           # [B,D]     导航上下文
         )
-        outputs["language_ids"] = language_ids
-        outputs["language_valid"] = language_valid
-        outputs["answer_mask"] = answer_mask
-        outputs["raw_language_features"] = raw_language_features
-        outputs["raw_driving_queries"] = raw_driving_queries
+        outputs["language_ids"] = language_ids                       # [B,L] 语言token id
+        outputs["language_valid"] = language_valid                   # [B,L] 语言有效位置,解决的是padding的问题
+        outputs["answer_mask"] = answer_mask                         # [B,L] 哪些位置的语言token是答案
+        outputs["raw_language_features"] = raw_language_features     # [B,L,D]   语言embedding
+        outputs["raw_driving_queries"] = raw_driving_queries         # [B,30,D]  driving query
+        # 如果是反事实场景则额外保存干预mask,
+        # 后面可以利用它计算counterfactual_visual_suppression_loss,
+        # 也就是,我明确删除了主要 actor 所在区域之后，网络对这个区域的主要 actor attention 是否真的降低了？
         if intervention_mask is not None:
             outputs["visual_intervention_mask"] = intervention_mask
         return outputs
 
     @staticmethod
-    def _assemble_joint_sequence(
-        interaction_tokens: Tensor,
-        language_features: Tensor,
-        language_valid: Tensor,
-        driving_queries: Tensor,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tuple[int, int, int]]:
+    def _assemble_joint_sequence(interaction_tokens: Tensor,language_features: Tensor,language_valid: Tensor,driving_queries: Tensor,) -> Tuple[Tensor, Tensor, Tensor, Tuple[int, int, int]]:
+        
+        """
+        把 4 个 interaction token、Language embedding、30 个 Driving query 拼成一个完整序列,
+        并处理 padding,
+        让这个序列可以直接送入 Language Transformer
+        """
+
+        # batch size
         batch_size = int(language_features.shape[0])
+
+        # interaction token 的 mask 全部设为 True  [B,4]  因为这4个token每个样本都有,没有padding
         interaction_valid = torch.ones(
             interaction_tokens.shape[:2],
             device=interaction_tokens.device,
             dtype=torch.bool,
         )
+
+        # driving token 的 mask 全部设为 True  [B,30]  因为这30个token每个样本都有,没有padding
         driving_valid = torch.ones(
             driving_queries.shape[:2],
             device=driving_queries.device,
             dtype=torch.bool,
         )
 
+        # 按固定顺序拼接 [B,4+L+30,D]
         original_embeddings = torch.cat(
             (
-                interaction_tokens,
-                language_features,
-                driving_queries,
+                interaction_tokens,  # 1. 四种交互token    [B,4,D]
+                language_features,   # 2. language token  [B.L,D]
+                driving_queries,     # 3. driving token   [B,20+10,D]
             ),
             dim=1,
         )
@@ -449,11 +473,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         )
 
     @staticmethod
-    def _split_joint_outputs(
-        outputs: Tensor,
-        permutation: Tensor,
-        split_sizes: Tuple[int, int, int],
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+    def _split_joint_outputs(outputs: Tensor,permutation: Tensor,split_sizes: Tuple[int, int, int],) -> Tuple[Tensor, Tensor, Tensor]:
         inverse_permutation = permutation.argsort(dim=-1)
         batch_indices = torch.arange(
             outputs.shape[0],
@@ -467,37 +487,43 @@ class InteractionGroundedDrivingModel(DrivingModel):
             original_order.split(split_sizes, dim=1)
         )
 
-    def _forward_joint_transformer(
-        self,
-        interaction_outputs: Dict[str, Tensor],
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        interaction_tokens = interaction_outputs[
-            "interaction_tokens"
-        ].to(dtype=self._model_dtype())
-        language_features = interaction_outputs[
-            "raw_language_features"
-        ].to(dtype=self._model_dtype())
-        driving_queries = interaction_outputs[
-            "raw_driving_queries"
-        ].to(dtype=self._model_dtype())
+    def _forward_joint_transformer(self,interaction_outputs: Dict[str, Tensor],) -> Tuple[Tensor, Tensor, Tensor]:
+        
+        interaction_tokens = interaction_outputs["interaction_tokens"].to(dtype=self._model_dtype())
+        language_features = interaction_outputs["raw_language_features"].to(dtype=self._model_dtype())
+        driving_queries = interaction_outputs["raw_driving_queries"].to(dtype=self._model_dtype())
 
+
+
+        ################################################# 拼接序列 #################################################
         (
-            joint_embeddings,
+            joint_embeddings,  # [B,4+L+20+10,D]   |4个交互token|多模态语言序列|route query|ego future query|
             joint_mask,
             permutation,
             split_sizes,
         ) = self._assemble_joint_sequence(
-            interaction_tokens=interaction_tokens,
-            language_features=language_features,
-            language_valid=interaction_outputs["language_valid"],
-            driving_queries=driving_queries,
+            interaction_tokens=interaction_tokens,                # [B,4,D]
+            language_features=language_features,                  # [B,L,D] 这是已经完成<IMG_CONTEXT>和<TARGET_POINT>替换的多模态语言序列
+            language_valid=interaction_outputs["language_valid"], # [B,L]   表示多模态语言序列中哪些是padding的哪些不是
+            driving_queries=driving_queries,                      # [B,30,D]route query 和 ego future query
         )
+
+
+
+        ################################################# 送入语言Tranformer进行前向推理 #################################################
+
+        # 进行一次Transformer前向
         joint_features = self.language_model.forward_features(
             embeddings=joint_embeddings,
             attention_mask=joint_mask,
             position_ids=None,
             return_dict=True,
         )
+
+
+        ################################################# |四通道结构化世界|语言|route query|ego future query| #################################################
+
+        # 再拆分成三部分 [B,4,D] [B,L,D] [B,30,D]
         return self._split_joint_outputs(
             joint_features,
             permutation,
@@ -509,8 +535,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         token_ids: Sequence[int],
         allowed_mask: Sequence[bool],
         patterns: Sequence[Sequence[int]],
-        start_index: int,
-    ) -> Optional[Tuple[int, int]]:
+        start_index: int,) -> Optional[Tuple[int, int]]:
         for position in range(
             max(int(start_index), 0),
             len(token_ids),
@@ -529,8 +554,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
     def _build_question_span_masks(
         self,
         language_ids: Tensor,
-        answer_mask: Tensor,
-    ) -> Tuple[Tensor, Tensor]:
+        answer_mask: Tensor,) -> Tuple[Tensor, Tensor]:
         batch_size, sequence_length = language_ids.shape
         question_masks = torch.zeros(
             (batch_size, 4, sequence_length),
@@ -615,8 +639,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
     @staticmethod
     def _prepare_future_supervision(
         example: DrivingExample,
-        prediction_logits: Tensor,
-    ) -> Tuple[Tensor, Tensor]:
+        prediction_logits: Tensor,) -> Tuple[Tensor, Tensor]:
         target = example.driving_label.future_interaction_grid
         valid = example.driving_label.future_interaction_valid
         batch_size = int(prediction_logits.shape[0])
@@ -678,8 +701,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
     def _empty_counterfactual_losses(
         self,
         reference: Tensor,
-        batch_size: int,
-    ) -> Dict[str, Tuple[Tensor, Tensor]]:
+        batch_size: int,) -> Dict[str, Tuple[Tensor, Tensor]]:
         parameter_zero = (
             self.interaction_reasoner.counterfactual_parameter_zero()
         ).to(device=reference.device, dtype=reference.dtype)
@@ -702,8 +724,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
 
     def _select_counterfactual_indices(
         self,
-        participant_valid: Tensor,
-    ) -> Tensor:
+        participant_valid: Tensor,) -> Tensor:
         selected = participant_valid.bool().clone()
         probability = float(
             getattr(
@@ -732,11 +753,11 @@ class InteractionGroundedDrivingModel(DrivingModel):
         question_span_mask: Tensor,
         language_alignment_valid: Tensor,
         future_target: Optional[Tensor],
-        future_valid: Tensor,
-    ) -> Tuple[
+        future_valid: Tensor,) -> Tuple[
         Dict[str, Tuple[Tensor, Tensor]],
-        Dict[str, Tensor],
-    ]:
+        Dict[str, Tensor],]:
+
+
         batch_size = int(driving_features.shape[0])
         empty_losses = self._empty_counterfactual_losses(
             driving_features,
@@ -869,7 +890,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         )
         (
-            counterfactual_tokens,
+            counterfactual_tokens,            
             counterfactual_language_features,
             counterfactual_driving_features,
         ) = self._forward_joint_transformer(
@@ -1169,8 +1190,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         *,
         pred_labels: Dict,
         adaptor_dict: Dict,
-        example: DrivingExample,
-    ) -> None:
+        example: DrivingExample,) -> None:
         image_encoder = self.vision_model.image_encoder
         language_ids = adaptor_dict.get("language__ids")
         if not isinstance(language_ids, torch.Tensor):
@@ -1236,8 +1256,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
         mode: str,
         interaction_outputs: Dict[str, Tensor],
         language_alignment_valid: Tensor,
-        secondary_exists: Tensor,
-    ) -> None:
+        secondary_exists: Tensor,) -> None:
         primary_attention = interaction_outputs[
             "primary_spatial_attention"
         ].detach().float()
@@ -1308,23 +1327,47 @@ class InteractionGroundedDrivingModel(DrivingModel):
             sync_dist=True,
         )
 
-    def forward_loss(
-        self,
-        example: DrivingExample,
-        per_sample: bool = False,
-    ) -> TrainingOutput:
-        adaptor_dict = self._replace_multimodal_placeholders(
-            example,
-            inference=False,
-        )
-        interaction_outputs = self._build_pre_language_interaction(
-            adaptor_dict
-        )
-        (
-            contextual_interaction_tokens,
-            language_features,
-            driving_features,
-        ) = self._forward_joint_transformer(interaction_outputs)
+    # 训练/验证总入口
+    def forward_loss(self,example: DrivingExample,per_sample: bool = False,) -> TrainingOutput:
+        
+
+        ############################################## 语言Transformer的输入 ##############################################
+
+        # 语言embedding内容
+        adaptor_dict = self._replace_multimodal_placeholders(example,inference=False,)
+
+        # 构造进入 Language Transformer 之前的 4 个统一 interaction tokens
+        interaction_outputs = self._build_pre_language_interaction(adaptor_dict)
+
+
+
+
+
+
+        ############################################## 语言Transformer的输出(hidden features) ##############################################
+        
+        # contextual_interaction_tokens  [B,4,D]
+        # language_features              [B,L,D]
+        # driving_features               [B,30,D]
+
+        # 知识点: 语言 Transformer 的输入和输出 hidden size 不会改变
+        
+        contextual_interaction_tokens,language_features,driving_features = self._forward_joint_transformer(interaction_outputs)
+
+
+
+
+        ############################################## language 损失计算 ##############################################
+
+        """
+        Transformer后的language_features
+                ↓
+        lm_head
+                ↓
+        vocabulary logits
+                ↓
+        与真实答案token做Cross Entropy
+        """
 
         language_input_dict = {
             "_ids": interaction_outputs["language_ids"],
@@ -1336,6 +1379,22 @@ class InteractionGroundedDrivingModel(DrivingModel):
             language_input_dict,
             example,
         )
+
+
+
+
+        ############################################## driving 损失计算 ##############################################
+
+        """
+        Transformer后的driving_features
+                ↓
+        预测头
+                ↓
+        预测的点
+                ↓
+        与真实点做Smooth L1
+        """
+
         loss_dict.update(
             self.adaptors.driving.compute_loss(
                 driving_features,
@@ -1345,20 +1404,46 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         )
 
+
+
+
+        ############################################## 基础的VLA训练 ##############################################
+        ############################################## 基础的VLA训练 ##############################################
+
+
+
+
+
+        
+
+
+        ############################################## 找出 Q1-Q4 各自对应的答案区域 ##############################################
+
+        # question_span_mask:[B,4,L] question_span_mask[:,0]表示A1答案对应哪些lannguage token
+        # language_alignment_valid: [B] 表示这个样本是否成功识别出了完整的 A1、A2、A3、A4 四段答案
+
         question_span_mask, language_alignment_valid = (
             self._build_question_span_masks(
-                interaction_outputs["language_ids"],
+                interaction_outputs["language_ids"],  # 语言序列对应的token id
                 interaction_outputs["answer_mask"],
             )
         )
+
+
+
+
+
+
+        ############################################## language 与 interaction token 对齐 ##############################################
+
+        # 主要是想要"interaction token 不只是预测未来世界,还被要求同时和语言语义、Driving动作表示保持一致"
+
         language_alignment_loss = (
             self.interaction_reasoner.compute_language_alignment_loss(
-                language_features=language_features,
-                contextual_interaction_tokens=(
-                    contextual_interaction_tokens
-                ),
-                question_span_mask=question_span_mask,
-                valid_mask=language_alignment_valid,
+                language_features=language_features,    # [B,L,D] 语言Transformer的输出
+                contextual_interaction_tokens=(contextual_interaction_tokens),  # [B,L,D] 语言Transformer的输出
+                question_span_mask=question_span_mask,  # [B,4,L]
+                valid_mask=language_alignment_valid,    # [B] 表示这个样本是否成功识别出了完整的 A1、A2、A3、A4 四段答案
                 temperature=float(
                     getattr(
                         self,
@@ -1368,10 +1453,19 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 ),
             )
         )
-        loss_dict["language_interaction_alignment_loss"] = (
-            language_alignment_loss
-        )
 
+        # 作用:不能只是语言答案预测对了,还希望语言内部形成的表示和对应的 interaction token 真的表达同一件事情
+        loss_dict["language_interaction_alignment_loss"] = (language_alignment_loss)
+
+
+
+
+
+
+        ############################################## driving 与 interaction token 对齐 ##############################################
+
+        # 主要是想要"interaction token 不只是预测未来世界,还被要求同时和语言语义、Driving动作表示保持一致"
+        
         loss_dict["action_interaction_alignment_loss"] = (
             self.interaction_reasoner.compute_action_alignment_loss(
                 driving_features=driving_features,
@@ -1381,33 +1475,31 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         )
 
+
+
+
+
+        ############################################## 四通道结构化未来世界预测 ##############################################
+
+        # 初始化
         future_target = None
-        future_valid = torch.zeros(
-            (driving_features.shape[0],),
-            device=driving_features.device,
-            dtype=torch.bool,
-        )
-        if bool(
-            getattr(
-                self,
-                "use_future_interaction_prediction",
-                False,
-            )
-        ):
+        future_valid = torch.zeros((driving_features.shape[0],),device=driving_features.device,dtype=torch.bool,)
+        
+        # 如果配置文件use_future_interaction_prediction=True
+        if bool(getattr(self,"use_future_interaction_prediction",False,)):
+            
+            # 安全性检查
             if self.future_interaction_decoder is None:
                 raise RuntimeError(
                     "Future interaction prediction is enabled, but the "
                     "decoder was not initialized."
                 )
-            future_logits = self.future_interaction_decoder(
-                contextual_interaction_tokens
-            )
-            future_target, future_valid = (
-                self._prepare_future_supervision(
-                    example,
-                    future_logits,
-                )
-            )
+
+            # 将语言Transformer的输出[B,4,D]放入四通道结构化未来世界解码器 future_logits:[B,4,128,128]这就是四通道结构化未来世界
+            future_logits = self.future_interaction_decoder(contextual_interaction_tokens)
+            
+            # 读取四通道 GT,然后计算 BCE + Dice, 每个通道独立计算
+            future_target, future_valid = self._prepare_future_supervision(example,future_logits,)
             loss_dict.update(
                 compute_future_interaction_losses(
                     prediction_logits=future_logits,
@@ -1424,39 +1516,46 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 )
             )
 
-        if bool(
-            getattr(
-                self,
-                "use_participant_spatial_attention_supervision",
-                False,
-            )
-        ):
-            participant_target = (
-                example.driving_label.camera_attention_target
-            )
-            participant_valid = (
-                example.driving_label.camera_attention_valid
-            )
+
+
+
+
+
+        ############################################## 主要actor的视觉空间监督 ##############################################
+
+        # 如果配置use_participant_spatial_attention_supervision=True
+        if bool(getattr(self,"use_participant_spatial_attention_supervision",False,)):
+            
+            # [B,6,64]  六视角相机 token 级注意力标签
+            participant_target = (example.driving_label.camera_attention_target)
+            
+            # [B],样本有无可靠的相机注意力监督
+            participant_valid = (example.driving_label.camera_attention_valid)
+            
+            # 安全性检查
             if not isinstance(participant_target, torch.Tensor):
                 raise RuntimeError(
                     "Participant spatial supervision is enabled, but the "
                     "target tensor is missing."
                 )
+
+            # 安全性检查    
             if not isinstance(participant_valid, torch.Tensor):
                 raise RuntimeError(
                     "Participant spatial supervision is enabled, but the "
                     "valid mask is missing."
                 )
+
+            # 计算损失
             loss_dict.update(
                 compute_participant_spatial_attention_losses(
-                    primary_attention=interaction_outputs[
-                        "primary_spatial_attention"
-                    ],
-                    target_attention=participant_target,
+                    primary_attention=interaction_outputs["primary_spatial_attention"],  # [B.6,64] Interaction Reasoner 产生的 primary_spatial_attention
+                    target_attention=participant_target,                                 # [B,6,64]  六视角相机 token 级注意力标签
                     valid_mask=participant_valid,
                 )
             )
 
+        # 判断有没有次要actor
         if future_target is None:
             secondary_exists = torch.zeros_like(future_valid)
         else:
@@ -1470,15 +1569,9 @@ class InteractionGroundedDrivingModel(DrivingModel):
             )
         loss_dict.update(
             compute_actor_disentanglement_losses(
-                primary_attention=interaction_outputs[
-                    "primary_spatial_attention"
-                ],
-                secondary_attention=interaction_outputs[
-                    "secondary_spatial_attention"
-                ],
-                contextual_interaction_tokens=(
-                    contextual_interaction_tokens
-                ),
+                primary_attention=interaction_outputs["primary_spatial_attention"],
+                secondary_attention=interaction_outputs["secondary_spatial_attention"],
+                contextual_interaction_tokens=(contextual_interaction_tokens),
                 secondary_exists=secondary_exists,
                 attention_overlap_margin=float(
                     getattr(
@@ -1496,6 +1589,15 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 ),
             )
         )
+
+
+
+
+
+
+
+
+        ############################################## 反事实训练总入口 ##############################################
 
         counterfactual_loss_dict, counterfactual_diagnostics = (
             self._compute_counterfactual_losses(
@@ -1516,11 +1618,29 @@ class InteractionGroundedDrivingModel(DrivingModel):
         )
         loss_dict.update(counterfactual_loss_dict)
 
+
+
+
+
+
+
+        ############################################## 所有loss ##############################################
+
         loss_dict_only_losses = {
             key: value
             for key, value in loss_dict.items()
             if key.endswith("loss")
         }
+
+
+
+
+        ############################################## 完整训练 ##############################################
+        ############################################## 完整训练 ##############################################
+
+
+
+
         loss_logs = {
             key: value
             for key, value in loss_dict.items()
@@ -1553,6 +1673,10 @@ class InteractionGroundedDrivingModel(DrivingModel):
         )
         pred_labels.update(counterfactual_diagnostics)
 
+
+
+        ############################################## 记录 W&B 统计 ##############################################
+
         self._log_stage2_statistics(
             "train" if self.training else "val",
             interaction_outputs,
@@ -1567,6 +1691,13 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 example=example,
             )
             return loss_dict_only_losses, pred_labels
+
+
+
+
+
+
+        ############################################## 各种 loss 各占多大比例 ##############################################
 
         loss_weights: Dict[str, float] = {
             "language_interaction_alignment_loss": float(
@@ -1655,13 +1786,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
             ),
         }
 
-        if bool(
-            getattr(
-                self,
-                "use_participant_spatial_attention_supervision",
-                False,
-            )
-        ):
+        if bool(getattr(self,"use_participant_spatial_attention_supervision",False,)):
             loss_weights[
                 "participant_spatial_attention_loss"
             ] = float(
@@ -1672,13 +1797,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 )
             )
 
-        if bool(
-            getattr(
-                self,
-                "use_future_interaction_prediction",
-                False,
-            )
-        ):
+        if bool(getattr(self,"use_future_interaction_prediction",False,)):
             channel_weights = tuple(
                 float(value)
                 for value in getattr(
@@ -1724,10 +1843,19 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     * dice_loss_weight
                 )
 
-        return summarise_losses(
-            loss_dict_only_losses,
-            weights=loss_weights,
-        ), loss_logs
+
+
+
+
+
+
+        ############################################## 汇总成总 loss 并返回 ##############################################
+
+        return summarise_losses(loss_dict_only_losses,weights=loss_weights,), loss_logs
+
+
+
+        
 
     def _eos_token_id(self) -> int:
         if self.language_model.variant == "OpenGVLab/InternVL2-4B":
@@ -1757,12 +1885,9 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     f"Type of {key} is not supported."
                 )
 
-    def forward(
-        self,
-        example: DrivingExample,
-        return_language: Optional[bool] = None,
-        prompt_ids: Optional[Tensor] = None,
-    ) -> DrivingOutput:
+    # 推理接口
+    def forward(self,example: DrivingExample,return_language: Optional[bool] = None,prompt_ids: Optional[Tensor] = None,) -> DrivingOutput:
+
         del return_language, prompt_ids
 
         self.speed_wps = None
@@ -1773,13 +1898,9 @@ class InteractionGroundedDrivingModel(DrivingModel):
         self.secondary_spatial_attention = None
         self.contextual_interaction_tokens = None
 
-        adaptor_dict = self._replace_multimodal_placeholders(
-            example,
-            inference=True,
-        )
-        batch_size = int(
-            adaptor_dict["language_inputs"].shape[0]
-        )
+        # 获取landuage embedding和driving embedding
+        adaptor_dict = self._replace_multimodal_placeholders(example,inference=True,)
+        batch_size = int(adaptor_dict["language_inputs"].shape[0])
 
         for batch_index in range(batch_size):
             batch_slice = slice(batch_index, batch_index + 1)
@@ -1789,22 +1910,11 @@ class InteractionGroundedDrivingModel(DrivingModel):
                     batch_slice=batch_slice,
                 )
             )
-            interaction_tokens = interaction_outputs[
-                "interaction_tokens"
-            ].to(dtype=self._model_dtype())
-            language_valid = interaction_outputs[
-                "language_valid"
-            ][0]
-            prompt_embeddings = interaction_outputs[
-                "raw_language_features"
-            ][0, language_valid].unsqueeze(0).to(
-                dtype=self._model_dtype()
-            )
+            interaction_tokens = interaction_outputs["interaction_tokens"].to(dtype=self._model_dtype())
+            language_valid = interaction_outputs["language_valid"][0]
+            prompt_embeddings = interaction_outputs["raw_language_features"][0, language_valid].unsqueeze(0).to(dtype=self._model_dtype())
 
-            prefix_embeddings = torch.cat(
-                (interaction_tokens, prompt_embeddings),
-                dim=1,
-            )
+            prefix_embeddings = torch.cat((interaction_tokens, prompt_embeddings),dim=1,)
             prefix_mask = torch.ones(
                 prefix_embeddings.shape[:2],
                 device=prefix_embeddings.device,
@@ -1835,13 +1945,8 @@ class InteractionGroundedDrivingModel(DrivingModel):
             else:
                 generated_embeddings = prefix_embeddings
 
-            driving_queries = interaction_outputs[
-                "raw_driving_queries"
-            ].to(dtype=self._model_dtype())
-            full_embeddings = torch.cat(
-                (generated_embeddings, driving_queries),
-                dim=1,
-            )
+            driving_queries = interaction_outputs["raw_driving_queries"].to(dtype=self._model_dtype())
+            full_embeddings = torch.cat((generated_embeddings, driving_queries),dim=1,)
             full_mask = torch.ones(
                 full_embeddings.shape[:2],
                 device=full_embeddings.device,
@@ -1854,17 +1959,9 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 return_dict=True,
             )
 
-            contextual_interaction_tokens = full_features[
-                :,
-                : len(INTERACTION_TOKEN_KEYS),
-            ]
-            driving_features = full_features[
-                :,
-                -self.interaction_reasoner.num_driving_queries :,
-            ]
-            predictions = self.adaptors.driving.get_predictions(
-                driving_features
-            )
+            contextual_interaction_tokens = full_features[:,: len(INTERACTION_TOKEN_KEYS),]
+            driving_features = full_features[:,-self.interaction_reasoner.num_driving_queries :,]
+            predictions = self.adaptors.driving.get_predictions(driving_features)
             self._store_predictions(predictions)
 
             if self.future_interaction_decoder is not None:
