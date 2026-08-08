@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -65,36 +66,218 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
 
         self._initialize_surround_dataset()
 
+        # 当前完整模型要求普通Driving必须具有完整Q1-Q4语言监督。
+        # 因此在Dataset初始化阶段直接过滤缺少完整四问的样本，
+        # 避免训练过程中在__getitem__阶段才因缺失四问而报错。
+        if language_mode == "four_questions":
+            self._filter_samples_with_valid_four_questions()
+
+
+    def _driving_four_question_label_path_for_index(self,index: int,) -> Path:
+        """
+        返回当前普通Driving样本对应的专家条件标签路径：
+        .../driving_expert_conditioned_actor_selection/0026.json.gz
+        """
+
+        measurement_entry = self.measurements[index]
+
+        if isinstance(measurement_entry, np.ndarray):
+            measurement_entry = measurement_entry.reshape(-1)[0]
+        elif isinstance(measurement_entry, (list, tuple)):
+            measurement_entry = measurement_entry[0]
+
+        measurement_dir = Path(
+            Data_LG._decode_path(measurement_entry)
+        )
+
+        route_dir = measurement_dir.parent
+
+        # 与当前Dataset中“当前帧”的定义保持一致：
+        # 当前帧 = sample_start + hist_len - 1
+        frame_id = (
+            int(self.sample_start[index])
+            + int(self.hist_len)
+            - 1
+        )
+
+        return (
+            route_dir
+            / str(
+                getattr(
+                    self,
+                    "driving_participant_attention_label_folder",
+                    "driving_expert_conditioned_actor_selection",
+                )
+            )
+            / f"{frame_id:04d}.json.gz"
+        )
+
+
     @staticmethod
-    def _replace_with_four_question_language(sample, payload):
+    def _extract_four_questions(payload):
+        """
+        从普通Driving专家条件标签中读取完整Q1-Q4。
+        如果任意问题或答案缺失，则返回空列表。
+        """
+
         question_keys = (
             "attention",
             "motion_constraint",
             "driving_response",
             "future_motion",
         )
-        core_questions = payload.get("core_questions", {})
+
+        core_questions = payload.get(
+            "core_questions",
+            {},
+        )
+
         questions = []
 
-        if isinstance(core_questions, dict):
-            for key in question_keys:
-                item = core_questions.get(key)
-                if not isinstance(item, dict):
-                    questions = []
-                    break
+        if not isinstance(core_questions, dict):
+            return questions
 
-                question = str(item.get("question", "")).strip()
-                answer = str(item.get("answer", "")).strip()
-                if not question or not answer:
-                    questions = []
-                    break
+        for key in question_keys:
 
-                questions.append(
-                    {
-                        "question": question,
-                        "answer": answer,
-                    }
+            item = core_questions.get(key)
+
+            if not isinstance(item, dict):
+                return []
+
+            question = str(
+                item.get("question", "")
+            ).strip()
+
+            answer = str(
+                item.get("answer", "")
+            ).strip()
+
+            if not question or not answer:
+                return []
+
+            questions.append(
+                {
+                    "question": question,
+                    "answer": answer,
+                }
+            )
+
+        return questions
+
+
+    def _filter_samples_with_valid_four_questions(self):
+        """
+        four_questions模式下，只保留具有完整Q1-Q4的普通Driving样本。
+
+        注意：
+        这里只检查Q1-Q4本身是否完整，
+        不额外要求整个structured-world标签valid=True。
+
+        future_interaction_valid和camera_attention_valid
+        仍然继续由原有mask机制控制对应loss是否参与训练。
+        """
+
+        original_sample_count = len(self.images)
+
+        valid_indices = []
+        reasons = Counter()
+
+        for index in range(original_sample_count):
+
+            label_path = (
+                self._driving_four_question_label_path_for_index(
+                    index
                 )
+            )
+
+            # 专家条件标签不存在
+            if not label_path.is_file():
+                reasons["missing_label"] += 1
+                continue
+
+            try:
+                payload = Data_LG._load_gzip_json(
+                    label_path
+                )
+
+            except (
+                OSError,
+                EOFError,
+                ValueError,
+            ) as exc:
+                reasons[
+                    f"read_error:{type(exc).__name__}"
+                ] += 1
+                continue
+
+            # 必须具有完整Q1-Q4
+            questions = self._extract_four_questions(
+                payload
+            )
+
+            if len(questions) != 4:
+                reasons[
+                    "incomplete_four_questions"
+                ] += 1
+                continue
+
+            valid_indices.append(index)
+
+        indices = np.asarray(
+            valid_indices,
+            dtype=np.int64,
+        )
+
+        # surround_images必须与当前base samples严格一一对应
+        if len(self.surround_images) != original_sample_count:
+            raise RuntimeError(
+                "Driving surround index length mismatch before "
+                "four-question filtering: "
+                f"{len(self.surround_images)} vs "
+                f"{original_sample_count}"
+            )
+
+        # SurroundDatasetMixin已经提供了统一的基础样本过滤函数：
+        # images / boxes / measurements /
+        # sample_start / augment_exists
+        self._filter_base_samples(
+            valid_indices,
+            original_sample_count,
+        )
+
+        # surround_images也必须使用完全相同的index同步过滤
+        self.surround_images = (
+            self._filter_index_container(
+                self.surround_images,
+                indices,
+                valid_indices,
+            )
+        )
+
+        if bool(
+            getattr(
+                self,
+                "surround_print_filter_summary",
+                True,
+            )
+        ):
+            print(
+                f"[{self.split} Driving four-question samples]: "
+                f"kept {len(valid_indices)}/"
+                f"{original_sample_count}; "
+                f"filtered={dict(reasons)}"
+            )
+
+    @staticmethod
+    def _replace_with_four_question_language(
+        sample,
+        payload,
+    ):
+        questions = (
+            Data_Driving_Surround._extract_four_questions(
+                payload
+            )
+        )
 
         if len(questions) != 4:
             raise ValueError(
