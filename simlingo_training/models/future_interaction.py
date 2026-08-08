@@ -24,7 +24,9 @@ FUTURE_INTERACTION_CHANNEL_KEYS =
 
 
 class _SingleInteractionChannelDecoder(nn.Module):
-    """由一个具有明确语义的交互token解码一个结构化未来通道。"""
+    """
+    由一个具有明确语义的交互token解码一个结构化未来通道
+    """
 
     def __init__(self, hidden_size: int, output_size: int,): 
         # hidden_size [BS,D] D对应InternVL2-1B语言模型的hidden size
@@ -169,8 +171,8 @@ class FutureInteractionDecoder(nn.Module):
         self.channel_decoders = nn.ModuleList(
             [
                 _SingleInteractionChannelDecoder(
-                    hidden_size=hidden_size,
-                    output_size=output_size,
+                    hidden_size=hidden_size,  # D
+                    output_size=output_size,  # 128
                 )
                 for _ in FUTURE_INTERACTION_CHANNEL_KEYS
             ]
