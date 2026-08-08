@@ -47,6 +47,13 @@ driving_dataset:
   # driving 数据集相关的内容在 dataset_driving_surround.py 中实现 
   _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
+  # 普通Driving语言类型:
+  # four_questions: 与LG相同的Q1-Q4因果语言(当前完整模型)
+  # commentary: 原SimLingo commentary语言(语言类型消融)
+  # qa: 原DriveLM风格QA语言(语言类型消融)
+  # mixed: 保留原来的随机commentary/QA/driving任务
+  driving_language_mode: four_questions
+
   # 普通Driving结构化未来世界监督开关
   driving_use_future_interaction_grid: true                                 # 是否使用四通道结构化世界标签
   driving_future_interaction_grid_folder: driving_future_interaction_grids  # driving数据对应的四通道结构化世界标签的存放文件夹名称

@@ -16,6 +16,7 @@ from lg_waypoint_planner.actor_loader import load_current_actor_records, load_fu
 from lg_waypoint_planner.causal_response import (
     analyze_causal_objects,
     build_causal_candidate_pool,
+    build_causal_factor,
     compact_causal_analysis,
     evaluate_candidate_pool,
     revalidate_causal_analysis,
@@ -30,7 +31,10 @@ from lg_waypoint_planner.costmap import (
     build_temporal_stop_sign_constraints,
     build_traffic_light_state_context,
 )
-from lg_waypoint_planner.critical_factor import identify_critical_factor
+from lg_waypoint_planner.critical_factor import (
+    align_factor_with_selected_waypoints,
+    identify_critical_factor,
+)
 from lg_waypoint_planner.dataset import (
     get_ego_center,
     get_meters_per_pixel,
@@ -46,9 +50,12 @@ from lg_waypoint_planner.io_utils import (
     save_json_gz,
 )
 from lg_waypoint_planner.logger import LOGGER
+from lg_waypoint_planner.language import build_language_annotation
 from lg_waypoint_planner.processor import (
+    _build_core_questions,
     _build_reference_route_from_measurements,
     _required_reference_horizon_m,
+    build_fallback,
 )
 
 from .expert_conditioned_selection import (
@@ -286,6 +293,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     current_actors: List[Dict] = []
     causal_actor_candidates: List[Dict] = []
     scored: List[Dict] = []
+    initial_factor: Dict = {}
     expert_match: Dict = {
         "valid": False,
         "reason": invalid_reason or "not_run",
@@ -297,6 +305,8 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     secondary_source = "none"
     primary_score = 0.0
     secondary_score = 0.0
+    language_annotation: Dict = {}
+    core_questions: Dict = {}
     secondary_selection: Dict = {
         "enabled": bool(
             _cfg_get(
@@ -410,6 +420,53 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     if not actor_timelines and (primary_actor is not None or secondary_actor is not None):
         actor_timelines = load_future_actor_timelines(route_dir, frame_name, cfg)
 
+    # 普通Driving与LG共享同一套Q1-Q4自然语言生成逻辑。
+    # Q1/Q2使用专家条件因果结果；Q3/Q4直接描述真实专家未来轨迹。
+    if (
+        expert_future.ndim == 2
+        and expert_future.shape[1] >= 2
+        and len(expert_future) == int(cfg.horizon.num_future_waypoints)
+    ):
+        language_route = (
+            planning_route
+            if planning_route is not None
+            else expert_label_route
+        )
+        selected_for_language = build_fallback(
+            language_route,
+            expert_future,
+            cfg,
+            reason="driving_expert_language_supervision",
+        )
+
+        if bool(causal_analysis.get("has_causal_object", False)):
+            language_factor = build_causal_factor(
+                causal_analysis,
+                initial_factor,
+                reference_route=language_route,
+                cfg=cfg,
+            )
+        elif initial_factor:
+            language_factor = align_factor_with_selected_waypoints(
+                initial_factor=initial_factor,
+                current_actors=current_actors,
+                future_actor_timelines=actor_timelines,
+                selected=selected_for_language,
+                cfg=cfg,
+            )
+        else:
+            language_factor = {}
+
+        language_annotation = build_language_annotation(
+            frame_name,
+            language_factor,
+            selected_for_language,
+            scored,
+        )
+        core_questions = _build_core_questions(
+            language_annotation
+        )
+
     grid_result = build_grid(
         shape=tuple(costmap.shape[:2]),
         expert_route=expert_label_route,
@@ -496,6 +553,9 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             "invalid_reason": str(invalid_reason),
             "trajectory_source": "expert",
             "actor_selection_source": "expert_matched_lg_counterfactual_reselection",
+            # 普通Driving与LG使用相同的四问题键结构。
+            "core_questions": core_questions,
+            "language_annotation": language_annotation,
             #修改20260728：保存普通Driving主要关键actor的统一六视角显式监督。
             "visual_grounding": visual_grounding,
             "expert_match": expert_match,

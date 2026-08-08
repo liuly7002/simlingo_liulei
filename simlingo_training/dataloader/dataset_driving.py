@@ -549,7 +549,12 @@ class Data_Driving(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
         # 重估公式是什么意思
         # 1 / value 表示: 哪一类已经采得多，就给它更小权重. 哪一类采得少，就给它更大权重.
         # 注意: 这里平衡的不是数据集本身的静态分布，而是 训练过程中实际被采样成不同任务类型的次数。所以它属于 online task balancing。
-        if sum(self.num_sampled_per_type.values()) > 10000 and sum(self.num_sampled_per_type.values()) % 10000 == 0:
+        # 仅mixed模式需要在线重平衡；固定语言类型时不修改其采样概率。
+        if (
+            str(getattr(self, "driving_language_mode", "mixed")).lower() == "mixed"
+            and sum(self.num_sampled_per_type.values()) > 10000
+            and sum(self.num_sampled_per_type.values()) % 10000 == 0
+        ):
             self.prompt_probabilities = {key: 1/value for key, value in self.num_sampled_per_type.items()}
             self.prompt_probabilities = {key: value/sum(self.prompt_probabilities.values()) for key, value in self.prompt_probabilities.items()}
             print(f"Prompt probabilities: {self.prompt_probabilities}")
