@@ -378,6 +378,25 @@ def actor_record_from_box(
 
 
 def load_current_actor_records(route_dir: Path, frame_name: str, cfg) -> List[Dict]:
+
+    """
+    boxes/<frame>.json.gz
+            ↓
+    读取文件中的全部 box
+            ↓
+    去掉 ego
+            ↓
+    只保留关心的 actor 类别(动态对象：vehicle、pedestrian 静态道路障碍：traffic_cone、traffic_warning、barrier)
+            ↓
+    转换到当前 ego 坐标系
+            ↓
+    过滤超过 max_actor_distance_m 的对象
+            ↓
+    按距离排序
+            ↓
+    current_actors
+    """
+
     boxes = load_boxes(route_dir, frame_name, cfg)
     ego0 = ego_matrix_from_boxes(boxes)
     ego0_inv = np.linalg.inv(ego0) if ego0 is not None else None

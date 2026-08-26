@@ -155,12 +155,12 @@ def actor_route_relation(actor: Dict, reference_route: Optional[np.ndarray], cfg
 
     out.update({
         "route_relation_valid": True,
-        "route_longitudinal_m": longitudinal,
-        "route_lateral_offset_m": lateral,
+        "route_longitudinal_m": longitudinal,   # 重点: actor 沿着 reference route 方向大约在前方多远
+        "route_lateral_offset_m": lateral,      # 重点: actor 偏离 reference route 左右多少米
         "route_distance_m": float(math.sqrt(max(float(dist2[idx]), 0.0))),
         "route_heading_rad": float(route_heading),
         "heading_difference_deg": float(heading_diff_deg) if heading_diff_deg is not None else None,
-        "heading_relation": heading_relation,
+        "heading_relation": heading_relation,   # 重点: actor 与 route 的运动方向关系
         "relative_position": relative_position,
     })
     return out
@@ -196,16 +196,16 @@ def corridor_cost_stats(route: np.ndarray, temporal_costmaps: List[np.ndarray], 
     if len(arr) == 0:
         return {"mean_cost": 0.0, "max_cost": 0.0, "hard_ratio": 0.0, "first_hard_distance_m": None}
     return {
-        "mean_cost": float(np.mean(arr)),
-        "max_cost": float(np.max(arr)),
-        "hard_ratio": float(np.mean(arr >= float(cfg.factor.blocked_cost_threshold))),
-        "first_hard_distance_m": first_hard,
+        "mean_cost": float(np.mean(arr)),  # 沿 reference route 采样后，所有采样位置的平均 cost
+        "max_cost": float(np.max(arr)),    # 所有采样点中最大的 cost
+        "hard_ratio": float(np.mean(arr >= float(cfg.factor.blocked_cost_threshold))),  # reference route 采样点中，有多大比例达到 hard blocked threshold
+        "first_hard_distance_m": first_hard,# 从 reference route 开始向前走，第一个明显 blocked 的位置距离大概是多少米
     }
 
 
 def actor_relevance_score(actor: Dict, cfg) -> float:
     
-    x = float(actor["x_m"]); y = float(actor["y_m"])  # x:纵向距离 y:横向距离
+    x = float(actor["x_m"]); y = float(actor["y_m"])              # x:纵向距离 y:横向距离
     d = max(float(actor.get("distance_m", np.hypot(x, y))), 0.1)  # 欧式距离
     
     score = 0.0
@@ -264,12 +264,21 @@ def choose_critical_actor(actors: List[Dict], cfg) -> Dict:
     """
     best = None
     best_score = -1e9
+    
     for a in actors:
+
+        # 选择得分最高的actor
         s = actor_relevance_score(a, cfg)
+    
+        # 更新选中的actor为分数最高的那个
         if s > best_score:
             best = a; best_score = s
+    
+    # 情况1: 没有actor
     if best is None or best_score < float(cfg.factor.min_actor_relevance_score):
         return {"exists": False}
+    
+    # 情况2: 有actor且仅是分数最高的那一个
     out = dict(best)
     out["exists"] = True
     out["relevance_score"] = float(best_score)
@@ -356,11 +365,11 @@ def red_light_rule_stats(route: np.ndarray, temporal_bundle: Dict, ego_center, m
     min_stop = _safe_float(_cfg_get(rule_cfg, "minimum_rule_stop_distance_m", 0.50), 0.50)
     required = max(min_stop, stop_line_distance - float(cfg.vehicle.ego_half_length_m) - margin)
     return {
-        "active": True,
-        "stop_line_distance_m": stop_line_distance,
-        "required_stop_distance_m": float(required),
-        "active_temporal_indices": active_indices,
-        "current_red_active": bool(0 in active_indices),
+        "active": True,                                 # 是否检测到与 reference route 相关的红灯停止线
+        "stop_line_distance_m": stop_line_distance,     # 从当前 ego 出发，沿 reference route 到红灯停止线的距离
+        "required_stop_distance_m": float(required),    # 自车中心应该停在哪里 用距离停止线的距离减去自车的半长再减去一个阈值
+        "active_temporal_indices": active_indices,      # 哪些 temporal red-light maps 中存在激活的红灯停止线
+        "current_red_active": bool(0 in active_indices),# True表示当前帧已经是红灯
     }
 
 
@@ -416,12 +425,45 @@ def stop_sign_rule_stats(route: np.ndarray, temporal_bundle: Dict, ego_center, m
     }
 
 def identify_critical_factor(route: np.ndarray, actors: List[Dict], temporal_bundle: Dict, ego_center, meters_per_pixel: float, cfg) -> Dict:
+    
+    """
+    返回值
+    │
+    ├── ① 场景总体判断
+    │   ├── type
+    │   ├── blocked_by_costmap
+    │   └── corridor_stats
+    │
+    ├── ② 交通规则
+    │   ├── red_light_rule
+    │   ├── stop_sign_rule
+    │   ├── traffic_light_state
+    │   └── required_stop_distance_m
+    │
+    ├── ③ 初始候选对象
+    │   └── critical_actor
+    │
+    └── ④ 描述和阶段信息
+        ├── reason_zh
+        ├── reason_en
+        └── stage
+    """
+    
+    # 看 reference route 前方是不是被占用了
     stats = corridor_cost_stats(route, temporal_bundle.get("costmaps", []), ego_center, meters_per_pixel, cfg)
+    
     red_stats = red_light_rule_stats(route, temporal_bundle, ego_center, meters_per_pixel, cfg)
+    
     stop_stats = stop_sign_rule_stats(route, temporal_bundle, ego_center, meters_per_pixel, cfg)
+    
     traffic_light_state = dict(temporal_bundle.get("traffic_light_state", {}) or {})
+    
+    # 在原始 actors 信息基础上，再补充“每个 actor 相对于 reference_route 的位置和方向关系”之后得到的新 actor 列表
     route_aware_actors = [enrich_actor_route_relation(a, route, cfg) for a in actors]
+    
+    # 分数最高的那个actor
     actor = choose_critical_actor(route_aware_actors, cfg)
+    
     blocked = bool(stats["hard_ratio"] >= float(cfg.factor.blocked_hard_ratio) or stats["max_cost"] >= float(cfg.factor.blocked_cost_threshold))
 
     if red_stats.get("active", False):
@@ -452,21 +494,23 @@ def identify_critical_factor(route: np.ndarray, actors: List[Dict], temporal_bun
         reason_en = "No dominant risk factor is detected on the reference corridor, so normal route following is preferred."
 
     return {
-        "type": ftype,
-        "blocked_by_costmap": blocked,
-        "corridor_stats": stats,
-        "red_light_rule": red_stats,
-        "stop_sign_rule": stop_stats,
-        "traffic_light_state": traffic_light_state,
-        "required_stop_distance_m": (
+
+        # type 决定“当前应该生成哪些类型的候选驾驶动作”
+        "type": ftype,                   # 当前场景初步被归类为什么类型的驾驶约束场景(代码会按照明确优先级判断:红灯、停止标识、相关actor、前方costmap阻塞、道路清晰)
+        "blocked_by_costmap": blocked,   # True / False 表示沿着当前 reference route 向前看，occupancy costmap 是否显示参考走廊明显被阻塞
+        "corridor_stats": stats,         # 正常沿 reference route 开，前方通畅程度统计
+        "red_light_rule": red_stats,     # 红灯停止线的一些信息
+        "stop_sign_rule": stop_stats,    # 停止标识的一些信息
+        "traffic_light_state": traffic_light_state,  # 交通灯语义状态 主要表示当前灯色是什么以及灯色是否刚刚发生变化
+        "required_stop_distance_m": (                # 如果当前交通规则要求停车，那么 ego 中心应该沿 reference route 前进多少米后停车
             red_stats.get("required_stop_distance_m", None)
             if red_stats.get("active", False)
             else stop_stats.get("required_stop_distance_m", None)
         ),
-        "critical_actor": actor,
+        "critical_actor": actor,         # 启发式  根据当前几何位置、类别、距离、reference route 关系等启发式指标，当前最值得关注的 actor（一个）
         "reason_zh": reason_zh,
-        "reason_en": reason_en,
-        "stage": "candidate_generation",
+        "reason_en": reason_en,          # 它只是 initial factor 的解释文本，不是最终反事实因果语言标签
+        "stage": "candidate_generation", # 当前这个 factor 是在哪一个处理阶段产生的
     }
 
 
@@ -474,14 +518,15 @@ def factor_from_actor(
     actor: Dict,
     stage: str = "causal_candidate_generation",
     reference_route: Optional[np.ndarray] = None,
-    cfg=None,
-) -> Dict:
+    cfg=None,) -> Dict:
+    
     """Build a factor record anchored to one explicit actor.
 
     The old pipeline selected one actor with a relevance heuristic before
     planning.  The causal pipeline instead evaluates several actor-anchored
     response sets and later verifies influence through object removal.
     """
+    
     if not actor:
         return {
             "type": "clear_reference_corridor",  # 

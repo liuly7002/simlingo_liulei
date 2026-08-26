@@ -586,10 +586,19 @@ def evaluate_candidate(
     cfg,
     factor: Dict = None,) -> Dict:
     
+    
+    ######################################## 取出来候选轨迹 ########################################
+
     rollout = candidate["rollout"]
-    # 占用检查
+
+
+    ######################################## 在完整场景中对候选轨迹进行各种检查 ########################################
+
+    # 占用检查  检查自车未来整个车身是否在对应未来时刻进入 blocked / occupied 区域
     occ = occupancy_bev_score(rollout, temporal_bundle.get("costmaps", []), ego_center, meters_per_pixel, cfg)
-    # 红灯停止线检查：交通规则与物理占用保持独立。
+    
+    
+    # 红灯停止线检查：自车前边缘有没有越过当前激活的红灯停止线
     red_rule = red_light_constraint_score(
         rollout,
         temporal_bundle.get("red_light_maps", []),
@@ -597,6 +606,7 @@ def evaluate_candidate(
         meters_per_pixel,
         cfg,
     )
+    
     # 停止标志检查：必须在进入停止控制区域前完成停车。
     stop_rule = stop_sign_constraint_score(
         rollout,
@@ -605,6 +615,7 @@ def evaluate_candidate(
         meters_per_pixel,
         cfg,
     )
+
     # 实线检查，检查自车中心轨迹是否穿越实线
     lane = solid_lane_constraint_score(
         rollout,
@@ -613,10 +624,12 @@ def evaluate_candidate(
         meters_per_pixel,
         cfg,
     )
+
     # 动力学平滑性检查
     smooth = smoothness_score(rollout, cfg)
     motion = rollout_motion_summary(rollout)
-    # 碰撞检查
+    
+    # 和未来 actor 做几何碰撞检测
     collision = (
         check_rollout_collisions(rollout, actor_timelines, cfg)
         if bool(cfg.collision.enabled)
@@ -637,7 +650,7 @@ def evaluate_candidate(
         and str(candidate.get("variant_id", "")) == "hold_current_stop__hold"
     )
 
-    # 计算候选轨迹与原始参考路线的
+    # 检查偏离 reference route 多少
     wp = np.asarray(rollout["waypoints"], dtype=np.float32)
     route_dev = min_distance_to_polyline(wp, base_route)
     mean_dev = float(np.mean(route_dev)) if len(route_dev) else 0.0
@@ -693,24 +706,36 @@ def evaluate_candidate(
     progress_reward_weight = _cfg_float(scoring_cfg, "progress_reward_weight", 0.15)
     progress_reward = -progress_reward_weight * max(0.0, motion["final_forward_m"])
 
+
+
+
+
+    ######################################## socre ########################################
+
     score = (
-        occupancy_score
-        + _cfg_float(scoring_cfg, "out_of_bounds_weight", 200.0) * occ["out_of_bounds_ratio"]
-        + _cfg_float(scoring_cfg, "route_deviation_weight", 8.0) * mean_dev
-        + _cfg_float(scoring_cfg, "route_deviation_max_weight", 0.0) * max_dev
-        + _cfg_float(scoring_cfg, "acc_weight", 0.2) * smooth["mean_abs_acc"]
-        + _cfg_float(scoring_cfg, "steer_weight", 1.0) * smooth["mean_abs_steer"]
-        + _cfg_float(scoring_cfg, "steer_rate_weight", 0.2) * smooth["mean_abs_steer_rate"]
-        + _cfg_float(scoring_cfg, "lat_acc_weight", 0.5) * smooth["max_abs_lateral_accel"]
-        + _cfg_float(scoring_cfg, "yaw_rate_weight", 0.5) * smooth["max_abs_yaw_rate"]
-        + behavior_prior
-        + collision_penalty
-        + solid_lane_penalty
-        + red_light_penalty
-        + stop_sign_penalty
-        + progress_reward
+        occupancy_score                                                                        # occupancy程度
+        + _cfg_float(scoring_cfg, "out_of_bounds_weight", 200.0) * occ["out_of_bounds_ratio"]  # 越界
+        + _cfg_float(scoring_cfg, "route_deviation_weight", 8.0) * mean_dev                    # 偏离reference route
+        + _cfg_float(scoring_cfg, "route_deviation_max_weight", 0.0) * max_dev               
+        + _cfg_float(scoring_cfg, "acc_weight", 0.2) * smooth["mean_abs_acc"]                  # 加速度
+        + _cfg_float(scoring_cfg, "steer_weight", 1.0) * smooth["mean_abs_steer"]              # 转向
+        + _cfg_float(scoring_cfg, "steer_rate_weight", 0.2) * smooth["mean_abs_steer_rate"]    # 转向变化
+        + _cfg_float(scoring_cfg, "lat_acc_weight", 0.5) * smooth["max_abs_lateral_accel"]     # 横向加速度
+        + _cfg_float(scoring_cfg, "yaw_rate_weight", 0.5) * smooth["max_abs_yaw_rate"]         # yaw rate
+        + behavior_prior           # 行为先验
+        + collision_penalty        # 碰撞惩罚
+        + solid_lane_penalty       # 实线惩罚
+        + red_light_penalty        # 红灯惩罚
+        + stop_sign_penalty        # 停止标识惩罚
+        + progress_reward          # 进度奖励
     )
 
+
+
+
+    ######################################## allow ########################################
+
+    # allow 是这条轨迹到底有没有资格被选 这是硬性条件
     allowed = True
     reasons = []
     if not candidate["intent"].get("active", False) and not bool(cfg.behaviors.allow_inactive_selection):
@@ -798,6 +823,11 @@ def evaluate_candidate(
         allowed = False
         reasons.append("yield_stop_not_selectable_by_default")
 
+
+
+
+    ######################################## 形成返回信息 ########################################
+
     info = {
         "intent_id": int(candidate["intent"]["intent_id"]),
         "hard_rule_hold_override": bool(active_red_hold),
@@ -811,8 +841,8 @@ def evaluate_candidate(
         "response_object": candidate.get("response_object", {"exists": False}),
         "target_speed": float(candidate["target_speed"]),
         "target_speed_profile": np.asarray(candidate.get("target_speed_profile", rollout.get("target_speed_profile", [])), dtype=np.float32).tolist(),
-        "score": float(score),
-        "allowed": bool(allowed),
+        "score": float(score),             # 重点 1
+        "allowed": bool(allowed),          # 重点 2
         "reasons": reasons,
         "mean_route_deviation": mean_dev,
         "max_route_deviation": max_dev,

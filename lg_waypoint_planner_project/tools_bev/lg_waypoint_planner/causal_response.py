@@ -92,13 +92,10 @@ def same_actor(a: Dict, b: Dict) -> bool:
     return math.hypot(dx, dy) <= 1.5  # 如果两个actor的欧式距离小于等于1.5米，则认为是同一个actor
 
 
-def rank_causal_actor_candidates(
-    current_actors: List[Dict],
-    cfg,
-    reference_route: Optional[np.ndarray] = None,
-) -> List[Dict]:
+def rank_causal_actor_candidates(current_actors: List[Dict],cfg,reference_route: Optional[np.ndarray] = None,) -> List[Dict]:
+    
     cr = _cfg_get(cfg, "causal_response", {})
-    max_objects = max(_cfg_int(cr, "max_objects_to_test", 5), 1)  # 最多测试的对象数量
+    max_objects = max(_cfg_int(cr, "max_objects_to_test", 5), 1)  # 最多测试的对象数量(目前是3个)
     max_distance = _cfg_float(cr, "max_object_distance_m", 35.0)  # 最远距离<=35m
     min_forward = _cfg_float(cr, "min_forward_x_m", -1.0)         # 自车后方1m外的不测试
 
@@ -124,6 +121,8 @@ def rank_causal_actor_candidates(
 
     # 排序: 首先按相关性分数降序排序，相关性分数越高越靠前，如果相关性分数相同，则按距离排序，距离越近越靠前
     ranked.sort(key=lambda a: (-float(a.get("causal_test_relevance_score", 0.0)), float(a.get("distance_m", 1e9))))
+    
+    # 返回列表中的前三个
     return ranked[:max_objects]
 
 
@@ -221,6 +220,7 @@ def build_causal_candidate_pool(
     measurement: Dict,
     cfg,
     expert_future: Optional[np.ndarray] = None,) -> Tuple[List[Dict], Dict, List[Dict]]:
+
     """Build a compact pool of object-conditioned response candidates.
 
     The pool contains one global nominal route-follow candidate and active
@@ -228,8 +228,15 @@ def build_causal_candidate_pool(
     object-removal test, rather than the relevance heuristic, decides which
     object actually caused the selected response.
     """
+
+    # 1. 一个“没有任何周围交通参与者干扰”的干净驾驶世界，自车只需要按照 reference_route 正常行驶，
+    # 自车按照 reference route 通过自行车模型推断出来的自车未来的waypoints
     nominal = build_nominal_reference_candidate(base_route, measurement, cfg, expert_future=expert_future)
 
+
+
+    # 2. 判断当前是不是已经有强制交通规则
+    
     # Active traffic rules are immutable causes, not actors that can be removed
     # by the causal intervention.  When the current frame already requires a
     # stop, actor-conditioned lateral responses must not compete with the rule
@@ -245,17 +252,24 @@ def build_causal_candidate_pool(
         str((initial_factor or {}).get("type", "")) == "stop_sign_control"
         and bool(stop_rule.get("current_stop_active", False))
     )
+
+
+    # 3. 通过启发式的方式获得前三甲的关键actor,这三个才有资格进入后续的反事实因果实验
+    
     # Keep ranking nearby actors even when a traffic rule is active.  They remain
     # valid attention targets and can coexist with the traffic light / stop sign
     # in the supervision.  However, while a current rule already requires a
     # stop, actor-conditioned response candidates are not allowed to compete
     # with the rule response; this preserves the correct driving intent.
-    actor_candidates = rank_causal_actor_candidates(
-        current_actors,
-        cfg,
-        reference_route=base_route,
-    )
+    actor_candidates = rank_causal_actor_candidates(current_actors,cfg,reference_route=base_route,)
+    
+    
+    # 当前场景是否存在强制红灯/STOP sign
     rule_currently_active = bool(current_red_active or current_stop_active)
+
+
+
+    # 4. 初始化真正的候选轨迹池
 
     # The nominal rollout is still returned separately as the no-interference
     # reference.  Once a current traffic rule is active, however, it must not
@@ -264,6 +278,10 @@ def build_causal_candidate_pool(
     # can beat the true rule response merely because its numerical intervention
     # is smaller.
     pool = [] if rule_currently_active else [nominal]
+
+
+
+    # 5. 交通规则候选的特殊生成
 
     # Rule responses must always be generated, even when a relevant actor is
     # also present.  The actor remains available for attention and language,
@@ -299,18 +317,28 @@ def build_causal_candidate_pool(
             if c.get("intent", {}).get("active", False) and c.get("intent_name") != "route_follow":
                 pool.append(c)
 
+
+
+    # 7. 对每一个 causal_actor_candidate 单独生成响应
+
     # Under an active traffic rule, keep actor candidates for attention /
     # counterfactual analysis but do not let their lateral responses steal the
     # selected rule intent.
     if not rule_currently_active:
         for actor in actor_candidates:
+
+            # actor对应的factor
             factor = factor_from_actor(
                 actor,
                 stage="causal_candidate_generation",
                 reference_route=base_route,
                 cfg=cfg,
             )
+
+            # 根据actor的factor生成对应的驾驶意图
             intents = infer_intents(factor, cfg)
+            
+            # 依据驾驶意图生成对应的候选轨迹 
             for c in build_candidates(base_route, intents, factor, measurement, cfg, expert_future=expert_future):
                 # The causal pool uses only responses that are active for this
                 # object.  Diagnostic inactive candidates would otherwise multiply
@@ -319,8 +347,11 @@ def build_causal_candidate_pool(
                     continue
                 if not c.get("intent", {}).get("active", False):
                     continue
+
+                # 将这些驾驶轨迹拼接起来
                 pool.append(c)
 
+    # 去重操作 不用管
     dedup = []
     seen = set()
     for c in pool:
@@ -329,7 +360,63 @@ def build_causal_candidate_pool(
             continue
         seen.add(key)
         dedup.append(c)
+
+    # dedup:            后面需要真正评价的各种驾驶响应轨迹
+    # nominal:          没有主动响应任何对象时的正常驾驶基准轨迹
+    # actor_candidates: 后面准备逐个做 actor-removal 的对象，当前最多 3 个
     return dedup, nominal, actor_candidates
+
+    """
+    ① nominal_reference
+
+    假设没有任何周围actor干扰
+            ↓
+    按照reference_route正常驾驶
+            ↓
+    结合当前车辆状态/正常速度profile
+            ↓
+    车辆运动学 rollout
+            ↓
+    得到“无干扰基准未来轨迹”
+
+
+    ② causal_actor_candidates
+
+    current_actors
+            ↓
+    距离/前后位置过滤
+            ↓
+    relevance_score启发式排序
+            ↓
+    取前3名
+            ↓
+    获得“有资格进入反事实实验”的actor
+
+
+    ③ 对每个actor单独建立factor
+
+    actor A → factor_A
+    actor B → factor_B
+    actor C → factor_C
+
+            ↓
+
+    infer_intents(factor)
+            ↓
+    决定这个actor对应哪些驾驶意图应该被激活
+
+            ↓
+
+    build_candidates()
+            ↓
+    给每种active intent生成具体候选路线和速度profile
+
+            ↓
+
+    rollout()
+            ↓
+    得到真正的候选未来waypoints
+    """
 
 
 def _actor_at_time(actor: Dict, actor_timelines: Dict[int, List[Dict]], time_index: int) -> Optional[Dict]:
@@ -480,6 +567,8 @@ def evaluate_candidate_pool(
     actor_timelines: Dict[int, List[Dict]],
     cfg,
     factor: Optional[Dict] = None,) -> List[Dict]:
+
+    # 取出来每一条候选轨迹,然后进行测试
     return [
         evaluate_candidate(
             c,
@@ -588,15 +677,19 @@ def analyze_causal_objects(
     meters_per_pixel: float,
     actor_timelines: Dict[int, List[Dict]],
     cfg,
-    expert_future: Optional[np.ndarray] = None,
-) -> Dict:
-    """Find the object whose removal most changes the selected ego behavior.
-
-    Every object-removal intervention is treated as a new planning problem.  The
-    counterfactual scene is re-diagnosed and receives its own intent hypotheses,
-    candidate pool, safety evaluation, and minimum-response selection.  This
-    prevents a newly exposed actor or traffic rule from being evaluated only
-    through actions that were generated for the original full scene.
+    expert_future: Optional[np.ndarray] = None,) -> Dict:
+    
+    """
+                        同一条 nominal_reference
+                        无干扰理想基准轨迹
+                                │
+                ┌──────────────┼──────────────┐
+                │              │              │
+            完整世界        删除A世界       删除B世界 ...
+                │              │              │
+            重新规划        重新规划         重新规划
+                │              │              │
+        full_selected      cf_selected_A   cf_selected_B
     """
     cr = _cfg_get(cfg, "causal_response", {})
     enabled = _cfg_bool(cr, "enabled", True)
@@ -620,6 +713,7 @@ def analyze_causal_objects(
     tests = []
     best = None
 
+    # 逐个测试每一个候选actor 
     for actor in actor_candidates:
         cf_bundle = remove_actor_from_temporal_bundle(
             actor,

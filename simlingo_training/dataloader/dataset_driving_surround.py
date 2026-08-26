@@ -23,9 +23,7 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
         # 普通Driving语言模式：
         # four_questions为当前完整模型；commentary/qa用于语言类型消融；
         # mixed保留原始SimLingo随机语言任务逻辑。
-        language_mode = str(
-            common_cfg.get("driving_language_mode", "four_questions")
-        ).lower()
+        language_mode = str(common_cfg.get("driving_language_mode", "four_questions")).lower()
         if language_mode not in {
             "four_questions",
             "commentary",
@@ -66,9 +64,9 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
 
         self._initialize_surround_dataset()
 
-        # 当前完整模型要求普通Driving必须具有完整Q1-Q4语言监督。
-        # 因此在Dataset初始化阶段直接过滤缺少完整四问的样本，
-        # 避免训练过程中在__getitem__阶段才因缺失四问而报错。
+        # 当前完整模型要求普通Driving必须具有完整Q1-Q4语言监督
+        # 因此在Dataset初始化阶段直接过滤缺少完整四问的样本,
+        # 避免训练过程中在__getitem__阶段才因缺失四问而报错.
         if language_mode == "four_questions":
             self._filter_samples_with_valid_four_questions()
 
@@ -167,14 +165,13 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
 
     def _filter_samples_with_valid_four_questions(self):
         """
-        four_questions模式下，只保留具有完整Q1-Q4的普通Driving样本。
+        four_questions模式下,只保留具有完整Q1-Q4的普通Driving样本.
 
-        注意：
-        这里只检查Q1-Q4本身是否完整，
-        不额外要求整个structured-world标签valid=True。
+        注意:
+        这里只检查Q1-Q4本身是否完整,不额外要求整个structured-world标签valid=True.
 
         future_interaction_valid和camera_attention_valid
-        仍然继续由原有mask机制控制对应loss是否参与训练。
+        仍然继续由原有mask机制控制对应loss是否参与训练.
         """
 
         original_sample_count = len(self.images)
@@ -269,15 +266,8 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
             )
 
     @staticmethod
-    def _replace_with_four_question_language(
-        sample,
-        payload,
-    ):
-        questions = (
-            Data_Driving_Surround._extract_four_questions(
-                payload
-            )
-        )
+    def _replace_with_four_question_language(sample,payload,):
+        questions = Data_Driving_Surround._extract_four_questions(payload)
 
         if len(questions) != 4:
             raise ValueError(
@@ -353,8 +343,8 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
         )
 
     def __getitem__(self, index):
-        # Preserve all original driving/commentary/QA language logic,
-        # waypoints, route, target points and prompt sampling.
+        # 先复用Data_Driving生成waypoints、route、target points及基础prompt;
+        # four_questions模式下,后续再将基础driving语言替换为统一Q1-Q4语言
         sample = Data_Driving.__getitem__(self, index)
 
         image_data = {}
@@ -374,15 +364,12 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
         use_participant_spatial_attention = bool(getattr(self,"driving_use_participant_spatial_attention_supervision",False,))
 
         # 是否使用与LG相同的固定Q1-Q4语言监督
-        use_four_question_language = (
-            str(getattr(self, "driving_language_mode", "four_questions")).lower()
-            == "four_questions"
-        )
+        use_four_question_language = (str(getattr(self, "driving_language_mode", "four_questions")).lower() == "four_questions")
 
         if (
-            use_future_interaction
-            or use_participant_spatial_attention
-            or use_four_question_language
+            use_future_interaction                # 使用未来结构化世界标签监督
+            or use_participant_spatial_attention  # 使用[6,64]软标签监督
+            or use_four_question_language         # 使用与LG相同的固定Q1-Q4语言监督
         ):
             measurement_path = Path(Data_LG._decode_path(sample.measurement_path))
             route_dir = measurement_path.parent.parent
@@ -408,11 +395,8 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
                 # future_interaction_valid 为是都有效
                 future_interaction_grid, future_interaction_valid = Data_LG._load_future_interaction_grid(future_interaction_path)
 
-            # 专家条件actor标签同时提供[6,64]软标签与Q1-Q4语言。
-            if (
-                use_participant_spatial_attention
-                or use_four_question_language
-            ):
+            # 专家条件actor标签同时提供[6,64]软标签与Q1-Q4语言
+            if (use_participant_spatial_attention or use_four_question_language):
 
                 # 标签所在目录
                 participant_attention_path = (
@@ -446,6 +430,7 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
                             use_global_img=bool(self.use_global_img),
                         )
 
+                    # 替换语言为Q1-Q4语言监督
                     if use_four_question_language:
                         sample = self._replace_with_four_question_language(
                             sample,

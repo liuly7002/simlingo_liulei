@@ -38,7 +38,7 @@ from .language import (
     describe_waypoint_shape_en,
     describe_driving_intent_name,
 )
-#修改20260720：生成由LG主要因果对象投影得到的六视角相机注意力软监督目标。
+
 from .camera_attention_target import build_camera_attention_supervision
 from .visualizer import save_bev_debug, save_rgb_waypoints_debug_image
 
@@ -135,8 +135,7 @@ def _measurement_route_without_ego_insertion(measurement: Dict, route_key: str) 
 def _future_local_route_to_current_frame(
     future_route_local: np.ndarray,
     future_pose,
-    current_pose,
-) -> np.ndarray:
+    current_pose,) -> np.ndarray:
     """Transform a future frame's ego-local route into the current ego frame."""
     pts = np.asarray(future_route_local, dtype=np.float32)[:, :2]
     future_global, future_yaw = future_pose
@@ -159,8 +158,7 @@ def _build_reference_route_from_measurements(
     frame_name: str,
     current_measurement: Dict,
     required_horizon_m: float,
-    cfg,
-):
+    cfg,):
     """Build the current reference from real routes saved in measurement frames.
 
     The current frame's route is kept as the authoritative prefix.  Only when its
@@ -412,8 +410,7 @@ def concise_candidate_json(
     c: Dict,
     selected: bool,
     include_waypoints: bool = True,
-    factor: Dict = None,
-) -> Dict:
+    factor: Dict = None,) -> Dict:
     info = c["info"]
     internal_name = info.get("intent_name", "unknown")
     semantic_factor = factor if selected else None
@@ -496,8 +493,7 @@ def build_public_output(
     response_supervision: Dict,
     reference_rollout: Dict,
     cfg,
-    debug_paths: Dict,
-) -> Dict:
+    debug_paths: Dict,) -> Dict:
     candidate_items = [
         concise_candidate_json(
             c,
@@ -630,14 +626,28 @@ def build_full_debug_output(frame_name, mpp, ego_center, temporal_bundle, factor
     }
 
 
+
+# 核心函数
 def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
-    # 读取场景数据，包括测量数据、代价地图、车道约束地图和元数据
+
+
+
+
+    """
+    第一阶段: 构造一个所有后续真实场景与反事实场景都能够公平比较的统一规划世界
+    """
+
+
+    ######################################## 1. 当前帧基础数据的读取与合法性检查 ########################################
+
+    # 当前帧文件路径
     measurement_path = route_dir / cfg.paths.measurements_folder / f"{frame_name}.json.gz"
     costmap_path = route_dir / cfg.paths.costmap_folder / f"{frame_name}.npy"
     lane_constraint_folder = str(_cfg_get(cfg.paths, "lane_constraint_folder", "lane_constraints"))
     lane_constraint_path = route_dir / lane_constraint_folder / f"{frame_name}.npy"
     meta_path = route_dir / cfg.paths.bev_meta_folder / f"{frame_name}.json.gz"
+    # 安全性检查
     if not measurement_path.exists() or not costmap_path.exists():
         LOGGER.info(f"[Skip] missing measurement/costmap for {route_dir.name}/{frame_name}")
         return False
@@ -645,6 +655,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     lane_cfg = _cfg_get(cfg, "lane_constraints", {})
     lane_enabled = bool(_cfg_get(lane_cfg, "enabled", True))
     require_lane_map = bool(_cfg_get(lane_cfg, "require_map", True))
+    # 安全性检查
     if lane_enabled and require_lane_map and not lane_constraint_path.exists():
         LOGGER.info(
             f"[Skip] missing solid-lane constraint map for {route_dir.name}/{frame_name}: "
@@ -652,6 +663,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         )
         return False
 
+    # 将文件内容读取到内存
     measurement = load_json_gz(measurement_path)
     costmap = load_costmap(costmap_path)
     if lane_enabled and lane_constraint_path.exists():
@@ -664,10 +676,16 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     else:
         solid_lane_constraint = np.zeros_like(costmap, dtype=np.float32)
     meta = load_json_gz(meta_path) if meta_path.exists() else {}
-    mpp = get_meters_per_pixel(meta, float(cfg.paths.default_pixels_per_meter))
+    mpp = get_meters_per_pixel(meta, float(cfg.paths.default_pixels_per_meter)) # 一个 BEV 像素代表多少米
     ego_center = get_ego_center(meta, costmap.shape)
 
+
+
+    ######################################## 2. 导航参考路径 完整场景的一部分 ########################################
+
+    # 依据当前自车的速度、加速度灯来计算当前帧真正需要多长的参考路径
     reference_horizon_m = _required_reference_horizon_m(measurement, cfg)
+    # 当前帧的导航参考路径reference_route
     reference_route, reference_route_info = _build_reference_route_from_measurements(
         route_dir=route_dir,
         frame_name=frame_name,
@@ -684,65 +702,104 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         )
         return False
 
+
+
+    ######################################## 3. 建立"当前1帧及未来10帧的占用地图(也可以认为是时序世界) 完整场景的一部分" ########################################
+
+    # 主体构建 主要是为了构建普通的costmaps,算是物理障碍物占用
+
+    # temporal_bundle["costmaps"] 当前1帧及未来10帧各时刻的占用/可行驶地图
     temporal_bundle = build_temporal_costmaps(route_dir, frame_name, measurement, costmap, meta, cfg)
-    red_light_bundle = build_temporal_red_light_constraints(
-        route_dir=route_dir,
-        frame_name=frame_name,
-        current_measurement=measurement,
-        current_shape=costmap.shape,
-        current_meta=meta,
-        cfg=cfg,
-    )
-    temporal_bundle["red_light_maps"] = red_light_bundle.get("maps", [])
-    temporal_bundle["red_light_frames"] = red_light_bundle.get("frames", [])
-    temporal_bundle["red_light_valid"] = red_light_bundle.get("valid", [])
-    temporal_bundle["red_light_missing_reasons"] = red_light_bundle.get("missing_reasons", [])
-    traffic_light_state = build_traffic_light_state_context(
-        route_dir=route_dir,
-        frame_name=frame_name,
-        current_shape=costmap.shape,
-        cfg=cfg,
-    )
-    temporal_bundle["traffic_light_state"] = traffic_light_state
-    stop_sign_bundle = build_temporal_stop_sign_constraints(
-        route_dir=route_dir,
-        frame_name=frame_name,
-        current_measurement=measurement,
-        current_shape=costmap.shape,
-        current_meta=meta,
-        cfg=cfg,
-    )
-    temporal_bundle["stop_sign_maps"] = stop_sign_bundle.get("maps", [])
-    temporal_bundle["stop_sign_frames"] = stop_sign_bundle.get("frames", [])
-    temporal_bundle["stop_sign_valid"] = stop_sign_bundle.get("valid", [])
-    temporal_bundle["stop_sign_missing_reasons"] = stop_sign_bundle.get("missing_reasons", [])
+    
+    # 追加内容(追加红灯停止线、交通灯状态、停止牌和实线约束)
+
+    # 红灯停止线
+    red_light_bundle = build_temporal_red_light_constraints(route_dir=route_dir,frame_name=frame_name,current_measurement=measurement,current_shape=costmap.shape,current_meta=meta,cfg=cfg,)
+    temporal_bundle["red_light_maps"] = red_light_bundle.get("maps", [])    # 当前1帧及未来10帧各时刻的红灯停止线 mask
+    temporal_bundle["red_light_frames"] = red_light_bundle.get("frames", [])# 红灯 mask 对应的帧编号
+    temporal_bundle["red_light_valid"] = red_light_bundle.get("valid", [])  # 每个红灯 mask 是否来自真实有效数据
+    temporal_bundle["red_light_missing_reasons"] = red_light_bundle.get("missing_reasons", [])  # 红灯数据缺失原因
+    
+    # 交通灯状态
+    traffic_light_state = build_traffic_light_state_context(route_dir=route_dir,frame_name=frame_name,current_shape=costmap.shape,cfg=cfg,)
+    temporal_bundle["traffic_light_state"] = traffic_light_state  # 当前和上一帧交通灯颜色状态，用于语义
+    
+    # 停止牌 也就是标又STOP的指示牌 在该指示牌的时候自车应该先减速然后停车观察然后继续驾驶
+    stop_sign_bundle = build_temporal_stop_sign_constraints(route_dir=route_dir,frame_name=frame_name,current_measurement=measurement,current_shape=costmap.shape,current_meta=meta,cfg=cfg,)
+    temporal_bundle["stop_sign_maps"] = stop_sign_bundle.get("maps", [])    # 当前及未来各时刻的 stop sign 控制区域 mask
+    temporal_bundle["stop_sign_frames"] = stop_sign_bundle.get("frames", [])# stop sign mask 对应的帧编号
+    temporal_bundle["stop_sign_valid"] = stop_sign_bundle.get("valid", [])  # 每个 stop sign mask 是否有效
+    temporal_bundle["stop_sign_missing_reasons"] = stop_sign_bundle.get("missing_reasons", [])  # stop sign 数据缺失原因
+    
+    # 实线约束
     # Keep the solid-lane map as an immutable static constraint.  Counterfactual
     # actor removal only edits occupancy costmaps, so it cannot erase road rules.
-    temporal_bundle["solid_lane_constraint"] = solid_lane_constraint.astype(np.float32)
-    temporal_bundle["solid_lane_constraint_path"] = str(lane_constraint_path)
+    temporal_bundle["solid_lane_constraint"] = solid_lane_constraint.astype(np.float32)  # 当前场景的实线约束地图
+    temporal_bundle["solid_lane_constraint_path"] = str(lane_constraint_path)            # 上述实线约束 .npy 文件路径
+    
+    # 从当前帧的boxes/<frame_name>.json.gz中获取当前这一帧的 actor
     current_actors = load_current_actor_records(route_dir, frame_name, cfg)
     future_actor_timelines = load_future_actor_timelines(route_dir, frame_name, cfg)
 
+
+
+
+
+
+    """
+    第二阶段: 先粗略判断“这个场景可能因为什么需要改变驾驶”，再围绕若干可能的 actor 生成多种可供后面验证的驾驶响应。
+    """
     # Stage 1: a permissive factor is used only to seed the response pool.
     # The final critical object is not accepted from this heuristic; it must be
     # verified by an explicit object-removal intervention below.
+
+    # 启发式宽松场景判断
     initial_factor = identify_critical_factor(reference_route, current_actors, temporal_bundle, ego_center, mpp, cfg)
 
+    # 专家驾驶未来真实轨迹
     expert_future = load_future_ego_waypoints(route_dir, frame_name, measurement, cfg)
+    
+    # 构建因果候选池
+    # candidates:              后面需要真正评价的各种驾驶响应轨迹
+    # nominal_reference:       没有主动响应任何对象时的正常驾驶基准轨迹
+    # causal_actor_candidates: 后面准备逐个做 actor-removal 的对象，当前最多 3 个
     candidates, nominal_reference, causal_actor_candidates = build_causal_candidate_pool(
-        base_route=reference_route,
+        base_route=reference_route,    # 导航参考路径(当前帧如果正常按照导航路线行驶,自车应该沿着哪条参考路线走,这是所有候选轨迹的基础)
         initial_factor=initial_factor,
-        current_actors=current_actors,
+        current_actors=current_actors, # 当前帧自车周围经过类别和距离筛选的 actor
         measurement=measurement,
         cfg=cfg,
-        expert_future=expert_future,
+        expert_future=expert_future,   # 专家驾驶未来真实轨迹
     )
 
+
+
+
+
+
+
+    """
+    第三阶段: 完整场景评价(把候选 ego 轨迹放回原始真实交通场景中，看它在道路占用、周围 actor、导航路线、交通规则以及车辆动力学等方面是否安全、合法、可行)
+            候选轨迹
+            ↓
+            放入完整场景测试
+            ↓
+            筛出 allowed=True 的轨迹
+            ↓
+            这些安全轨迹分别与 nominal_reference(无干扰基准) 比较
+            ↓
+            选择相对 nominal 改变最小的一条
+            ↓
+            preliminary_idx
+        完整场景 = occupancy + actor未来运动 + reference route + 红灯 + stop sign + 实线 + 车辆运动学
+    """
     # Stage 2: select a preliminary full-scene response relative to the nominal
     # no-interference motion.  This preliminary result is used only to measure
     # which object removal changes the ego behavior.
+
+    # 所有候选轨迹经过完整场景(就是前面的占用和导航参考路径这些约束)检查后的“带评价结果的候选集合”
     scored = evaluate_candidate_pool(
-        candidates=candidates,
+        candidates=candidates,          # 需要评价的各种驾驶响应轨迹
         base_route=reference_route,
         temporal_bundle=temporal_bundle,
         ego_center=ego_center,
@@ -751,9 +808,30 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         cfg=cfg,
         factor=initial_factor,
     )
+
+    # 在这些候选里，被选出来的“当前完整场景下最小必要响应”的索引
+    # 也就是说从 allowed=True 的候选里 选出相对 nominal 改动最小的那一条轨迹  注意 这里只选择一条！！！
     preliminary_idx = select_minimum_response(scored, nominal_reference["rollout"], cfg)
 
+
+
+
+
+
+
+
+
     if preliminary_idx >= 0:
+
+
+        """
+        第四部分: 离散候选集合中最小安全响应 -> 连续空间中真正的最小安全响应
+
+        实际上到这里是精细化preliminary_idx了 在该离散响应附近继续细化后得到的更精准最小充分响应preliminary_for_causal 这是一条！！！
+        """
+
+        # 在已经找到的一条“安全离散候选轨迹”基础上，继续减小响应强度，寻找“刚好足够安全”的响应边界
+
         # Causal discovery should observe the refined preliminary response rather
         # than only one coarse response strength.  Keep this candidate in a
         # temporary pool so it does not bias the later final discrete selection.
@@ -775,9 +853,18 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             full_scored_for_causal = list(scored) + [preliminary_for_causal]
             preliminary_for_causal_idx = len(full_scored_for_causal) - 1
 
+
+
+
+
+        """
+        第五部分(整个方法的核心部分):
+            对于前面启发式筛出的 A、B、C,分别把它们从场景中删除并重新规划;
+            删除谁以后自车最小必要驾驶行为变化最大,谁最可能是真正的因果 actor.
+        """
         causal_analysis = analyze_causal_objects(
             candidates=candidates,
-            full_scored=full_scored_for_causal,
+            full_scored=full_scored_for_causal,                     # 完整场景下经过细化后的最小充分响应
             full_selected_idx=preliminary_for_causal_idx,
             nominal_reference_rollout=nominal_reference["rollout"],
             actor_candidates=causal_actor_candidates,
@@ -813,6 +900,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             factor=initial_factor,
         )
 
+        # 最终验证
         if causal_analysis.get("has_causal_object", False):
             causal_analysis = revalidate_causal_analysis(
                 final_selected=final_selected,
@@ -822,6 +910,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
                 cfg=cfg,
             )
             reference_rollout = causal_analysis.get("reference_rollout", nominal_reference["rollout"])
+
 
             # If the discovered object no longer explains the refined final
             # response, discard both the object-removed reference and the
@@ -1026,10 +1115,21 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         scored.append(fallback)
         selected_idx = len(scored) - 1
 
-    selected = scored[selected_idx]
-    selected_info = selected["info"]
-    selected_rollout = selected["rollout"]
 
+    ########################### 最终用于监督的完整场景驾驶结果 ###########################
+
+    selected = scored[selected_idx]        # 最终选中的完整 candidate
+    selected_info = selected["info"]       # 这条 candidate 的评价/标签信息
+    selected_rollout = selected["rollout"] # 这条 candidate 的真实未来运动轨迹
+    
+    ########################### 最终用于监督的完整场景驾驶结果 ###########################
+
+
+
+
+    """
+    第六部分: 把前面经过反事实验证并最终重验证通过的关键 actor,正式写入最终 factor,供后面的语言、视觉监督和标签生成使用
+    """
     # Stage 3: the user-facing object is causal when object removal verified an
     # effect.  Otherwise retain the stricter post-selection geometric alignment
     # used by the previous implementation.
@@ -1054,7 +1154,9 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     intents = infer_intents(factor, cfg)
     language = build_language_annotation(frame_name, factor, selected, scored, response_supervision=response_supervision)
 
-    #修改20260720：只使用反事实验证通过的主要因果对象计算六视角软标签；无有效对象时返回valid=false。
+
+
+    # 构建注意力标签
     visual_grounding = build_camera_attention_supervision(
         route_dir=route_dir,
         frame_name=frame_name,
@@ -1116,7 +1218,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         debug_paths=debug_paths,
     )
 
-    #修改20260720：将机器可读的视觉定位与相机注意力目标写入每帧LG公开标签。
+    
     public_out["visual_grounding"] = visual_grounding
 
     output_path = route_dir / cfg.paths.output_folder / f"{frame_name}.json.gz"
