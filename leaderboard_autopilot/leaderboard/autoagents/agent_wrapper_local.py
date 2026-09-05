@@ -35,6 +35,7 @@ QUALIFIER_SENSORS_LIMITS = {
     'sensor.speedometer': 1,
     'sensor.camera.depth': 4, # for data generation
     'sensor.camera.semantic_segmentation': 4 # for data generation
+    'sensor.camera.instance_segmentation': 4,  # for data generation
 }
 SENSORS_LIMITS = {
     'sensor.camera.rgb': 8,
@@ -46,6 +47,7 @@ SENSORS_LIMITS = {
     'sensor.speedometer': 1,
     'sensor.camera.depth': 4, # for data generation
     'sensor.camera.semantic_segmentation': 4 # for data generation
+    'sensor.camera.instance_segmentation': 4,  # for data generation
 }
 
 ALLOWED_SENSORS = SENSORS_LIMITS.keys()
