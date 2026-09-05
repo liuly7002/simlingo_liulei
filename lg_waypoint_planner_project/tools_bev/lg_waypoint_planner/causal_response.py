@@ -212,36 +212,18 @@ def _candidate_pool_key(candidate: Dict):
     )
 
 
-# 构建因果候选池
-def build_causal_candidate_pool(
-    base_route: np.ndarray,
-    initial_factor: Dict,
-    current_actors: List[Dict],
-    measurement: Dict,
-    cfg,
-    expert_future: Optional[np.ndarray] = None,) -> Tuple[List[Dict], Dict, List[Dict]]:
+# 构建因果候选轨迹池
+def build_causal_candidate_pool(base_route: np.ndarray, initial_factor: Dict, current_actors: List[Dict], measurement: Dict, cfg, expert_future: Optional[np.ndarray] = None,) -> Tuple[List[Dict], Dict, List[Dict]]:
 
-    """Build a compact pool of object-conditioned response candidates.
-
-    The pool contains one global nominal route-follow candidate and active
-    response candidates anchored to several plausible objects.  The later
-    object-removal test, rather than the relevance heuristic, decides which
-    object actually caused the selected response.
-    """
-
-    # 1. 一个“没有任何周围交通参与者干扰”的干净驾驶世界，自车只需要按照 reference_route 正常行驶，
+    # 1. 一个“没有任何周围交通参与者干扰”的干净驾驶世界，自车只需要按照 reference route 正常行驶，
     # 自车按照 reference route 通过自行车模型推断出来的自车未来的waypoints
+    
     nominal = build_nominal_reference_candidate(base_route, measurement, cfg, expert_future=expert_future)
 
 
 
-    # 2. 判断当前是不是已经有强制交通规则
+    # 2. 判断当前是不是已经有强制交通规则 主要就是红灯和停止标识
     
-    # Active traffic rules are immutable causes, not actors that can be removed
-    # by the causal intervention.  When the current frame already requires a
-    # stop, actor-conditioned lateral responses must not compete with the rule
-    # response and steal the semantic label merely because the ego is nearly
-    # stationary. Future-only rules keep the ordinary actor candidate pool.
     red_rule = (initial_factor or {}).get("red_light_rule") or {}
     current_red_active = (
         str((initial_factor or {}).get("type", "")) == "red_light_stop_line"
@@ -256,11 +238,6 @@ def build_causal_candidate_pool(
 
     # 3. 通过启发式的方式获得前三甲的关键actor,这三个才有资格进入后续的反事实因果实验
     
-    # Keep ranking nearby actors even when a traffic rule is active.  They remain
-    # valid attention targets and can coexist with the traffic light / stop sign
-    # in the supervision.  However, while a current rule already requires a
-    # stop, actor-conditioned response candidates are not allowed to compete
-    # with the rule response; this preserves the correct driving intent.
     actor_candidates = rank_causal_actor_candidates(current_actors,cfg,reference_route=base_route,)
     
     
@@ -271,28 +248,14 @@ def build_causal_candidate_pool(
 
     # 4. 初始化真正的候选轨迹池
 
-    # The nominal rollout is still returned separately as the no-interference
-    # reference.  Once a current traffic rule is active, however, it must not
-    # re-enter the final candidate competition as an ordinary route-follow
-    # action.  Otherwise a nearly stationary route-follow / cautious candidate
-    # can beat the true rule response merely because its numerical intervention
-    # is smaller.
-    pool = [] if rule_currently_active else [nominal]
-
+    pool = [] if rule_currently_active else [nominal] # 如果说当前红灯或者停止标识,那么就为空,否则为nominal
 
 
     # 5. 交通规则候选的特殊生成
 
-    # Rule responses must always be generated, even when a relevant actor is
-    # also present.  The actor remains available for attention and language,
-    # but it is not the response object of the traffic-rule candidate.
     if rule_currently_active or not (initial_factor.get("critical_actor") or {}).get("exists", False):
         rule_factor = dict(initial_factor)
         if str(rule_factor.get("type", "")) in ["red_light_stop_line", "stop_sign_control"]:
-            # Compose the active traffic rule with any nearer actor on the
-            # intended route.  The traffic rule stays the primary semantic
-            # cause, while the actor can move the immediate stop position
-            # closer to the ego vehicle.
             if rule_currently_active:
                 joint_constraint = _joint_rule_actor_constraint(
                     base_route=base_route,
@@ -319,30 +282,21 @@ def build_causal_candidate_pool(
 
 
 
-    # 7. 对每一个 causal_actor_candidate 单独生成响应
+    # 6. 对每一个 causal_actor_candidate 单独生成响应
 
-    # Under an active traffic rule, keep actor candidates for attention /
-    # counterfactual analysis but do not let their lateral responses steal the
-    # selected rule intent.
-    if not rule_currently_active:
-        for actor in actor_candidates:
+    if not rule_currently_active:  # 如果没有交通规则限制的话
+
+        for actor in actor_candidates:  # 遍历启发式方法获得的前三甲中的每一个actor
 
             # actor对应的factor
-            factor = factor_from_actor(
-                actor,
-                stage="causal_candidate_generation",
-                reference_route=base_route,
-                cfg=cfg,
-            )
+            factor = factor_from_actor(actor, stage="causal_candidate_generation", reference_route=base_route, cfg=cfg,)
 
             # 根据actor的factor生成对应的驾驶意图
             intents = infer_intents(factor, cfg)
             
             # 依据驾驶意图生成对应的候选轨迹 
             for c in build_candidates(base_route, intents, factor, measurement, cfg, expert_future=expert_future):
-                # The causal pool uses only responses that are active for this
-                # object.  Diagnostic inactive candidates would otherwise multiply
-                # the pool without contributing to the final selector.
+
                 if c.get("intent_name") == "route_follow":
                     continue
                 if not c.get("intent", {}).get("active", False):
@@ -558,22 +512,14 @@ def remove_actor_from_temporal_bundle(
     return out
 
 
-def evaluate_candidate_pool(
-    candidates: List[Dict],
-    base_route: np.ndarray,
-    temporal_bundle: Dict,
-    ego_center,
-    meters_per_pixel: float,
-    actor_timelines: Dict[int, List[Dict]],
-    cfg,
-    factor: Optional[Dict] = None,) -> List[Dict]:
+def evaluate_candidate_pool(candidates: List[Dict], base_route: np.ndarray, temporal_bundle: Dict, ego_center, meters_per_pixel: float, actor_timelines: Dict[int, List[Dict]], cfg, factor: Optional[Dict] = None,) -> List[Dict]:
 
     # 取出来每一条候选轨迹,然后进行测试
     return [
         evaluate_candidate(
-            c,
-            base_route,
-            temporal_bundle,
+            c,                   # 候选轨迹池
+            base_route,          # 完整世界之 导航参考路径
+            temporal_bundle,     # 完整世界之 占用BEV
             ego_center,
             meters_per_pixel,
             actor_timelines,

@@ -257,7 +257,7 @@ lane_constraints:
 
   # Avoid silently running the old behavior. Re-run the costmap generator so
   # route_dir/lane_constraints/<frame>.npy exists for every processed frame.
-  require_map: true
+  require_map: true  # 
 
   # The dedicated map uses the same 0/100 convention as the occupancy map.
   blocked_threshold: 80.0

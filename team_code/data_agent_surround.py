@@ -1,34 +1,3 @@
-"""
-Six-view surround-camera data collection agent for SimLingo.
-
-This agent extends the existing DataAgent and records:
-
-1. Six synchronized, non-augmented surround RGB views:
-   - front
-   - front_left
-   - front_right
-   - rear
-   - rear_left
-   - rear_right
-
-2. The existing top_rgb bird's-eye RGB image.
-
-3. All non-augmented data saved by the parent DataAgent:
-   - rgb
-   - top_rgb
-   - bev_static_masks
-   - bev_dynamic_masks
-   - bev_traffic_masks
-   - bev_meta
-   - boxes
-
-The original geometric camera augmentation sensor and all augmented output
-files are disabled. The parent DataAgent processing logic is retained by
-aliasing the original front RGB input to the historical rgb_augmented key.
-Because augmentation translation and rotation are both zero, this alias does
-not introduce geometric augmentation.
-"""
-
 import gzip
 import json
 from typing import Dict, List
@@ -48,6 +17,11 @@ SURROUND_CAMERA_ORDER = (
     "rear_left",
     "rear_right",
 )
+
+# Front-view CARLA ground-truth instance segmentation.
+# It must share exactly the same pose, resolution and FOV as the front RGB camera.
+FRONT_INSTANCE_SENSOR_ID = "instance_front"
+FRONT_INSTANCE_SAVE_FOLDER = "instance_front"
 
 # CARLA/Unreal vehicle coordinates:
 # x points forward, y points right and z points upward.
@@ -140,6 +114,12 @@ class SurroundDataAgent(DataAgent):
                     exist_ok=True,
                 )
 
+            # Create the front-view instance-segmentation output directory.
+            (self.save_path / FRONT_INSTANCE_SAVE_FOLDER).mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
             self._save_surround_camera_metadata()
 
     def _build_surround_camera_specs(self) -> Dict[str, Dict]:
@@ -187,6 +167,19 @@ class SurroundDataAgent(DataAgent):
             },
             "camera_order": list(SURROUND_CAMERA_ORDER),
             "cameras": self.surround_camera_specs,
+            "front_instance_segmentation": {
+                "enabled": True,
+                "sensor_type": "sensor.camera.instance_segmentation",
+                "sensor_id": FRONT_INSTANCE_SENSOR_ID,
+                "save_folder": FRONT_INSTANCE_SAVE_FOLDER,
+                "position": self.surround_camera_specs["front"]["position"],
+                "rotation": self.surround_camera_specs["front"]["rotation"],
+                "width": self.surround_camera_specs["front"]["width"],
+                "height": self.surround_camera_specs["front"]["height"],
+                "fov": self.surround_camera_specs["front"]["fov"],
+                "lossless": True,
+                "format": "png",
+            },
             "top_rgb": {
                 "enabled": bool(self.SAVE_TOP_RGB),
                 "position": [0.0, 0.0, float(self.top_camera_z)],
@@ -223,6 +216,28 @@ class SurroundDataAgent(DataAgent):
             "height": spec["height"],
             "fov": spec["fov"],
             "id": spec["sensor_id"],
+        }
+
+    @staticmethod
+    def _make_front_instance_sensor(spec: Dict) -> Dict:
+        """
+        Build a front-view CARLA instance-segmentation camera.
+
+        The geometry is copied directly from the front RGB specification, so the
+        instance image is pixel-aligned with rgb_front / rgb.
+        """
+        return {
+            "type": "sensor.camera.instance_segmentation",
+            "x": spec["position"][0],
+            "y": spec["position"][1],
+            "z": spec["position"][2],
+            "roll": spec["rotation"][0],
+            "pitch": spec["rotation"][1],
+            "yaw": spec["rotation"][2],
+            "width": spec["width"],
+            "height": spec["height"],
+            "fov": spec["fov"],
+            "id": FRONT_INSTANCE_SENSOR_ID,
         }
 
     def sensors(self) -> List[Dict]:
@@ -264,6 +279,17 @@ class SurroundDataAgent(DataAgent):
                 sensors.append(self._make_rgb_sensor(spec))
                 existing_ids.add(sensor_id)
 
+            # Add a CARLA ground-truth instance-segmentation camera that is exactly
+            # aligned with the front RGB camera.
+            if FRONT_INSTANCE_SENSOR_ID in existing_ids:
+                raise RuntimeError(
+                    f"Duplicate CARLA sensor id detected: {FRONT_INSTANCE_SENSOR_ID}"
+                )
+
+            front_spec = self.surround_camera_specs["front"]
+            sensors.append(self._make_front_instance_sensor(front_spec))
+            existing_ids.add(FRONT_INSTANCE_SENSOR_ID)
+
         return sensors
 
     def tick(self, input_data):
@@ -304,9 +330,7 @@ class SurroundDataAgent(DataAgent):
         result.pop("bev_meta_augmented", None)
 
         if self.save_path is not None and (self.datagen or self.tmp_visu):
-            surround_images = {
-                "front": result["rgb"],
-            }
+            surround_images = {"front": result["rgb"],}
 
             for camera_name in SURROUND_CAMERA_ORDER:
                 if camera_name == "front":
@@ -330,6 +354,22 @@ class SurroundDataAgent(DataAgent):
         result["surround_rgb"] = surround_images
         for camera_name, image in surround_images.items():
             result[f"rgb_{camera_name}"] = image
+
+        # Read the raw front-view instance-segmentation image.
+        # Keep the raw pixel values unchanged because they encode semantic and
+        # instance IDs.
+        if self.save_path is not None and (self.datagen or self.tmp_visu):
+            if FRONT_INSTANCE_SENSOR_ID not in input_data:
+                raise KeyError(
+                    f"Missing front instance-segmentation sensor input: "
+                    f"{FRONT_INSTANCE_SENSOR_ID}"
+                )
+
+            instance_front = input_data[FRONT_INSTANCE_SENSOR_ID][1][:, :, :3]
+        else:
+            instance_front = None
+
+        result["instance_front"] = instance_front
 
         return result
 
@@ -380,6 +420,20 @@ class SurroundDataAgent(DataAgent):
                 image,
                 jpeg_parameters,
             )
+
+        # Save raw CARLA front-view instance segmentation losslessly.
+        instance_front = tick_data.get("instance_front")
+        if instance_front is None:
+            raise RuntimeError(
+                f"Missing front instance segmentation for frame {frame_name}"
+            )
+
+        self._write_image(
+            self.save_path
+            / FRONT_INSTANCE_SAVE_FOLDER
+            / f"{frame_name}.png",
+            instance_front,
+        )
 
         # Existing high-mounted top-view RGB image.
         if self.SAVE_TOP_RGB:

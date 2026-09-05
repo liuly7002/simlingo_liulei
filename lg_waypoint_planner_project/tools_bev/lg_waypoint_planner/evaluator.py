@@ -576,15 +576,7 @@ def rollout_motion_summary(rollout: Dict) -> Dict:
     }
 
 
-def evaluate_candidate(
-    candidate: Dict,
-    base_route: np.ndarray,
-    temporal_bundle: Dict,
-    ego_center,
-    meters_per_pixel: float,
-    actor_timelines: Dict[int, List[Dict]],
-    cfg,
-    factor: Dict = None,) -> Dict:
+def evaluate_candidate(candidate: Dict, base_route: np.ndarray, temporal_bundle: Dict, ego_center, meters_per_pixel: float, actor_timelines: Dict[int, List[Dict]], cfg, factor: Dict = None,) -> Dict:
     
     
     ######################################## 取出来候选轨迹 ########################################
@@ -636,11 +628,7 @@ def evaluate_candidate(
         else {"collision_free": True, "num_collision_events": 0, "first_collision": None, "collision_events": []}
     )
 
-    # A dedicated hold-current-stop candidate under an active red light is a
-    # hard-rule response, not a motion proposal that should be rejected because
-    # a future actor footprint later overlaps the already occupied ego pose.
-    # Otherwise every candidate can become invalid and the planner may fall back
-    # to an expert trajectory that starts moving while the current light is red.
+
     red_factor_for_hold = factor if isinstance(factor, dict) else {}
     red_stats_for_hold = red_factor_for_hold.get("red_light_rule") or {}
     active_red_hold = (

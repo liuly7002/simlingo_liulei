@@ -635,25 +635,25 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
 
     """
-    第一阶段: 构造一个所有后续真实场景与反事实场景都能够公平比较的统一规划世界
+    第一阶段: 构造完整场景
     """
 
 
     ######################################## 1. 当前帧基础数据的读取与合法性检查 ########################################
 
-    # 当前帧文件路径
+    # 当前帧文件路径(measurement)
     measurement_path = route_dir / cfg.paths.measurements_folder / f"{frame_name}.json.gz"
-    costmap_path = route_dir / cfg.paths.costmap_folder / f"{frame_name}.npy"
+    costmap_path = route_dir / cfg.paths.costmap_folder / f"{frame_name}.npy"        # 当前帧对应的costmap的.npy文件
     lane_constraint_folder = str(_cfg_get(cfg.paths, "lane_constraint_folder", "lane_constraints"))
-    lane_constraint_path = route_dir / lane_constraint_folder / f"{frame_name}.npy"
+    lane_constraint_path = route_dir / lane_constraint_folder / f"{frame_name}.npy"  # 当前帧对应的实线车道线.npy文件
     meta_path = route_dir / cfg.paths.bev_meta_folder / f"{frame_name}.json.gz"
+    
     # 安全性检查
     if not measurement_path.exists() or not costmap_path.exists():
         LOGGER.info(f"[Skip] missing measurement/costmap for {route_dir.name}/{frame_name}")
         return False
-
-    lane_cfg = _cfg_get(cfg, "lane_constraints", {})
-    lane_enabled = bool(_cfg_get(lane_cfg, "enabled", True))
+    lane_cfg = _cfg_get(cfg, "lane_constraints", {})  # 是否使用车道约束
+    lane_enabled = bool(_cfg_get(lane_cfg, "enabled", True))  # 是否使用车道约束 使用的话生成的规划waypoints如果穿越车道线就不被allow
     require_lane_map = bool(_cfg_get(lane_cfg, "require_map", True))
     # 安全性检查
     if lane_enabled and require_lane_map and not lane_constraint_path.exists():
@@ -667,23 +667,27 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     measurement = load_json_gz(measurement_path)
     costmap = load_costmap(costmap_path)
     if lane_enabled and lane_constraint_path.exists():
-        solid_lane_constraint = load_costmap(lane_constraint_path)
+        solid_lane_constraint = load_costmap(lane_constraint_path)  # 加载实线车道线.npy文件
+        # 安全性检查
         if solid_lane_constraint.shape[:2] != costmap.shape[:2]:
             raise ValueError(
                 f"Lane constraint shape {solid_lane_constraint.shape} does not match "
                 f"costmap shape {costmap.shape} for {route_dir.name}/{frame_name}"
             )
     else:
+        # 全0
         solid_lane_constraint = np.zeros_like(costmap, dtype=np.float32)
     meta = load_json_gz(meta_path) if meta_path.exists() else {}
+    
+    # 一些辅助信息
+    ego_center = get_ego_center(meta, costmap.shape)                            # 自车中心位置在BEV中的位置
     mpp = get_meters_per_pixel(meta, float(cfg.paths.default_pixels_per_meter)) # 一个 BEV 像素代表多少米
-    ego_center = get_ego_center(meta, costmap.shape)
 
 
 
     ######################################## 2. 导航参考路径 完整场景的一部分 ########################################
 
-    # 依据当前自车的速度、加速度灯来计算当前帧真正需要多长的参考路径
+    # 依据当前自车的速度、加速度灯来计算当前帧真正需要多长的参考路径 然后根据这个值去获得"当前帧的导航参考路径reference_route"
     reference_horizon_m = _required_reference_horizon_m(measurement, cfg)
     # 当前帧的导航参考路径reference_route
     reference_route, reference_route_info = _build_reference_route_from_measurements(
@@ -693,6 +697,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         required_horizon_m=reference_horizon_m,
         cfg=cfg,
     )
+    # 安全性检查
     if reference_route is None:
         LOGGER.info(
             f"[Skip] insufficient real reference route for {route_dir.name}/{frame_name}: "
@@ -704,14 +709,14 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
 
 
-    ######################################## 3. 建立"当前1帧及未来10帧的占用地图(也可以认为是时序世界) 完整场景的一部分" ########################################
+    ######################################## 3. 建立"当前1帧及未来10帧的占用地图(也可以认为是时序世界)" ########################################
 
     # 主体构建 主要是为了构建普通的costmaps,算是物理障碍物占用
 
     # temporal_bundle["costmaps"] 当前1帧及未来10帧各时刻的占用/可行驶地图
     temporal_bundle = build_temporal_costmaps(route_dir, frame_name, measurement, costmap, meta, cfg)
     
-    # 追加内容(追加红灯停止线、交通灯状态、停止牌和实线约束)
+    # 追加内容(追加红灯停止线、交通灯状态、停止标识牌和实线约束)
 
     # 红灯停止线
     red_light_bundle = build_temporal_red_light_constraints(route_dir=route_dir,frame_name=frame_name,current_measurement=measurement,current_shape=costmap.shape,current_meta=meta,cfg=cfg,)
@@ -724,7 +729,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     traffic_light_state = build_traffic_light_state_context(route_dir=route_dir,frame_name=frame_name,current_shape=costmap.shape,cfg=cfg,)
     temporal_bundle["traffic_light_state"] = traffic_light_state  # 当前和上一帧交通灯颜色状态，用于语义
     
-    # 停止牌 也就是标又STOP的指示牌 在该指示牌的时候自车应该先减速然后停车观察然后继续驾驶
+    # 停止标识牌 也就是标有STOP的指示牌 在该指示牌的时候自车应该先减速然后停车观察然后继续驾驶
     stop_sign_bundle = build_temporal_stop_sign_constraints(route_dir=route_dir,frame_name=frame_name,current_measurement=measurement,current_shape=costmap.shape,current_meta=meta,cfg=cfg,)
     temporal_bundle["stop_sign_maps"] = stop_sign_bundle.get("maps", [])    # 当前及未来各时刻的 stop sign 控制区域 mask
     temporal_bundle["stop_sign_frames"] = stop_sign_bundle.get("frames", [])# stop sign mask 对应的帧编号
@@ -799,9 +804,9 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
     # 所有候选轨迹经过完整场景(就是前面的占用和导航参考路径这些约束)检查后的“带评价结果的候选集合”
     scored = evaluate_candidate_pool(
-        candidates=candidates,          # 需要评价的各种驾驶响应轨迹
-        base_route=reference_route,
-        temporal_bundle=temporal_bundle,
+        candidates=candidates,          # 需要评价的各种驾驶意图轨迹
+        base_route=reference_route,     # 完整场景之 导航参考路径
+        temporal_bundle=temporal_bundle,# 完整场景之 占用BEV
         ego_center=ego_center,
         meters_per_pixel=mpp,
         actor_timelines=future_actor_timelines,
@@ -809,7 +814,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         factor=initial_factor,
     )
 
-    # 在这些候选里，被选出来的“当前完整场景下最小必要响应”的索引
+    # 在这些经过检查后的候选里，选出来“当前完整场景下最小必要响应”的索引
     # 也就是说从 allowed=True 的候选里 选出相对 nominal 改动最小的那一条轨迹  注意 这里只选择一条！！！
     preliminary_idx = select_minimum_response(scored, nominal_reference["rollout"], cfg)
 
@@ -832,11 +837,8 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
         # 在已经找到的一条“安全离散候选轨迹”基础上，继续减小响应强度，寻找“刚好足够安全”的响应边界
 
-        # Causal discovery should observe the refined preliminary response rather
-        # than only one coarse response strength.  Keep this candidate in a
-        # temporary pool so it does not bias the later final discrete selection.
         preliminary_for_causal = refine_minimum_sufficient_response(
-            selected=scored[preliminary_idx],
+            selected=scored[preliminary_idx],                # 被选出来的一条最小响应轨迹
             reference_rollout=nominal_reference["rollout"],
             base_route=reference_route,
             temporal_bundle=temporal_bundle,
@@ -858,7 +860,7 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
 
         """
-        第五部分(整个方法的核心部分):
+        第五部分(整个方法的核心部分1):
             对于前面启发式筛出的 A、B、C,分别把它们从场景中删除并重新规划;
             删除谁以后自车最小必要驾驶行为变化最大,谁最可能是真正的因果 actor.
         """
@@ -900,6 +902,15 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             factor=initial_factor,
         )
 
+
+
+
+
+
+        """
+        第六部分(整个方法的核心部分2):
+            关键actor独立边际作用.
+        """
         # 最终验证
         if causal_analysis.get("has_causal_object", False):
             causal_analysis = revalidate_causal_analysis(
