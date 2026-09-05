@@ -46,6 +46,7 @@ sensors_to_icons = {
     'sensor.speedometer':       'carla_speedometer',
     'sensor.camera.semantic_segmentation': 'carla_camera', # for datagen
     'sensor.camera.depth':      'carla_camera', # for datagen
+    'sensor.camera.instance_segmentation': 'carla_camera',
 }
 
 class LeaderboardEvaluator(object):

@@ -34,7 +34,7 @@ QUALIFIER_SENSORS_LIMITS = {
     'sensor.opendrive_map': 1,
     'sensor.speedometer': 1,
     'sensor.camera.depth': 4, # for data generation
-    'sensor.camera.semantic_segmentation': 4 # for data generation
+    'sensor.camera.semantic_segmentation': 4, # for data generation
     'sensor.camera.instance_segmentation': 4,  # for data generation
 }
 SENSORS_LIMITS = {
@@ -46,7 +46,7 @@ SENSORS_LIMITS = {
     'sensor.opendrive_map': 1,
     'sensor.speedometer': 1,
     'sensor.camera.depth': 4, # for data generation
-    'sensor.camera.semantic_segmentation': 4 # for data generation
+    'sensor.camera.semantic_segmentation': 4, # for data generation
     'sensor.camera.instance_segmentation': 4,  # for data generation
 }
 
