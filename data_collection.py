@@ -209,10 +209,24 @@ if __name__ == "__main__":
 
     route_folder = f"{code_root}/data/simlingo"                                                # 收集路线文件(.xml)存放的位置
     if not DEBUG:
-        routes = glob.glob(f"{route_folder}/**/*balanced*/*.xml", recursive=True)     # 只对含balanced的目录当前层下的 .xml 文件
-        routes_lb1 = glob.glob(f"{route_folder}/**/*lb1*/**/*.xml", recursive=True)   # 对lb1_split文件夹下的所有路线进行收集
-        routes = routes + routes_lb1                                                            # 用于收集数据的全部路线
+
+        ####################### 原收集路线 #######################
+        # routes = glob.glob(f"{route_folder}/**/*balanced*/*.xml", recursive=True)     # 只对含balanced的目录当前层下的 .xml 文件
+        # routes_lb1 = glob.glob(f"{route_folder}/**/*lb1*/**/*.xml", recursive=True)   # 对lb1_split文件夹下的所有路线进行收集
+        # routes = routes + routes_lb1                                                            # 用于收集数据的全部路线
         # Set a random seed of 42 to shuffle the order of routes in a reproducible manner.
+        # random.seed(120)
+        # random.shuffle(routes)
+
+        ####################### 新收集路线 #######################
+        routes_25 = glob.glob(f"{route_folder}/**/*balanced_25/*.xml",recursive=True)
+
+        routes_15 = glob.glob(f"{route_folder}/**/*balanced_15/*.xml",recursive=True)
+
+        routes_lb1 = glob.glob(f"{route_folder}/lb1_reduced/routes_training/**/*.xml",recursive=True)
+
+        routes = routes_25 + routes_15 + routes_lb1
+
         random.seed(120)
         random.shuffle(routes)
     else:  # true for debug
