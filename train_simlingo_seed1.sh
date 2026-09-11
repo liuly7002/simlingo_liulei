@@ -36,5 +36,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # simlingo本身训练
 # WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_seed1 data_module.batch_size=1 gpus=1 name=simlingo_seed1
 
+# SimLingo官方预训练模型
+SIMLINGO_PRETRAINED=/home/kemove/models/simlingo/checkpoint/simlingo/simlingo/checkpoints/epoch=013.ckpt/pytorch_model.pt
+
 # lg替换dreamer之后的训练
-WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_lg_seed1 data_module.batch_size=1 gpus=1 name=simlingo_lg_seed1
+WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_lg_seed1 data_module.batch_size=1 gpus=1 name=simlingo_lg_seed1 checkpoint="${SIMLINGO_PRETRAINED}"

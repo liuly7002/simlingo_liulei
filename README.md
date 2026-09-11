@@ -8,18 +8,30 @@
 使用如下命令来收集数据：
 
 ```bash
+conda activate simlingo
+./start.sh
 python data_collection.py
 ```
 
 ```text
-备注：需要修改的内容如下：
-code_root   = r"/home/kemove/ll/simlingo"                # 项目根目录
+备注1：start.sh 中需要修改的内容如下：
+export CARLA_ROOT=/home/kemove/ll/simlingo/carla0915     # carla 0.9.15版本的根目录
+export WORK_DIR=/home/kemove/ll/simlingo_liulei          # 当前项目的根目录
+
+备注2：data_collection.py 中需要修改的内容如下：
+code_root   = r"/home/kemove/ll/simlingo_liulei"         # 当前项目根目录
 carla_root  = "/home/kemove/ll/simlingo/carla0915"       # Carla根位置
 ```
 
 ### 2. 数据清理
 
-#### 2.1 使用命令一来进行第一轮(共两轮)数据清理：
+#### 2.1 打开conda环境:
+
+```bash
+conda activate simlingo
+```
+
+#### 2.2 使用命令一来进行第一轮(共两轮)数据清理：
 
 ```bash
 python dataset_generation/delete_failed_runs.py
@@ -30,7 +42,7 @@ python dataset_generation/delete_failed_runs.py
 # dataset_path = '/home/kemove/ll/simlingo/database/simlingo_v2_2026_02_28/data/simlingo'
 ```
 
-#### 2.2 使用命令二来进行第二轮(共两轮)数据清理：
+#### 2.3 使用命令二来进行第二轮(共两轮)数据清理：
 
 ```bash
 python dataset_generation/delete_infraction_routes.py
@@ -45,6 +57,13 @@ python dataset_generation/delete_infraction_routes.py
 
 关于 data buckets 的内容都是在 /dataset_generation/data_buckets/ 目录下，
 在做端到端自动驾驶时，这种 bucket 机制很关键，因为它解决"数据不均衡导致模型偏科问题"!!!
+
+### 0. 【必选】打开conda虚拟环境及export python path
+
+```bash
+conda activate simlingo
+export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
+```
 
 ### 1. 【必选】首先，必须先使用以下命令将数据生成 data buckets
 
@@ -81,10 +100,6 @@ python dataset_generation/data_buckets/pkl2csv.py
 ### 1. 生成 drivelm 类型 .json.gz 文件
 
 ```bash
-cd simlingo
-```
-
-```bash
 conda activate simlingo
 ```
 
@@ -97,7 +112,7 @@ python dataset_generation/language_labels/drivelm/carla_vqa_generator_main.py
 ```
 
 ```text
-# 备注：需要修改的内容为
+# 备注：carla_vqa_generator_main.py 需要修改的内容为
     path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_07_03_19_20_14',
                             help='Data directory containing the dataset')  # 数据集根目录
     path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_07_03_19_20_14/drivelm',
@@ -135,7 +150,7 @@ python dataset_generation/language_labels/commentary/carla_commentary_generator_
 ```
 
 ```text
-# 备注：需要修改的内容为：
+# 备注：carla_commentary_generator_main.py 需要修改的内容为：
     path_group.add_argument('--data-directory', type=str, default='database/simlingo_v2_2026_07_17_23_23_22',
                             help='Data directory containing the dataset')  # 数据集根目录
     path_group.add_argument('--output-directory', type=str, default='database/simlingo_v2_2026_07_17_23_23_22/commentary',
@@ -151,7 +166,7 @@ python dataset_generation/dreamer_data/dreamer_generator.py
 ```
 
 ```text
-# 备注：需要修改的内容有：
+# 备注：dreamer_generator.py 需要修改的内容有：
     base_folder = 'database'   # 数据集根目录
     dataset_name = 'simlingo_v2_2026_07_03_19_20_14'  # 数据集名称
 ```

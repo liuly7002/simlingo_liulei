@@ -59,12 +59,161 @@ def main(cfg: TrainConfig):
     if bool(cfg.validation_logging.enabled):
         install_validation_output_capture(model)
 
+    # if cfg.checkpoint is not None:
+    #     if os.path.isdir(cfg.checkpoint):
+    #         state_dict = get_fp32_state_dict_from_zero_checkpoint(cfg.checkpoint)
+    #     else:
+    #         state_dict = torch.load(cfg.checkpoint, map_location="cpu")
+    #     model.load_state_dict(state_dict)
+
+    # 修改20260911：支持从官方 SimLingo checkpoint 对当前 LG 网络进行兼容式预训练初始化。
+    # 只加载“参数名相同且 tensor shape 相同”的权重。
+    # 当前网络新增的六视角、interaction reasoner、future interaction decoder
+    # 等参数保持当前初始化，不要求官方 SimLingo checkpoint 中存在。
     if cfg.checkpoint is not None:
+
+        print("\n" + "=" * 80)
+        print("Loading pretrained checkpoint:")
+        print(cfg.checkpoint)
+        print("=" * 80)
+
+        # -------------------------------------------------------------
+        # 1. 读取 checkpoint
+        # -------------------------------------------------------------
         if os.path.isdir(cfg.checkpoint):
-            state_dict = get_fp32_state_dict_from_zero_checkpoint(cfg.checkpoint)
+            # 保留原 SimLingo 对 DeepSpeed ZeRO checkpoint 的支持。
+            state_dict = get_fp32_state_dict_from_zero_checkpoint(
+                cfg.checkpoint
+            )
         else:
-            state_dict = torch.load(cfg.checkpoint, map_location="cpu")
-        model.load_state_dict(state_dict)
+            checkpoint_obj = torch.load(
+                cfg.checkpoint,
+                map_location="cpu",
+            )
+
+            # 同时兼容：
+            #   1. 官方 pytorch_model.pt：直接就是 state_dict
+            #   2. Lightning checkpoint：权重位于 ["state_dict"]
+            if (
+                isinstance(checkpoint_obj, dict)
+                and "state_dict" in checkpoint_obj
+                and isinstance(checkpoint_obj["state_dict"], dict)
+            ):
+                state_dict = checkpoint_obj["state_dict"]
+            else:
+                state_dict = checkpoint_obj
+
+        if not isinstance(state_dict, dict):
+            raise TypeError(
+                "Loaded checkpoint is not a state_dict-like dictionary: "
+                f"{type(state_dict)}"
+            )
+
+        # -------------------------------------------------------------
+        # 2. 当前 LG 模型的参数
+        # -------------------------------------------------------------
+        model_state_dict = model.state_dict()
+
+        compatible_state_dict = {}
+        checkpoint_only_keys = []
+        shape_mismatch_keys = []
+
+        # -------------------------------------------------------------
+        # 3. 只选择名称一致、shape 也一致的参数
+        # -------------------------------------------------------------
+        for key, value in state_dict.items():
+
+            # checkpoint 中有，但当前网络中不存在
+            if key not in model_state_dict:
+                checkpoint_only_keys.append(key)
+                continue
+
+            # 同名参数 shape 不一致，不能加载
+            if model_state_dict[key].shape != value.shape:
+                shape_mismatch_keys.append(
+                    (
+                        key,
+                        tuple(value.shape),
+                        tuple(model_state_dict[key].shape),
+                    )
+                )
+                continue
+
+            compatible_state_dict[key] = value
+
+        # -------------------------------------------------------------
+        # 4. 加载兼容参数
+        # -------------------------------------------------------------
+        load_result = model.load_state_dict(
+            compatible_state_dict,
+            strict=False,
+        )
+
+        # -------------------------------------------------------------
+        # 5. 输出检查信息
+        # -------------------------------------------------------------
+        total_checkpoint_tensors = len(state_dict)
+        loaded_tensors = len(compatible_state_dict)
+        total_model_tensors = len(model_state_dict)
+
+        loaded_numel = sum(
+            model_state_dict[key].numel()
+            for key in compatible_state_dict
+        )
+        total_model_numel = sum(
+            value.numel()
+            for value in model_state_dict.values()
+        )
+
+        print("\n" + "=" * 80)
+        print("SimLingo pretrained checkpoint loading summary")
+        print("=" * 80)
+
+        print(
+            f"Checkpoint tensors : {total_checkpoint_tensors}"
+        )
+        print(
+            f"Current model tensors: {total_model_tensors}"
+        )
+        print(
+            f"Successfully loaded : {loaded_tensors}"
+        )
+
+        print(
+            "Loaded parameter coverage of current model: "
+            f"{100.0 * loaded_numel / max(total_model_numel, 1):.2f}%"
+        )
+
+        print(
+            f"\nMissing keys in checkpoint "
+            f"(new/current-model parameters): "
+            f"{len(load_result.missing_keys)}"
+        )
+
+        for key in load_result.missing_keys:
+            print(f"  [MISSING] {key}")
+
+        print(
+            f"\nCheckpoint-only keys: "
+            f"{len(checkpoint_only_keys)}"
+        )
+
+        for key in checkpoint_only_keys:
+            print(f"  [CHECKPOINT_ONLY] {key}")
+
+        print(
+            f"\nShape mismatch keys: "
+            f"{len(shape_mismatch_keys)}"
+        )
+
+        for key, checkpoint_shape, model_shape in shape_mismatch_keys:
+            print(
+                f"  [SHAPE_MISMATCH] {key}: "
+                f"checkpoint={checkpoint_shape}, "
+                f"current_model={model_shape}"
+            )
+
+        print("=" * 80 + "\n")
 
     os.environ["WANDB_DISABLE_CODE"] = "True"
 
