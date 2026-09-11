@@ -160,6 +160,13 @@ class DatasetBaseConfig:
 class DrivingDatasetConfig:
     _target_: str = "simlingo_training.dataloader.dataset_driving.Data_Driving"
 
+    # 普通Driving语言监督模式。
+    # four_questions：与LG统一使用Q1-Q4语言
+    # commentary：原SimLingo commentary
+    # qa：原DriveLM风格QA
+    # mixed：原SimLingo随机混合语言任务
+    driving_language_mode: str = "four_questions"
+
     # 普通Driving四通道结构化未来世界标签配置。
     driving_use_future_interaction_grid: bool = False
     driving_future_interaction_grid_folder: str = "driving_future_interaction_grids"

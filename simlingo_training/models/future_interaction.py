@@ -14,8 +14,7 @@ from torch import Tensor, nn
 
 
 # 四通道名称、顺序与统一交互token严格一一对应。
-FUTURE_INTERACTION_CHANNEL_KEYS = 
-(
+FUTURE_INTERACTION_CHANNEL_KEYS = (
     "c0_route",            # 参考路径(自车footprint占用)
     "c1_ego_future",       # 自车未来的 waypoints (自车footprint占用)
     "c2_primary_actor",    # 主要actor未来的waypoints (主要actor footprint占用)

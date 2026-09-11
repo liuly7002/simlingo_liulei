@@ -195,6 +195,14 @@ export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
 ```bash
 ./train_simlingo_seed1.sh
 ```
+
+```text
+备注：simlingo_training/config/experiment/simlingo_lg_seed1.yaml需要修改的内容为
+
+    data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+```
+
 ### 2. 网页查看训练结果
 ```
 # simlingo_liulei 根目录下执行

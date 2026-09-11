@@ -583,6 +583,16 @@ class PreLanguageInteractionReasoner(nn.Module):
             full_scene_waypoints.float()
             - counterfactual_waypoints.float()
         ).reshape(full_scene_waypoints.shape[0], -1)
+        # expected_action_dim = self.num_ego_queries * 2
+        # if action_effect.shape[-1] != expected_action_dim:
+        #     raise ValueError(
+        #         "Counterfactual waypoint effect must contain "
+        #         f"{expected_action_dim} values, but received "
+        #         f"{action_effect.shape[-1]}."
+        #     )
+        # action_reference = self.counterfactual_action_effect_projection(
+        #     action_effect
+        # ).float()
         expected_action_dim = self.num_ego_queries * 2
         if action_effect.shape[-1] != expected_action_dim:
             raise ValueError(
@@ -590,8 +600,18 @@ class PreLanguageInteractionReasoner(nn.Module):
                 f"{expected_action_dim} values, but received "
                 f"{action_effect.shape[-1]}."
             )
+
+        # 修改20260911：DeepSpeed FP16下，反事实动作差异标签本身为FP32，
+        # 在进入可学习projection前转换为projection参数的dtype，
+        # 避免FP32输入与FP16 LayerNorm参数发生dtype冲突。
+        action_projection_dtype = next(
+            self.counterfactual_action_effect_projection.parameters()
+        ).dtype
+
         action_reference = self.counterfactual_action_effect_projection(
-            action_effect
+            action_effect.to(
+                dtype=action_projection_dtype,
+            )
         ).float()
 
         references = torch.stack(
