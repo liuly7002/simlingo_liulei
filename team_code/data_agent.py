@@ -932,10 +932,19 @@ class DataAgent(AutoPilot):
                     lane_relative_to_ego = None
                     same_direction_as_ego = False
                     
+                    # next_wps = self._wps_next_until_lane_end(vehicle_wp)
+                    # next_lane_wps = next_wps[-1].next(1)
+                    # if len(next_lane_wps) == 0:
+                    #     next_lane_wps = [next_wps[-1]]
                     next_wps = self._wps_next_until_lane_end(vehicle_wp)
-                    next_lane_wps = next_wps[-1].next(1)
-                    if len(next_lane_wps) == 0:
-                        next_lane_wps = [next_wps[-1]]
+                    if len(next_wps) == 0:
+                        # 当前 waypoint 已经没有可继续搜索的 waypoint，
+                        # 直接使用当前 vehicle waypoint
+                        next_lane_wps = [vehicle_wp]
+                    else:
+                        next_lane_wps = next_wps[-1].next(1)
+                        if len(next_lane_wps) == 0:
+                            next_lane_wps = [next_wps[-1]]
                     
                     next_next_wps = []
                     for i, wp in enumerate(next_lane_wps):

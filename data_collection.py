@@ -219,13 +219,60 @@ if __name__ == "__main__":
         # random.shuffle(routes)
 
         ####################### 新收集路线 #######################
-        routes_25 = glob.glob(f"{route_folder}/**/*balanced_25/*.xml",recursive=True)
+        ####################### training #######################
 
-        routes_15 = glob.glob(f"{route_folder}/**/*balanced_15/*.xml",recursive=True)
+        routes_train_1 = glob.glob(
+            f"{route_folder}/training_1_scenario/"
+            f"routes_training/random_weather_seed_1_balanced_25/*.xml",
+            recursive=True
+        )
 
-        routes_lb1 = glob.glob(f"{route_folder}/lb1_reduced/routes_training/**/*.xml",recursive=True)
+        routes_train_3 = glob.glob(
+            f"{route_folder}/training_3_scenarios/"
+            f"routes_training/random_weather_seed_3_balanced_15/*.xml",
+            recursive=True
+        )
 
-        routes = routes_25 + routes_15 + routes_lb1
+        routes_train_parking = glob.glob(
+            f"{route_folder}/training_parking_lane/"
+            f"Town12_short/random_weather_seed_10_balanced_25/*.xml",
+            recursive=True
+        )
+
+        routes_lb1 = glob.glob(
+            f"{route_folder}/lb1_reduced/routes_training/**/*.xml",
+            recursive=True
+        )
+
+        ####################### validation #######################
+
+        routes_val_1 = glob.glob(
+            f"{route_folder}/validation_1_scenario/"
+            f"routes_validation/random_weather_seed_2_balanced_5/*.xml",
+            recursive=True
+        )
+
+        routes_val_3 = glob.glob(
+            f"{route_folder}/validation_3_scenarios/"
+            f"routes_validation/random_weather_seed_4_balanced_5/*.xml",
+            recursive=True
+        )
+
+        routes_val_parking = glob.glob(
+            f"{route_folder}/validation_parking_lane/"
+            f"Town13_short/random_weather_seed_11_balanced_5/*.xml",
+            recursive=True
+        )
+
+        routes = (
+            routes_train_1
+            + routes_train_3
+            + routes_train_parking
+            + routes_lb1
+            + routes_val_1
+            + routes_val_3
+            + routes_val_parking
+        )
 
         random.seed(120)
         random.shuffle(routes)
