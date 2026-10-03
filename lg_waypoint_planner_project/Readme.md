@@ -53,3 +53,9 @@ python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
         ),
     )
 ```
+
+### 4. CVAA 对照实验
+
+```bash
+python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_planner_keyframes.py
+```

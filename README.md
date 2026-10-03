@@ -208,3 +208,18 @@ export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
 # simlingo_liulei 根目录下执行
 wandb sync ./outputs/2026_05_04_16_53_04_simlingo_seed1/wandb/offline-run-20260504_165419-2026_05_04_16_53_04_simlingo_seed1
 ```
+
+
+## 五、安装 Carla 0.9.15
+
+```bash
+chmod +x setup_carla.sh
+./setup_carla.sh
+```
+
+```text
+备注：setup_carla.sh 需要修改的内容为：
+mkdir /home/liulei/ll/simlingo/software               # 创建软件存放根目录
+mkdir /home/liulei/ll/simlingo/software/carla0915     # 创建carla0915存放根目录
+cd /home/liulei/ll/simlingo/software/carla0915        # 进入carla0915存放根目录
+```
