@@ -183,6 +183,34 @@ causal_response:
   # noise while preserving genuine safety-boundary interventions.
   min_route_follow_release_effect_score: 0.03
 
+
+# ---------------------------------------------------------------------------
+# Sensitivity analysis for causal acceptance threshold
+# ---------------------------------------------------------------------------
+threshold_sensitivity:
+  enabled: true
+
+  # Main-paper threshold is 0.60.
+  # Sensitivity analysis changes ONLY causal_response.min_causal_score.
+  thresholds: [0.40, 0.50, 0.60, 0.70, 0.80]
+
+  # Existing formal LG result corresponds to 0.60 and can be reused.
+  baseline_threshold: 0.60
+  reuse_baseline_output: true
+
+  # New thresholds are written to independent route-level folders:
+  # language_grounded_waypoints_tau040
+  # language_grounded_waypoints_tau050
+  # language_grounded_waypoints_tau070
+  # language_grounded_waypoints_tau080
+  output_prefix: language_grounded_waypoints_tau
+
+  # If interrupted, already generated frames are skipped.
+  resume: true
+
+  # Global run summaries.
+  summary_folder: lg_threshold_sensitivity
+
 # ---------------------------------------------------------------------------
 # Physical action semantics used by language and public labels
 # ---------------------------------------------------------------------------

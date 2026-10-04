@@ -6,7 +6,7 @@ import gzip
 import json
 from collections import Counter, OrderedDict
 from pathlib import Path
-
+import argparse
 
 # =============================================================================
 # 配置
@@ -20,10 +20,25 @@ DATA_ROOT = Path(
 
 KEYFRAME_FILE = DATA_ROOT / "keyframes.txt"
 
-LG_OUTPUT_FOLDER = "language_grounded_waypoints"
+# LG_OUTPUT_FOLDER = "language_grounded_waypoints"
 
-OUTPUT_ROOT = DATA_ROOT / "lg_cvaa_results"
+# OUTPUT_ROOT = DATA_ROOT / "lg_cvaa_results"
 
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--lg-output-folder",
+        default="language_grounded_waypoints",
+    )
+
+    parser.add_argument(
+        "--output-root",
+        default=None,
+    )
+
+    return parser.parse_args()
 
 # =============================================================================
 # 基础 IO
@@ -792,6 +807,22 @@ def write_actor_csv(
 
 def main():
 
+    args = parse_args()
+
+    lg_output_folder = str(
+        args.lg_output_folder
+    )
+
+    if args.output_root is None:
+        output_root = (
+            DATA_ROOT
+            / "lg_cvaa_results"
+        )
+    else:
+        output_root = Path(
+            args.output_root
+        ).expanduser().resolve()
+
     data_root = DATA_ROOT.expanduser().resolve()
 
     keyframe_file = (
@@ -801,7 +832,7 @@ def main():
     )
 
     output_root = (
-        OUTPUT_ROOT
+        output_root
         .expanduser()
         .resolve()
     )
@@ -914,7 +945,7 @@ def main():
 
             lg_path = (
                 route_dir
-                / LG_OUTPUT_FOLDER
+                / lg_output_folder
                 / f"{frame}.json.gz"
             )
 
