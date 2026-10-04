@@ -196,7 +196,9 @@ threshold_sensitivity:
 
   # Existing formal LG result corresponds to 0.60 and can be reused.
   baseline_threshold: 0.60
-  reuse_baseline_output: true
+  #修改20260720：AD/FD-like response metrics 新增后，
+  # 0.60 也使用同一版本代码重新运行，保证五个阈值输出字段完全一致。
+  reuse_baseline_output: false
 
   # New thresholds are written to independent route-level folders:
   # language_grounded_waypoints_tau040

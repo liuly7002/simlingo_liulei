@@ -916,6 +916,11 @@ def trajectory_response_metrics(rollout: Dict, reference_rollout: Dict, cfg=None
     n = min(len(wp), len(ref))
     if n <= 0:
         return {
+            "mean_waypoint_displacement_m": 0.0,
+            "terminal_waypoint_displacement_m": 0.0,
+            "max_waypoint_displacement_m": 0.0,
+            "trajectory_response_steps": 0,
+
             "mean_abs_longitudinal_change_m": 0.0,
             "mean_signed_longitudinal_change_m": 0.0,
             "mean_abs_lateral_change_m": 0.0,
@@ -936,6 +941,26 @@ def trajectory_response_metrics(rollout: Dict, reference_rollout: Dict, cfg=None
         }
 
     delta = wp[:n, :2] - ref[:n, :2]
+
+    #修改20260720：保存与 CVAA AD/FD 同形式的纯几何反事实轨迹响应。
+    # 这些指标仅用于实验分析，不参与 causal score、actor ranking 或 causal acceptance。
+    pointwise_displacement = np.linalg.norm(
+        delta[:, :2],
+        axis=1,
+    )
+
+    mean_waypoint_displacement_m = float(
+        np.mean(pointwise_displacement)
+    )
+
+    terminal_waypoint_displacement_m = float(
+        pointwise_displacement[-1]
+    )
+
+    max_waypoint_displacement_m = float(
+        np.max(pointwise_displacement)
+    )
+
     speeds = np.asarray(rollout.get("speeds", []), dtype=np.float32).reshape(-1)
     ref_speeds = np.asarray(reference_rollout.get("speeds", []), dtype=np.float32).reshape(-1)
     ns = min(len(speeds), len(ref_speeds))
@@ -973,6 +998,16 @@ def trajectory_response_metrics(rollout: Dict, reference_rollout: Dict, cfg=None
         + _cfg_float(mr, "speed_weight", 0.2) * speed_change
     )
     return {
+        #修改20260720：纯几何反事实轨迹响应，仅用于分析。
+        "mean_waypoint_displacement_m":
+            mean_waypoint_displacement_m,
+        "terminal_waypoint_displacement_m":
+            terminal_waypoint_displacement_m,
+        "max_waypoint_displacement_m":
+            max_waypoint_displacement_m,
+        "trajectory_response_steps":
+            int(n),
+
         "mean_abs_longitudinal_change_m": long_mean,
         "mean_signed_longitudinal_change_m": signed_long_mean,
         "mean_abs_lateral_change_m": lat_mean,

@@ -232,6 +232,18 @@ def build_frame_summary(
         {},
     ) or {}
 
+    causal_effect = (
+        causal_object.get(
+            "causal_effect",
+            {},
+        )
+        if isinstance(
+            causal_object,
+            dict,
+        )
+        else {}
+    ) or {}
+
     rejected_object = causal.get(
         "rejected_causal_object",
         None,
@@ -353,6 +365,30 @@ def build_frame_summary(
             safe_float(
                 causal.get(
                     "final_causal_score",
+                    None,
+                )
+            ),
+
+        "final_causal_actor_lg_ad_m":
+            safe_float(
+                causal_effect.get(
+                    "mean_waypoint_displacement_m",
+                    None,
+                )
+            ),
+
+        "final_causal_actor_lg_fd_m":
+            safe_float(
+                causal_effect.get(
+                    "terminal_waypoint_displacement_m",
+                    None,
+                )
+            ),
+
+        "final_causal_actor_lg_max_displacement_m":
+            safe_float(
+                causal_effect.get(
+                    "max_waypoint_displacement_m",
                     None,
                 )
             ),
@@ -542,6 +578,37 @@ def build_actor_record(
                 )
             ),
 
+        #修改20260720：LG 与 CVAA 同形式的纯几何反事实轨迹响应。
+        # lg_ad_m / lg_fd_m 来自 preliminary actor-removal test，
+        # 不参与 LG causal acceptance。
+        "lg_ad_m": safe_float(
+            effect.get(
+                "mean_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "lg_fd_m": safe_float(
+            effect.get(
+                "terminal_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "lg_max_displacement_m": safe_float(
+            effect.get(
+                "max_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "lg_response_steps": safe_int(
+            effect.get(
+                "trajectory_response_steps",
+                None,
+            )
+        ),
+
         "causal_accepted":
             test.get(
                 "causal_accepted",
@@ -601,6 +668,35 @@ def build_actor_record(
                     None,
                 )
             ),
+
+        # 最终被选中的 causal actor 才有 final_effect。
+        "final_lg_ad_m": safe_float(
+            final_effect.get(
+                "mean_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "final_lg_fd_m": safe_float(
+            final_effect.get(
+                "terminal_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "final_lg_max_displacement_m": safe_float(
+            final_effect.get(
+                "max_waypoint_displacement_m",
+                None,
+            )
+        ),
+
+        "final_lg_response_steps": safe_int(
+            final_effect.get(
+                "trajectory_response_steps",
+                None,
+            )
+        ),
 
         # 只有最终被选中的 causal actor
         # 才会经过 final revalidation，
@@ -765,6 +861,11 @@ def write_actor_csv(
         "causal_score",
         "preliminary_causal_score",
 
+        "lg_ad_m",
+        "lg_fd_m",
+        "lg_max_displacement_m",
+        "lg_response_steps",
+
         "causal_accepted",
         "causal_acceptance_reason",
 
@@ -778,6 +879,12 @@ def write_actor_csv(
         "counterfactual_remaining_actor_count",
 
         "final_causal_score",
+
+        "final_lg_ad_m",
+        "final_lg_fd_m",
+        "final_lg_max_displacement_m",
+        "final_lg_response_steps",
+
         "final_revalidation_passed",
         "final_causal_acceptance_reason",
         "final_full_scene_intent_name",

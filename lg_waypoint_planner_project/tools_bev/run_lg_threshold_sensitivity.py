@@ -605,7 +605,7 @@ def main():
                 tag,
 
             "baseline":
-                False,
+                bool(is_baseline),
 
             "reused_existing_baseline":
                 False,
