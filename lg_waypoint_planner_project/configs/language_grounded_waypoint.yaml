@@ -192,7 +192,7 @@ threshold_sensitivity:
 
   # Main-paper threshold is 0.60.
   # Sensitivity analysis changes ONLY causal_response.min_causal_score.
-  thresholds: [0.40, 0.50, 0.60, 0.70, 0.80]
+  thresholds: [0.000001, 0.20, 0.40, 0.60, 0.80, 1.00]
 
   # Existing formal LG result corresponds to 0.60 and can be reused.
   baseline_threshold: 0.60
