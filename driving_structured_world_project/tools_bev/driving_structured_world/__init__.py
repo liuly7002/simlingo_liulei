@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 
-"""Expert-conditioned structured future-world label generation for Driving data."""
+"""LG-keyed structured future-world label generation for Driving data."""
 
-#修改20260727：Driving结构化世界标签删除原C3交互通道。
-# 语义编号继续保留C0/C1/C2/C4，但张量中按以下4通道顺序连续存储。
+#修改20261016：统一C0/C1/C2三个结构化语义通道。
 CHANNEL_NAMES = (
     "selected_route_ego_footprint_occupancy",
     "future_ego_footprint_occupancy",
     "primary_causal_actor_future_footprint_occupancy",
-    "secondary_actor_future_footprint_occupancy",
 )

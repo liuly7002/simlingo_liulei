@@ -213,7 +213,6 @@ def build_grid(
     expert_future: np.ndarray,
     expert_future_yaws: Optional[np.ndarray],
     primary_actor: Optional[Dict],
-    secondary_actor: Optional[Dict],
     actor_timelines: Dict[int, list],
     ego_center: Sequence[float],
     meters_per_pixel: float,
@@ -224,7 +223,6 @@ def build_grid(
     expert_future = as_xy_points(expert_future)
     #修改20260727：优先使用未来measurement中的真实相对theta；只有缺失时才根据位移回退推算。
     expert_yaws = resolve_expert_yaws(expert_future, expert_future_yaws)
-
     structured_cfg = _cfg_get(cfg, "structured_world", {})
     grid_cfg = _cfg_get(structured_cfg, "grid", {})
     ego_half_l = float(cfg.vehicle.ego_half_length_m)
@@ -232,23 +230,13 @@ def build_grid(
     route_margin = max(_cfg_float(grid_cfg, "reference_route_footprint_margin_m", 0.0), 0.0)
     ego_margin = max(_cfg_float(grid_cfg, "ego_footprint_margin_m", 0.0), 0.0)
     actor_margin = max(_cfg_float(grid_cfg, "actor_footprint_margin_m", 0.0), 0.0)
-
     route_mask = _draw_route_occupancy(
-        shape,
-        route_points,
-        ego_half_l,
-        ego_half_w,
-        route_margin,
-        ego_center,
-        meters_per_pixel,
+        shape, route_points, ego_half_l, ego_half_w, route_margin, ego_center, meters_per_pixel,
     ) if len(route_points) else np.zeros(shape, dtype=np.float32)
 
-    ego_union = np.zeros(shape, dtype=np.float32)
-    primary_union = np.zeros(shape, dtype=np.float32)
-    secondary_union = np.zeros(shape, dtype=np.float32)
-    primary_frames = 0
-    secondary_frames = 0
-
+    ego_temporal = np.zeros((horizon, *shape), dtype=np.float32)
+    actor_temporal = np.zeros((horizon, *shape), dtype=np.float32)
+    primary_frames_found = 0
     for step in range(1, horizon + 1):
         if step - 1 >= len(expert_future):
             continue
@@ -256,19 +244,13 @@ def build_grid(
         yaw = float(expert_yaws[step - 1])
         ego_mask = np.zeros(shape, dtype=np.uint8)
         _fill_obb(
-            ego_mask,
-            waypoint,
-            yaw,
-            ego_half_l + ego_margin,
-            ego_half_w + ego_margin,
-            ego_center,
-            meters_per_pixel,
+            ego_mask, waypoint, yaw, ego_half_l + ego_margin, ego_half_w + ego_margin,
+            ego_center, meters_per_pixel,
         )
-        ego_union += ego_mask.astype(np.float32)
-
+        ego_temporal[step - 1] = ego_mask.astype(np.float32)
         primary_future = _find_actor(actor_timelines.get(step, []), primary_actor)
         if primary_future is not None:
-            primary_frames += 1
+            primary_frames_found += 1
             primary_mask = np.zeros(shape, dtype=np.uint8)
             _fill_obb(
                 primary_mask,
@@ -276,44 +258,22 @@ def build_grid(
                 float(primary_future.get("yaw_rad", 0.0)),
                 float(primary_future.get("half_length_m", 1.0)) + actor_margin,
                 float(primary_future.get("half_width_m", 0.5)) + actor_margin,
-                ego_center,
-                meters_per_pixel,
+                ego_center, meters_per_pixel,
             )
-            primary_union += primary_mask.astype(np.float32)
+            actor_temporal[step - 1] = primary_mask.astype(np.float32)
 
-        secondary_future = _find_actor(actor_timelines.get(step, []), secondary_actor)
-        if secondary_future is not None:
-            secondary_frames += 1
-            secondary_mask = np.zeros(shape, dtype=np.uint8)
-            _fill_obb(
-                secondary_mask,
-                [float(secondary_future.get("x_m", 0.0)), float(secondary_future.get("y_m", 0.0))],
-                float(secondary_future.get("yaw_rad", 0.0)),
-                float(secondary_future.get("half_length_m", 1.0)) + actor_margin,
-                float(secondary_future.get("half_width_m", 0.5)) + actor_margin,
-                ego_center,
-                meters_per_pixel,
-            )
-            secondary_union += secondary_mask.astype(np.float32)
-
-    if horizon > 0:
-        ego_union = np.clip(ego_union / float(horizon), 0.0, 1.0)
-        primary_union = np.clip(primary_union / float(horizon), 0.0, 1.0)
-        secondary_union = np.clip(secondary_union / float(horizon), 0.0, 1.0)
-
-    #修改20260727：删除原C3交互通道，仅保存C0、C1、C2和C4。
-    grid = np.stack(
-        [route_mask, ego_union, primary_union, secondary_union],
-        axis=0,
-    ).astype(np.float32)
+    #修改20261016：C0专家Route、C1专家Ego、C2 LG身份Actor，保留C1/C2逐帧监督。
+    ego_union = np.clip(ego_temporal.mean(axis=0), 0.0, 1.0)
+    primary_union = np.clip(actor_temporal.mean(axis=0), 0.0, 1.0)
+    grid = np.stack([route_mask, ego_union, primary_union], axis=0).astype(np.float32)
+    temporal = np.stack([ego_temporal, actor_temporal], axis=0).astype(np.float32)
     return {
         "grid": grid,
+        "temporal": temporal,
         "route_mask": route_mask,
         "ego_future_mask": ego_union,
         "primary_actor_mask": primary_union,
-        "secondary_actor_mask": secondary_union,
-        "primary_actor_future_frames_found": int(primary_frames),
-        "secondary_actor_future_frames_found": int(secondary_frames),
+        "primary_actor_future_frames_found": int(primary_frames_found),
     }
 
 
@@ -325,11 +285,7 @@ def save_npz(
     frame_name: str,
     primary_actor: Optional[Dict],
     primary_score: float,
-    secondary_actor: Optional[Dict],
-    secondary_score: float,
-    secondary_source: str,
-    secondary_selection: Dict,
-    expert_match: Dict,
+    critical_actor_status: int,
     reference_route_points_used: int,
     meters_per_pixel: float,
     ego_center: Sequence[float],
@@ -337,25 +293,21 @@ def save_npz(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     grid = np.asarray(grid_result["grid"], dtype=np.float32)
+    temporal = np.asarray(grid_result["temporal"], dtype=np.float32)
     np.savez_compressed(
         str(path),
         future_interaction_grid=grid,
+        future_interaction_temporal=temporal,
         valid=np.asarray(bool(valid), dtype=np.uint8),
         invalid_reason=np.asarray(str(invalid_reason), dtype="<U96"),
         channel_names=np.asarray(CHANNEL_NAMES, dtype="<U64"),
+        temporal_channel_names=np.asarray(["C1_ego_future", "C2_critical_actor"], dtype="<U32"),
+        critical_actor_status=np.asarray(int(critical_actor_status), dtype=np.int8),
         frame=np.asarray(str(frame_name), dtype="<U32"),
         coordinate=np.asarray("ego_local_x_forward_y_right_yaw_positive_right", dtype="<U64"),
         critical_actor_id=np.asarray(actor_id(primary_actor) or "", dtype="<U64"),
-        has_causal_actor=np.asarray(primary_actor is not None, dtype=np.uint8),
-        primary_actor_future_frames_found=np.asarray(
-            int(grid_result["primary_actor_future_frames_found"]), dtype=np.int16
-        ),
-        secondary_actor_id=np.asarray(actor_id(secondary_actor) or "", dtype="<U64"),
-        has_secondary_actor=np.asarray(secondary_actor is not None, dtype=np.uint8),
-        secondary_actor_source=np.asarray(str(secondary_source), dtype="<U96"),
-        secondary_actor_future_frames_found=np.asarray(
-            int(grid_result["secondary_actor_future_frames_found"]), dtype=np.int16
-        ),
+        has_causal_actor=np.asarray(critical_actor_status == 1, dtype=np.uint8),
+        primary_actor_future_frames_found=np.asarray(grid_result["primary_actor_future_frames_found"], dtype=np.int16),
         num_future_frames=np.asarray(int(cfg.horizon.num_future_waypoints), dtype=np.int16),
         future_frame_stride=np.asarray(int(cfg.horizon.future_frame_stride), dtype=np.int16),
         temporal_weighting=np.asarray("equal_mean_over_all_future_frames", dtype="<U48"),
@@ -364,37 +316,8 @@ def save_npz(
         meters_per_pixel=np.asarray(float(meters_per_pixel), dtype=np.float32),
         ego_center=np.asarray(ego_center, dtype=np.float32),
         trajectory_source=np.asarray("expert", dtype="<U32"),
-        actor_selection_source=np.asarray(
-            "expert_matched_lg_counterfactual_reselection", dtype="<U64"
-        ),
-        expert_match_valid=np.asarray(bool(expert_match.get("valid", False)), dtype=np.uint8),
-        expert_match_reason=np.asarray(str(expert_match.get("reason", "")), dtype="<U96"),
-        expert_match_candidate_index=np.asarray(int(expert_match.get("selected_index", -1)), dtype=np.int32),
-        expert_match_intent_name=np.asarray(str(expert_match.get("intent_name", "")), dtype="<U64"),
-        expert_match_variant_id=np.asarray(str(expert_match.get("variant_id", "")), dtype="<U96"),
-        expert_match_ade_m=np.asarray(float(expert_match.get("ade_m", float("nan"))), dtype=np.float32),
-        expert_match_fde_m=np.asarray(float(expert_match.get("fde_m", float("nan"))), dtype=np.float32),
-        expert_match_speed_mae_mps=np.asarray(
-            float(expert_match.get("speed_mae_mps", float("nan"))), dtype=np.float32
-        ),
+        actor_selection_source=np.asarray("lg_decision_critical_actor", dtype="<U48"),
         primary_causal_score=np.asarray(float(primary_score), dtype=np.float32),
-        secondary_causal_score=np.asarray(float(secondary_score), dtype=np.float32),
-        secondary_selection_policy=np.asarray(
-            str(secondary_selection.get("selection_policy", "")), dtype="<U96"
-        ),
-        secondary_selection_reason=np.asarray(
-            str(secondary_selection.get("reason", "")), dtype="<U96"
-        ),
-        secondary_selection_eligible_candidate_count=np.asarray(
-            int(secondary_selection.get("eligible_candidate_count", 0)), dtype=np.int16
-        ),
-        secondary_selection_rejection_counts=np.asarray(
-            str(secondary_selection.get("rejection_counts", {})), dtype="<U512"
-        ),
-        structured_world_channel_count=np.asarray(len(CHANNEL_NAMES), dtype=np.int16),
-        removed_channel=np.asarray(
-            "time_aligned_primary_future_interaction", dtype="<U64"
-        ),
     )
 
 
@@ -440,36 +363,18 @@ def _label(image, text, cfg):
 
 def save_debug_image(path: Path, grid_result: Dict, ego_center, meters_per_pixel, cfg) -> None:
     debug_cfg = _cfg_get(cfg, "debug", {})
-    background = tuple(
-        int(v) for v in _cfg_get(debug_cfg, "background_bgr", [54, 60, 66])
-    )
-    #修改20260727：Driving调试图删除C3，仅显示C0、C1、C2、C4及总叠加图。
+    background = tuple(int(v) for v in _cfg_get(debug_cfg, "background_bgr", [54, 60, 66]))
     masks = [
         grid_result["route_mask"],
         grid_result["ego_future_mask"],
         grid_result["primary_actor_mask"],
-        grid_result["secondary_actor_mask"],
     ]
-    colors = [
-        (220, 145, 70),
-        (95, 190, 95),
-        (75, 165, 235),
-        (85, 205, 205),
-    ]
-    labels = [
-        "C0 Expert Route",
-        "C1 Expert Ego",
-        "C2 Primary",
-        "C4 Secondary",
-    ]
-    suffixes = ["c0", "c1", "c2", "c4"]
-    panels = [
-        _colorize(mask, color, background)
-        for mask, color in zip(masks, colors)
-    ]
-
+    colors = [(220, 145, 70), (95, 190, 95), (75, 165, 235)]
+    labels = ["C0 Expert Route", "C1 Expert Ego", "C2 Critical"]
+    suffixes = ["c0", "c1", "c2"]
+    panels = [_colorize(mask, color, background) for mask, color in zip(masks, colors)]
     overlay = np.full((*masks[0].shape, 3), background, dtype=np.uint8)
-    for mask, color, alpha in zip(masks, colors, [0.78, 0.72, 0.90, 0.85]):
+    for mask, color, alpha in zip(masks, colors, [0.78, 0.72, 0.90]):
         strength = (_normalize(mask)[..., None] * alpha).clip(0.0, 1.0)
         overlay = np.rint(
             overlay.astype(np.float32) * (1.0 - strength)
@@ -478,92 +383,32 @@ def save_debug_image(path: Path, grid_result: Dict, ego_center, meters_per_pixel
     panels.append(overlay)
     labels.append("Full")
     suffixes.append("full")
-
     width = max(_cfg_int(debug_cfg, "panel_width", 320), 160)
     gap = max(_cfg_int(debug_cfg, "panel_gap_px", 12), 0)
     border = max(_cfg_int(debug_cfg, "panel_border_px", 2), 0)
-    border_color = tuple(
-        int(v)
-        for v in _cfg_get(
-            debug_cfg,
-            "panel_border_bgr",
-            [160, 160, 160],
-        )
-    )
+    border_color = tuple(int(v) for v in _cfg_get(debug_cfg, "panel_border_bgr", [160, 160, 160]))
     processed = []
     for panel, label in zip(panels, labels):
         panel = _crop(panel, ego_center, meters_per_pixel, debug_cfg)
         scale = width / float(max(panel.shape[1], 1))
-        panel = cv2.resize(
-            panel,
-            (width, max(1, int(round(panel.shape[0] * scale)))),
-            interpolation=cv2.INTER_NEAREST,
-        )
+        panel = cv2.resize(panel, (width, max(1, int(round(panel.shape[0] * scale)))), interpolation=cv2.INTER_NEAREST)
         panel = _label(panel, label, debug_cfg)
         processed.append(panel)
-
     max_h = max(panel.shape[0] for panel in processed)
     normalized = []
     for panel in processed:
-        panel = cv2.copyMakeBorder(
-            panel,
-            0,
-            max_h - panel.shape[0],
-            0,
-            0,
-            borderType=cv2.BORDER_CONSTANT,
-            value=background,
-        )
+        panel = cv2.copyMakeBorder(panel, 0, max_h - panel.shape[0], 0, 0,
+                                  borderType=cv2.BORDER_CONSTANT, value=background)
         if border > 0:
-            panel = cv2.copyMakeBorder(
-                panel,
-                border,
-                border,
-                border,
-                border,
-                cv2.BORDER_CONSTANT,
-                value=border_color,
-            )
+            panel = cv2.copyMakeBorder(panel, border, border, border, border,
+                                      borderType=cv2.BORDER_CONSTANT, value=border_color)
         normalized.append(panel)
-
-    # 五个panel按两列排列；最后一个Full位于左下，右下用空白占位。
-    blank = np.full_like(normalized[0], background, dtype=np.uint8)
-    normalized.append(blank)
-    rows = []
-    spacer_h = (
-        np.full((normalized[0].shape[0], gap, 3), background, dtype=np.uint8)
-        if gap
-        else None
-    )
-    for start_index in range(0, len(normalized), 2):
-        pair = normalized[start_index:start_index + 2]
-        row = np.concatenate(
-            [pair[0], spacer_h, pair[1]]
-            if spacer_h is not None
-            else pair,
-            axis=1,
-        )
-        rows.append(row)
-
-    spacer_v = (
-        np.full((gap, rows[0].shape[1], 3), background, dtype=np.uint8)
-        if gap
-        else None
-    )
-    composite_parts = []
-    for row_index, row in enumerate(rows):
-        if row_index > 0 and spacer_v is not None:
-            composite_parts.append(spacer_v)
-        composite_parts.append(row)
-    composite = np.concatenate(composite_parts, axis=0)
-
+    hspace = np.full((normalized[0].shape[0], gap, 3), background, dtype=np.uint8)
+    row0 = np.concatenate([normalized[0], hspace, normalized[1]], axis=1)
+    row1 = np.concatenate([normalized[2], hspace, normalized[3]], axis=1)
+    vspace = np.full((gap, row0.shape[1], 3), background, dtype=np.uint8)
     path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), composite)
-
+    cv2.imwrite(str(path), np.concatenate([row0, vspace, row1], axis=0))
     if _cfg_bool(debug_cfg, "save_individual_channels", False):
         for suffix, panel in zip(suffixes, processed):
-            cv2.imwrite(
-                str(path.with_name(f"{path.stem}_{suffix}.png")),
-                panel,
-            )
-
+            cv2.imwrite(str(path.with_name(f"{path.stem}_{suffix}.png")), panel)

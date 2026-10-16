@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Generate LG-derived four-channel future interaction grid labels.
+"""Generate LG-derived decision-critical-actor future interaction grid labels.
 
 The saved grid is aligned with the existing BEV and contains:
 
     tensor index 0 (C0): equal-weight ego-footprint occupancy on 20 LG selected-route points
     tensor index 1 (C1): equal-weight future ego-footprint occupancy over 10 frames
     tensor index 2 (C2): equal-weight primary causal-actor footprint occupancy over 10 frames
-    tensor index 3 (C4): equal-weight secondary-actor footprint occupancy over 10 frames
+    temporal C1/C2: separate per-future-frame occupancy masks [T,H,W]
 
-All route points and future frames use equal weights. No temporal attenuation is
-applied. Channel 4 first uses an explicitly saved ``secondary_attention_actor``
-when the LG label contains one; otherwise it can fall back to the highest-scoring
-non-primary accepted actor in ``causal_analysis.object_tests``.
+All route points and future frames use equal weights. No temporal attenuation is applied.
 """
 
 from __future__ import annotations
@@ -51,7 +48,6 @@ CHANNEL_NAMES = np.asarray(
         "selected_route_ego_footprint_occupancy",
         "future_ego_footprint_occupancy",
         "primary_causal_actor_future_footprint_occupancy",
-        "secondary_actor_future_footprint_occupancy",
     ],
     dtype="<U64",
 )
@@ -307,105 +303,26 @@ def _find_actor(records: Sequence[Dict], actor_id) -> Optional[Dict]:
     return None
 
 
-def _actor_exists(actor: Optional[Dict]) -> bool:
-    return isinstance(actor, dict) and bool(actor.get("exists", False))
-
-
-def _secondary_from_saved_factor(lg_label: Dict, primary_actor_id) -> Optional[Dict]:
-    """Read an explicitly saved secondary attention actor from compatible labels."""
-    for key in ["factor", "critical_factor", "most_influential_factor"]:
-        factor = lg_label.get(key, {}) or {}
-        if not isinstance(factor, dict):
-            continue
-        actor = factor.get("secondary_attention_actor", {}) or {}
-        if not _actor_exists(actor):
-            continue
-        actor_id = actor.get("id", None)
-        if actor_id is None or _actor_id_equal(actor_id, primary_actor_id):
-            continue
-        return dict(actor)
-    return None
-
-
-def _secondary_from_object_tests(lg_label: Dict, primary_actor_id, cfg) -> Optional[Dict]:
-    """Select the strongest accepted non-primary counterfactual actor test.
-
-    This fallback uses information already stored in the public LG label. It is
-    deliberately recorded as a secondary *candidate* source because only the
-    primary object receives the final post-selection causal revalidation.
-    """
-    secondary_cfg = _cfg_get(cfg, "secondary_actor", {})
-    require_accepted = _cfg_bool(secondary_cfg, "require_causal_accepted", True)
-    tests = (lg_label.get("causal_analysis", {}) or {}).get("object_tests", []) or []
-
-    ranked = []
-    for test in tests:
-        if not isinstance(test, dict) or not bool(test.get("counterfactual_valid", False)):
-            continue
-        if require_accepted and not bool(test.get("causal_accepted", False)):
-            continue
-        actor = test.get("actor", {}) or {}
-        if not isinstance(actor, dict):
-            continue
-        actor_id = actor.get("id", None)
-        if actor_id is None or _actor_id_equal(actor_id, primary_actor_id):
-            continue
-        final_score = test.get("final_causal_score", None)
-        score = _safe_float(
-            final_score,
-            _safe_float(test.get("causal_score", 0.0), 0.0),
-        )
-        ranked.append((score, actor))
-
-    if not ranked:
-        return None
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    actor = dict(ranked[0][1])
-    actor["exists"] = True
-    actor["secondary_causal_score"] = float(ranked[0][0])
-    return actor
-
-
-def _select_secondary_actor(lg_label: Dict, primary_actor_id, cfg) -> Tuple[Optional[Dict], str]:
-    secondary_cfg = _cfg_get(cfg, "secondary_actor", {})
-    if not _cfg_bool(secondary_cfg, "enabled", True):
-        return None, "disabled"
-
-    if _cfg_bool(secondary_cfg, "prefer_saved_secondary_attention_actor", True):
-        actor = _secondary_from_saved_factor(lg_label, primary_actor_id)
-        if actor is not None:
-            return actor, "saved_secondary_attention_actor"
-
-    if _cfg_bool(secondary_cfg, "fallback_to_causal_object_tests", True):
-        actor = _secondary_from_object_tests(lg_label, primary_actor_id, cfg)
-        if actor is not None:
-            return actor, "accepted_non_primary_causal_test"
-
-    return None, "none"
-
-
-def _empty_result(shape: Tuple[int, int]):
+def _empty_result(shape: Tuple[int, int], horizon: int):
     return (
         np.zeros(shape, dtype=np.float32),  # selected route ego footprints
         np.zeros(shape, dtype=np.float32),  # future ego footprints
-        np.zeros(shape, dtype=np.float32),  # primary actor future footprints
-        np.zeros(shape, dtype=np.float32),  # secondary actor future footprints
+        np.zeros(shape, dtype=np.float32),  # critical actor future footprints
+        np.zeros((horizon, *shape), dtype=np.float32),  # C1 temporal masks
+        np.zeros((horizon, *shape), dtype=np.float32),  # C2 temporal masks
     )
 
 
 def _save_npz(
     output_path: Path,
     grid: np.ndarray,
+    temporal: np.ndarray,
     valid: bool,
     invalid_reason: str,
     frame_name: str,
     critical_actor_id,
-    has_causal_actor: bool,
+    critical_actor_status: int,
     primary_actor_future_frames_found: int,
-    secondary_actor_id,
-    has_secondary_actor: bool,
-    secondary_actor_source: str,
-    secondary_actor_future_frames_found: int,
     reference_route_points_used: int,
     cfg,
     meters_per_pixel: float,
@@ -415,33 +332,17 @@ def _save_npz(
     np.savez_compressed(
         str(output_path),
         future_interaction_grid=grid.astype(np.float32),
+        future_interaction_temporal=temporal.astype(np.float32),  # [2,T,H,W]
         valid=np.asarray(bool(valid), dtype=np.uint8),
         invalid_reason=np.asarray(str(invalid_reason), dtype="<U96"),
         channel_names=CHANNEL_NAMES,
+        temporal_channel_names=np.asarray(["C1_ego_future", "C2_critical_actor"], dtype="<U32"),
         frame=np.asarray(str(frame_name), dtype="<U32"),
-        coordinate=np.asarray(
-            "ego_local_x_forward_y_right_yaw_positive_right",
-            dtype="<U64",
-        ),
-        critical_actor_id=np.asarray(
-            "" if critical_actor_id is None else str(critical_actor_id),
-            dtype="<U64",
-        ),
-        has_causal_actor=np.asarray(bool(has_causal_actor), dtype=np.uint8),
-        primary_actor_future_frames_found=np.asarray(
-            primary_actor_future_frames_found,
-            dtype=np.int16,
-        ),
-        secondary_actor_id=np.asarray(
-            "" if secondary_actor_id is None else str(secondary_actor_id),
-            dtype="<U64",
-        ),
-        has_secondary_actor=np.asarray(bool(has_secondary_actor), dtype=np.uint8),
-        secondary_actor_source=np.asarray(str(secondary_actor_source), dtype="<U64"),
-        secondary_actor_future_frames_found=np.asarray(
-            secondary_actor_future_frames_found,
-            dtype=np.int16,
-        ),
+        coordinate=np.asarray("ego_local_x_forward_y_right_yaw_positive_right", dtype="<U64"),
+        critical_actor_id=np.asarray("" if critical_actor_id is None else str(critical_actor_id), dtype="<U64"),
+        critical_actor_status=np.asarray(int(critical_actor_status), dtype=np.int8),
+        has_causal_actor=np.asarray(critical_actor_status == 1, dtype=np.uint8),
+        primary_actor_future_frames_found=np.asarray(primary_actor_future_frames_found, dtype=np.int16),
         num_future_frames=np.asarray(int(cfg.horizon.num_future_waypoints), dtype=np.int16),
         future_frame_stride=np.asarray(int(cfg.horizon.future_frame_stride), dtype=np.int16),
         temporal_weighting=np.asarray("equal_mean_over_all_future_frames", dtype="<U48"),
@@ -449,6 +350,8 @@ def _save_npz(
         reference_route_points_used=np.asarray(reference_route_points_used, dtype=np.int16),
         meters_per_pixel=np.asarray(float(meters_per_pixel), dtype=np.float32),
         ego_center=np.asarray(ego_center, dtype=np.float32),
+        trajectory_source=np.asarray("lg", dtype="<U32"),
+        actor_selection_source=np.asarray("lg_decision_critical_actor", dtype="<U48"),
     )
 
 
@@ -619,123 +522,64 @@ def _save_debug_image(
     save_path: Path,
     route_mask: np.ndarray,
     primary_actor_mask: np.ndarray,
-    secondary_actor_mask: np.ndarray,
     ego_future_mask: np.ndarray,
     valid: bool,
     invalid_reason: str,
     frame_name: str,
     primary_frames: int,
-    secondary_frames: int,
-    secondary_source: str,
     ego_center: Sequence[float],
     meters_per_pixel: float,
-    cfg,) -> None:
-    del valid, invalid_reason, frame_name, primary_frames, secondary_frames, secondary_source
+    cfg,
+) -> None:
+    del valid, invalid_reason, frame_name, primary_frames
     debug_cfg = _cfg_get(cfg, "debug", {})
     background = _debug_background(debug_cfg)
-
     route_panel = _colorize_mask(route_mask, (220, 145, 70), background, normalize_for_debug=True)
     ego_future_panel = _colorize_mask(ego_future_mask, (95, 190, 95), background, normalize_for_debug=True)
     primary_panel = _colorize_mask(primary_actor_mask, (75, 165, 235), background, normalize_for_debug=True)
-    secondary_panel = _colorize_mask(secondary_actor_mask, (85, 205, 205), background, normalize_for_debug=True)
-
     overlay = np.full((*route_mask.shape, 3), background, dtype=np.uint8)
     overlay = _blend_mask(overlay, route_mask, (205, 125, 55), alpha=0.78)
     overlay = _blend_mask(overlay, ego_future_mask, (80, 190, 95), alpha=0.72)
     overlay = _blend_mask(overlay, primary_actor_mask, (55, 145, 235), alpha=0.90)
-    overlay = _blend_mask(overlay, secondary_actor_mask, (65, 205, 205), alpha=0.85)
-
-    raw_panels = [route_panel, ego_future_panel, primary_panel, secondary_panel, overlay]
-    panel_labels = [
-        "C0 Route",
-        "C1 Ego",
-        "C2 Primary",
-        "C4 Secondary",
-        "Full",
-    ]
-    panels = []
-    for panel in raw_panels:
-        panel = _crop_debug_roi(panel, ego_center, meters_per_pixel, debug_cfg)
-        panels.append(panel)
-
+    raw_panels = [route_panel, ego_future_panel, primary_panel, overlay]
+    labels = ["C0 Route", "C1 Ego", "C2 Critical", "Full"]
     panel_width = max(_cfg_int(debug_cfg, "panel_width", 320), 160)
     panel_gap = max(_cfg_int(debug_cfg, "panel_gap_px", 12), 0)
-    panels = [_resize_panel(panel, panel_width) for panel in panels]
-    panels = [
-        _add_panel_corner_label(panel, panel_label, debug_cfg)
-        for panel, panel_label in zip(panels, panel_labels)
-    ]
-    panel_height = max(panel.shape[0] for panel in panels)
-
-    normalized = []
-    for panel in panels:
-        pad_bottom = panel_height - panel.shape[0]
-        panel = cv2.copyMakeBorder(
-            panel,
-            0,
-            pad_bottom,
-            0,
-            0,
-            borderType=cv2.BORDER_CONSTANT,
-            value=background,
-        )
+    panels = []
+    for panel, label in zip(raw_panels, labels):
+        panel = _crop_debug_roi(panel, ego_center, meters_per_pixel, debug_cfg)
+        panel = _resize_panel(panel, panel_width)
+        panel = _add_panel_corner_label(panel, label, debug_cfg)
         panel = _add_panel_border(panel, debug_cfg)
-        normalized.append(panel)
-
-    panel_total_height = max(panel.shape[0] for panel in normalized)
-    panel_total_width = max(panel.shape[1] for panel in normalized)
-
-    #修改20260727：LG调试图删除C3。五个有效面板按两列排列，右下使用空白占位。
-    normalized.append(np.full_like(normalized[0], background, dtype=np.uint8))
-    grid_rows = [normalized[0:2], normalized[2:4], normalized[4:6]]
-    row_images = []
-    h_spacer = np.full((panel_total_height, panel_gap, 3), background, dtype=np.uint8) if panel_gap > 0 else None
-    v_spacer = np.full((panel_gap, 2 * panel_total_width + (panel_gap if panel_gap > 0 else 0), 3), background, dtype=np.uint8) if panel_gap > 0 else None
-    for row in grid_rows:
-        padded = []
-        for panel in row:
-            bottom = panel_total_height - panel.shape[0]
-            right = panel_total_width - panel.shape[1]
-            if bottom > 0 or right > 0:
-                panel = cv2.copyMakeBorder(
-                    panel,
-                    0,
-                    bottom,
-                    0,
-                    right,
-                    borderType=cv2.BORDER_CONSTANT,
-                    value=background,
-                )
-            padded.append(panel)
-        if h_spacer is not None:
-            row_image = np.concatenate([padded[0], h_spacer, padded[1]], axis=1)
-        else:
-            row_image = np.concatenate(padded, axis=1)
-        row_images.append(row_image)
-
-    if v_spacer is not None:
-        composite = np.concatenate([row_images[0], v_spacer, row_images[1], v_spacer, row_images[2]], axis=0)
-    else:
-        composite = np.concatenate(row_images, axis=0)
-
+        panels.append(panel)
+    max_height = max(panel.shape[0] for panel in panels)
+    max_width = max(panel.shape[1] for panel in panels)
+    normalized = [
+        cv2.copyMakeBorder(
+            panel, 0, max_height - panel.shape[0], 0, max_width - panel.shape[1],
+            borderType=cv2.BORDER_CONSTANT, value=background,
+        )
+        for panel in panels
+    ]
+    hspace = np.full((max_height, panel_gap, 3), background, dtype=np.uint8)
+    row0 = np.concatenate([normalized[0], hspace, normalized[1]], axis=1)
+    row1 = np.concatenate([normalized[2], hspace, normalized[3]], axis=1)
+    vspace = np.full((panel_gap, row0.shape[1], 3), background, dtype=np.uint8)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(save_path), composite)
-
+    cv2.imwrite(str(save_path), np.concatenate([row0, vspace, row1], axis=0))
     if _cfg_bool(debug_cfg, "save_individual_channels", False):
-        stem = save_path.stem
-        individual = [
+        for suffix, mask, color, title in (
             ("c0_route_ego_footprints", route_mask, (220, 145, 70), "C0 Route"),
             ("c1_future_ego", ego_future_mask, (95, 190, 95), "C1 Ego"),
-            ("c2_primary_actor", primary_actor_mask, (75, 165, 235), "C2 Primary"),
-            ("c4_secondary_actor", secondary_actor_mask, (85, 205, 205), "C4 Secondary"),
-        ]
-        for suffix, mask, color, panel_label in individual:
+            ("c2_critical_actor", primary_actor_mask, (75, 165, 235), "C2 Critical"),
+        ):
             image = _colorize_mask(mask, color, background, normalize_for_debug=True)
             image = _crop_debug_roi(image, ego_center, meters_per_pixel, debug_cfg)
             image = _resize_panel(image, panel_width)
-            image = _add_panel_corner_label(image, panel_label, debug_cfg)
+            image = _add_panel_corner_label(image, title, debug_cfg)
             image = _add_panel_border(image, debug_cfg)
-            cv2.imwrite(str(save_path.parent / f"{stem}_{suffix}.png"), image)
+            cv2.imwrite(str(save_path.parent / f"{save_path.stem}_{suffix}.png"), image)
+
 
 def _extract_label_inputs(lg_label: Dict, cfg) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     horizon = int(cfg.horizon.num_future_waypoints)
@@ -769,43 +613,34 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
     if not costmap_path.exists():
         LOGGER.warning(f"[Skip] Missing costmap: {costmap_path}")
         return False
-
     lg_label = load_json_gz(lg_path)
     costmap = load_costmap(costmap_path)
     meta = load_json_gz(meta_path) if meta_path.exists() else {}
-    meters_per_pixel = get_meters_per_pixel(
-        meta,
-        float(cfg.paths.default_pixels_per_meter),
-    )
+    meters_per_pixel = get_meters_per_pixel(meta, float(cfg.paths.default_pixels_per_meter))
     ego_center = get_ego_center(meta, costmap.shape)
     shape = tuple(costmap.shape[:2])
-
+    horizon = int(cfg.horizon.num_future_waypoints)
+    reference_count = int(cfg.horizon.reference_route_points)
     (
-        route_mask,
-        ego_future_union,
-        primary_actor_union,
-        secondary_actor_union,
-    ) = _empty_result(shape)
+        route_mask, ego_future_union, primary_actor_union,
+        ego_temporal, actor_temporal,
+    ) = _empty_result(shape, horizon)
 
     valid = True
     invalid_reason = ""
-    primary_actor_frames_found = 0
-    secondary_actor_frames_found = 0
-    critical_actor_id = None
-    secondary_actor = None
-    secondary_actor_id = None
-    secondary_actor_source = "none"
-
     supervision = lg_label.get("supervision", {}) or {}
     if not bool(supervision.get("risk_label_valid", False)):
         valid = False
         invalid_reason = "risk_label_invalid"
+    # LG数据加载器同样排除回退轨迹；不能将这些帧误认为可靠的无关键Actor样本。
+    if str(supervision.get("selected_internal_intent_name", "")) in {
+        "expert_fallback", "stationary_hold_fallback",
+    }:
+        valid = False
+        invalid_reason = invalid_reason or "lg_expert_fallback"
 
     route_points, planned_waypoints, planned_yaws = _extract_label_inputs(lg_label, cfg)
-    horizon = int(cfg.horizon.num_future_waypoints)
-    reference_count = int(cfg.horizon.reference_route_points)
-
-    if len(route_points) == 0:
+    if len(route_points) != reference_count:
         valid = False
         invalid_reason = invalid_reason or "missing_selected_reference_route"
     if len(planned_waypoints) != horizon:
@@ -815,14 +650,11 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         valid = False
         invalid_reason = invalid_reason or "invalid_risk_planned_yaw_count"
 
-    ego_cfg = _cfg_get(cfg, "vehicle", {})
     grid_cfg = _cfg_get(cfg, "grid", {})
+    ego_cfg = _cfg_get(cfg, "vehicle", {})
     ego_half_length = _cfg_float(ego_cfg, "ego_half_length_m", 2.44619083404541)
     ego_half_width = _cfg_float(ego_cfg, "ego_half_width_m", 0.9183566570281982)
-    route_footprint_margin = max(
-        _cfg_float(grid_cfg, "reference_route_footprint_margin_m", 0.0),
-        0.0,
-    )
+    route_margin = max(_cfg_float(grid_cfg, "reference_route_footprint_margin_m", 0.0), 0.0)
     ego_margin = max(_cfg_float(grid_cfg, "ego_footprint_margin_m", 0.0), 0.0)
     actor_margin = max(_cfg_float(grid_cfg, "actor_footprint_margin_m", 0.0), 0.0)
 
@@ -832,50 +664,35 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
             route_points=route_points,
             ego_half_length_m=ego_half_length,
             ego_half_width_m=ego_half_width,
-            footprint_margin_m=route_footprint_margin,
+            footprint_margin_m=route_margin,
             ego_center=ego_center,
             meters_per_pixel=meters_per_pixel,
         )
 
-    causal_analysis = lg_label.get("causal_analysis", {}) or {}
-    has_causal_actor = bool(causal_analysis.get("has_causal_object", False))
-    causal_actor = causal_analysis.get("causal_object", {}) or {}
-    if has_causal_actor:
-        critical_actor_id = causal_actor.get("id", None)
-        if critical_actor_id is None:
-            valid = False
-            invalid_reason = invalid_reason or "causal_actor_without_id"
+    causal_analysis = lg_label.get("causal_analysis", None)
+    if not isinstance(causal_analysis, dict) or not isinstance(causal_analysis.get("has_causal_object"), bool):
+        valid = False
+        invalid_reason = invalid_reason or "missing_lg_causal_analysis"
+        has_causal_actor = False
+        causal_actor = {}
+    else:
+        has_causal_actor = causal_analysis["has_causal_object"]
+        causal_actor = causal_analysis.get("causal_object", {}) or {}
 
-    #修改20260727：C4以C2存在为前提；没有有效primary actor时不选择secondary actor。
-    if has_causal_actor and critical_actor_id is not None:
-        secondary_actor, secondary_actor_source = _select_secondary_actor(
-            lg_label=lg_label,
-            primary_actor_id=critical_actor_id,
-            cfg=cfg,
-        )
-    has_secondary_actor = _actor_exists(secondary_actor)
-    if has_secondary_actor:
-        secondary_actor_id = secondary_actor.get("id", None)
-        if secondary_actor_id is None:
-            has_secondary_actor = False
-            secondary_actor_source = "secondary_actor_without_id"
+    critical_actor_id = causal_actor.get("id", None) if has_causal_actor else None
+    if has_causal_actor and critical_actor_id is None:
+        valid = False
+        invalid_reason = invalid_reason or "causal_actor_without_id"
 
     actor_timelines = {}
-    if (
-        (has_causal_actor and critical_actor_id is not None)
-        or (has_secondary_actor and secondary_actor_id is not None)
-    ):
-        actor_timelines = load_future_actor_timelines(
-            route_dir=route_dir,
-            frame_name=frame_name,
-            cfg=cfg,
-        )
+    if has_causal_actor and critical_actor_id is not None:
+        actor_timelines = load_future_actor_timelines(route_dir, frame_name, cfg)
 
+    primary_frames_found = 0
     if len(planned_waypoints) == horizon and len(planned_yaws) == horizon:
         for step in range(1, horizon + 1):
             waypoint = planned_waypoints[step - 1]
             yaw = float(planned_yaws[step - 1])
-
             ego_mask = np.zeros(shape, dtype=np.uint8)
             _fill_obb(
                 ego_mask,
@@ -886,84 +703,39 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
                 ego_center=ego_center,
                 meters_per_pixel=meters_per_pixel,
             )
+            ego_temporal[step - 1] = ego_mask.astype(np.float32)
             ego_future_union += ego_mask.astype(np.float32)
-
             if has_causal_actor and critical_actor_id is not None:
-                primary_actor = _find_actor(
-                    actor_timelines.get(step, []),
-                    critical_actor_id,
-                )
+                primary_actor = _find_actor(actor_timelines.get(step, []), critical_actor_id)
                 if primary_actor is not None:
-                    primary_actor_frames_found += 1
+                    primary_frames_found += 1
                     primary_mask = np.zeros(shape, dtype=np.uint8)
                     _fill_obb(
                         primary_mask,
-                        center_xy=[
-                            float(primary_actor.get("x_m", 0.0)),
-                            float(primary_actor.get("y_m", 0.0)),
-                        ],
+                        center_xy=[float(primary_actor.get("x_m", 0.0)), float(primary_actor.get("y_m", 0.0))],
                         yaw_rad=float(primary_actor.get("yaw_rad", 0.0)),
                         half_length_m=float(primary_actor.get("half_length_m", 1.0)) + actor_margin,
                         half_width_m=float(primary_actor.get("half_width_m", 0.5)) + actor_margin,
                         ego_center=ego_center,
                         meters_per_pixel=meters_per_pixel,
                     )
+                    actor_temporal[step - 1] = primary_mask.astype(np.float32)
                     primary_actor_union += primary_mask.astype(np.float32)
 
-
-            if has_secondary_actor and secondary_actor_id is not None:
-                secondary_future_actor = _find_actor(
-                    actor_timelines.get(step, []),
-                    secondary_actor_id,
-                )
-                if secondary_future_actor is not None:
-                    secondary_actor_frames_found += 1
-                    secondary_mask = np.zeros(shape, dtype=np.uint8)
-                    _fill_obb(
-                        secondary_mask,
-                        center_xy=[
-                            float(secondary_future_actor.get("x_m", 0.0)),
-                            float(secondary_future_actor.get("y_m", 0.0)),
-                        ],
-                        yaw_rad=float(secondary_future_actor.get("yaw_rad", 0.0)),
-                        half_length_m=float(secondary_future_actor.get("half_length_m", 1.0)) + actor_margin,
-                        half_width_m=float(secondary_future_actor.get("half_width_m", 0.5)) + actor_margin,
-                        ego_center=ego_center,
-                        meters_per_pixel=meters_per_pixel,
-                    )
-                    secondary_actor_union += secondary_mask.astype(np.float32)
-
-    # Every one of the ten future frames contributes exactly 1 / horizon.
-    # Missing observations contribute zero rather than changing the weights of
-    # the remaining frames.
     if horizon > 0:
         primary_actor_union = np.clip(primary_actor_union / float(horizon), 0.0, 1.0)
-        secondary_actor_union = np.clip(secondary_actor_union / float(horizon), 0.0, 1.0)
         ego_future_union = np.clip(ego_future_union / float(horizon), 0.0, 1.0)
-
-    if (
-        has_causal_actor
-        and critical_actor_id is not None
-        and primary_actor_frames_found == 0
-    ):
+    if has_causal_actor and primary_frames_found == 0:
         valid = False
         invalid_reason = invalid_reason or "causal_actor_missing_in_all_future_frames"
 
-    # A missing secondary actor does not invalidate the four core supervision
-    # channels. Channel 4 simply remains zero and its metadata records the cause.
-    if has_secondary_actor and secondary_actor_frames_found == 0:
-        secondary_actor_source = f"{secondary_actor_source}:missing_in_all_future_frames"
-
-    #修改20260727：删除原C3交互通道，仅保存C0、C1、C2和C4。
-    grid = np.stack(
-        [
-            route_mask,            # selected_reference_route 上的自车 footprint 占用
-            ego_future_union,      # 自车未来 10 帧的 footprint 占用
-            primary_actor_union,   # 主要因果 actor 未来 10 帧的 footprint 占用
-            secondary_actor_union, # 次要 actor 未来 10 帧的 footprint 占用
-        ],
-        axis=0,
-    ).astype(np.float32)
+    #修改20261016：三语义通道+逐帧时序占据，无关键Actor时C2为可靠全零负标签。
+    grid = np.stack([route_mask, ego_future_union, primary_actor_union], axis=0).astype(np.float32)
+    temporal = np.stack([ego_temporal, actor_temporal], axis=0).astype(np.float32)
+    if not np.isfinite(grid).all() or not np.isfinite(temporal).all():
+        valid = False
+        invalid_reason = invalid_reason or "non_finite_grid"
+    critical_actor_status = (1 if has_causal_actor else 0) if valid else -1
 
     output_cfg = _cfg_get(cfg, "output", {})
     save_invalid = _cfg_bool(output_cfg, "save_invalid_labels", True)
@@ -973,16 +745,13 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
         _save_npz(
             output_path=output_path,
             grid=grid,
+            temporal=temporal,
             valid=valid,
             invalid_reason=invalid_reason,
             frame_name=frame_name,
             critical_actor_id=critical_actor_id,
-            has_causal_actor=has_causal_actor,
-            primary_actor_future_frames_found=primary_actor_frames_found,
-            secondary_actor_id=secondary_actor_id,
-            has_secondary_actor=has_secondary_actor,
-            secondary_actor_source=secondary_actor_source,
-            secondary_actor_future_frames_found=secondary_actor_frames_found,
+            critical_actor_status=critical_actor_status,
+            primary_actor_future_frames_found=primary_frames_found,
             reference_route_points_used=min(len(route_points), reference_count),
             cfg=cfg,
             meters_per_pixel=meters_per_pixel,
@@ -991,37 +760,27 @@ def process_one_frame(route_dir: Path, frame_name: str, cfg) -> bool:
 
     debug_cfg = _cfg_get(cfg, "debug", {})
     if _cfg_bool(debug_cfg, "save_debug", False):
-        debug_path = (
-            route_dir
-            / str(cfg.paths.debug_folder)
-            / f"{frame_name}_future_interaction.png"
-        )
+        debug_path = route_dir / str(cfg.paths.debug_folder) / f"{frame_name}_future_interaction.png"
         _save_debug_image(
             save_path=debug_path,
             route_mask=route_mask,
             primary_actor_mask=primary_actor_union,
-            secondary_actor_mask=secondary_actor_union,
             ego_future_mask=ego_future_union,
             valid=valid,
             invalid_reason=invalid_reason,
             frame_name=frame_name,
-            primary_frames=primary_actor_frames_found,
-            secondary_frames=secondary_actor_frames_found,
-            secondary_source=secondary_actor_source,
+            primary_frames=primary_frames_found,
             ego_center=ego_center,
             meters_per_pixel=meters_per_pixel,
             cfg=cfg,
         )
-
     if bool(cfg.run.verbose):
         LOGGER.info(
             f"[OK] {route_dir.name}/{frame_name}: valid={valid} "
-            f"primary={has_causal_actor} primary_frames={primary_actor_frames_found}/{horizon} "
-            f"secondary={has_secondary_actor} secondary_frames={secondary_actor_frames_found}/{horizon} "
-            f"secondary_source={secondary_actor_source} "
+            f"critical_actor_status={critical_actor_status} "
+            f"primary_frames={primary_frames_found}/{horizon} "
             f"route_mass={float(route_mask.sum()):.1f} "
             f"primary_mass={float(primary_actor_union.sum()):.1f} "
-            f"secondary_mass={float(secondary_actor_union.sum()):.1f} "
             f"reason={invalid_reason or 'none'}"
         )
     return bool(valid or (save_npz and save_invalid))

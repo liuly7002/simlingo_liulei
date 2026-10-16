@@ -79,23 +79,6 @@ grid:
   ego_footprint_margin_m: 0.00
   actor_footprint_margin_m: 0.00
 
-secondary_actor:
-  enabled: true
-
-  # Use an explicitly stored secondary_attention_actor first when a compatible
-  # LG label contains that field.
-  prefer_saved_secondary_attention_actor: true
-
-  # Current slim LG labels retain all counterfactual object tests. When the
-  # explicit secondary field is absent, choose the highest-scoring accepted
-  # non-primary actor test as the C4 secondary actor.
-  fallback_to_causal_object_tests: true
-
-  # true avoids treating an arbitrary tested/distractor actor as secondary.
-  # Note: only the primary actor receives final post-selection revalidation, so
-  # this fallback is recorded in metadata as a secondary causal candidate source.
-  require_causal_accepted: true
-
 output:
   # Save one compressed .npz label per frame under paths.output_folder.
   save_npz: true
@@ -105,10 +88,10 @@ output:
   save_invalid_labels: true
 
 debug:
-  # Master switch for the 3x2 debug image.
+  # Master switch for the 2x2 debug image.
   save_debug: false
 
-  # Also save the four cropped and colorized channel images separately.
+  # Also save the three cropped and colorized channel images separately.
   save_individual_channels: false
 
   # Forward-looking crop in meters. A smaller rear range places ego near the
