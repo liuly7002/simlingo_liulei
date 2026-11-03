@@ -28,7 +28,7 @@ python lg_waypoint_planner_project/tools_bev/run_language_grounded_waypoint_plan
   recursive: true
 ```
 
-### 3. 生成4通道结构化世界标签
+### 3. 生成3通道结构化世界标签
 ```bash
 python lg_waypoint_planner_project/tools_bev/generate_future_interaction_grids.py
 ```
@@ -38,7 +38,7 @@ python lg_waypoint_planner_project/tools_bev/generate_future_interaction_grids.p
   recursive: true
 ```
 
-#### 3.1 检查4通道结构化世界标签质量以用于优化网络【可选,网络优化阶段选择】
+#### 3.1 检查3通道结构化世界标签质量以用于优化网络【可选,网络优化阶段选择】
 ```bash
 python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
 ```
