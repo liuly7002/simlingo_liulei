@@ -63,13 +63,13 @@ model:
     [1.0, 1.0, 2.0]
 
   language_model:
-    variant: '/home/kemove/ll/InternVL2-1B'  # 语言模型的位置
+    variant: '/root/autodl-tmp/models/InternVL2-1B'  # 语言模型的位置
     lora: true
     lora_alpha: 64
     lora_r: 32
     lora_dropout: 0.1
   vision_model:
-    variant: '/home/kemove/ll/InternVL2-1B'  # 视觉模型的位置
+    variant: '/root/autodl-tmp/models/InternVL2-1B'  # 视觉模型的位置
 
 data_module:
 
@@ -81,8 +81,8 @@ data_module:
 
   base_dataset:
 
-    data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
-    bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    data_path: ../database/simlingo_v2_2026_09_12_22_24_28                        # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    bucket_path: ../database/simlingo_v2_2026_09_12_22_24_28 /bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
 
     pred_len: 11
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)

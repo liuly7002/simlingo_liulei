@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import time
 
 from hydra.core.config_store import ConfigStore
@@ -47,6 +47,12 @@ class DrivingModelConfig:
     interaction_alignment_temperature: float = 0.1
     language_interaction_alignment_loss_weight: float = 0.05
     action_interaction_alignment_loss_weight: float = 0.05
+
+    # 第二阶段：初始轨迹弱监督、修正后轨迹主监督和关键Actor状态门控。
+    initial_ego_waypoints_loss_weight: float = 0.10
+    final_ego_waypoints_loss_weight: float = 1.0
+    critical_actor_existence_loss_weight: float = 0.05
+    critical_actor_positive_weight: float = 18.0
     actor_attention_separation_loss_weight: float = 0.02
     actor_token_separation_loss_weight: float = 0.02
     actor_attention_overlap_margin: float = 0.35
@@ -81,33 +87,21 @@ class DrivingModelConfig:
     # 完整未来世界辅助任务在总损失中的基础权重。
     future_interaction_loss_weight: float = 0.05
 
+    # 第二阶段C1/C2未来10帧占据监督；旧四通道模型不使用。
+    future_interaction_temporal_loss_weight: float = 0.03
+
     # Dice损失相对于BCE损失的权重。
     future_interaction_dice_loss_weight: float = 1.0
 
-    # 四个通道的正像素权重，顺序为C0、C1、C2、C4。
-    future_interaction_positive_weights: Tuple[
-        float,
-        float,
-        float,
-        float,
-    ] = (
-        20.0,
-        20.0,
-        80.0,
-        100.0,
+    # 兼容旧四通道(C0/C1/C2/C4)和第二阶段三通道(C0/C1/C2)。
+    # 列表允许实验配置覆盖为3个或4个权重，默认值仍保留旧模型行为。
+    future_interaction_positive_weights: List[float] = field(
+        default_factory=lambda: [20.0, 20.0, 80.0, 100.0]
     )
 
-    # 四个通道在未来世界任务内部的权重，顺序为C0、C1、C2、C4。
-    future_interaction_channel_weights: Tuple[
-        float,
-        float,
-        float,
-        float,
-    ] = (
-        1.0,
-        1.0,
-        2.0,
-        4.0,
+    # 各通道内部损失权重；数量由具体模型在运行时校验。
+    future_interaction_channel_weights: List[float] = field(
+        default_factory=lambda: [1.0, 1.0, 2.0, 4.0]
     )
 
     _target_: str = "simlingo_training.models.driving.DrivingModel"
@@ -171,6 +165,9 @@ class DrivingDatasetConfig:
     driving_use_future_interaction_grid: bool = False
     driving_future_interaction_grid_folder: str = "driving_future_interaction_grids"
 
+    # 第二阶段：反事实尝试全部无效时，不把该状态0当作可靠负样本。
+    stage2_strict_negative_mask: bool = True
+
     # 普通Driving主要关键参与者空间投影监督配置。
     driving_use_participant_spatial_attention_supervision: bool = False
     driving_participant_attention_label_folder: str = (
@@ -193,6 +190,9 @@ class DreamerDatasetConfig:
     # LG四通道结构化未来世界标签配置。
     lg_use_future_interaction_grid: bool = False
     lg_future_interaction_grid_folder: str = "future_interaction_grids"
+
+    # 第二阶段：训练侧Actor负样本可靠性掩码，不修改原始标签。
+    stage2_strict_negative_mask: bool = True
 
     # LG主要关键参与者视觉token级空间监督配置。
     lg_use_participant_spatial_attention_supervision: bool = False
