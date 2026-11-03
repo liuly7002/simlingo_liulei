@@ -16,13 +16,13 @@ fi
 
 #source ~/.bashrc
 #conda activate ~/miniconda3/envs/simlingo
-source /home/kemove/miniconda3/etc/profile.d/conda.sh
+source /root/miniconda3/etc/profile.d/conda.sh
 conda activate simlingo
 
 pwd
-export CARLA_ROOT=/home/kemove/ll/simlingo/carla0915
+export CARLA_ROOT=/root/autodl-tmp/carla0915
 export PYTHONPATH="${CARLA_ROOT}/PythonAPI/carla/":${PYTHONPATH}
-export WORK_DIR=/home/kemove/ll/simlingo_liulei/
+export WORK_DIR=/root/autodl-tmp/simlingo_liulei/
 export PYTHONPATH=$PYTHONPATH:${WORK_DIR}
 
 export MASTER_ADDR=localhost
@@ -37,7 +37,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_seed1 data_module.batch_size=1 gpus=1 name=simlingo_seed1
 
 # SimLingo官方预训练模型
-SIMLINGO_PRETRAINED=/home/kemove/models/simlingo/checkpoint/simlingo/simlingo/checkpoints/epoch=013.ckpt/pytorch_model.pt
+SIMLINGO_PRETRAINED=/root/autodl-tmp/models/simlingo/checkpoint/simlingo/simlingo/checkpoints/epoch=013.ckpt/pytorch_model.pt
 
 # lg替换dreamer之后的训练
 WANDB__SERVICE_WAIT=300 python simlingo_training/train.py experiment=simlingo_lg_seed1 data_module.batch_size=1 gpus=1 name=simlingo_lg_seed1 "checkpoint='${SIMLINGO_PRETRAINED}'"
