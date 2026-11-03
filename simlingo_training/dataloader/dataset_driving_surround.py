@@ -9,6 +9,7 @@ import numpy as np
 from simlingo_training.dataloader.dataset_base_surround import SurroundDatasetMixin
 from simlingo_training.dataloader.dataset_driving import Data_Driving
 from simlingo_training.dataloader.dataset_lg import Data_LG
+from simlingo_training.dataloader.stage2_data import load_stage2_grid, strict_negative_actor_status
 from simlingo_training.dataloader.participant_spatial_attention import CAMERA_ORDER, TOKENS_PER_CAMERA, extract_participant_spatial_attention_supervision
 
 
@@ -353,7 +354,9 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
         self.load_surround_images(image_data,self.surround_images[index],)
 
         future_interaction_grid = None
+        future_interaction_temporal = None
         future_interaction_valid = False
+        critical_actor_status = -1
         participant_spatial_target = np.zeros((len(CAMERA_ORDER), TOKENS_PER_CAMERA),dtype=np.float32,)
         participant_spatial_valid = False
 
@@ -391,9 +394,18 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
                     / f"{frame_name}.npz"
                 )
 
-                # future_interaction_grid 为4通道结构化世界标签内容
-                # future_interaction_valid 为是都有效
-                future_interaction_grid, future_interaction_valid = Data_LG._load_future_interaction_grid(future_interaction_path)
+                # 三通道结构化世界 + C1/C2逐帧占据 + 关键Actor三状态。
+                (
+                    future_interaction_grid,
+                    future_interaction_valid,
+                    future_interaction_temporal,
+                    critical_actor_status,
+                ) = load_stage2_grid(future_interaction_path)
+                if bool(getattr(self, "stage2_strict_negative_mask", True)) and critical_actor_status == 0:
+                    critical_actor_status = strict_negative_actor_status(
+                        critical_actor_status,
+                        route_dir / str(getattr(self, "lg_label_folder", "language_grounded_waypoints")) / f"{frame_name}.json.gz",
+                    )
 
             # 专家条件actor标签同时提供[6,64]软标签与Q1-Q4语言
             if (use_participant_spatial_attention or use_four_question_language):
@@ -429,6 +441,9 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
                             ),
                             use_global_img=bool(self.use_global_img),
                         )
+                        # Status -1 (including unconfirmed negative) must not supervise actor attention.
+                        if critical_actor_status != 1 or not future_interaction_valid:
+                            participant_spatial_valid = False
 
                     # 替换语言为Q1-Q4语言监督
                     if use_four_question_language:
@@ -453,6 +468,8 @@ class Data_Driving_Surround(SurroundDatasetMixin,Data_Driving,):
             camera_order=image_data["camera_order"],
             future_interaction_grid=(future_interaction_grid),
             future_interaction_valid=(future_interaction_valid),
+            future_interaction_temporal=(future_interaction_temporal),
+            critical_actor_status=(critical_actor_status),
             camera_attention_target=(participant_spatial_target),
             camera_attention_valid=(participant_spatial_valid),
         )

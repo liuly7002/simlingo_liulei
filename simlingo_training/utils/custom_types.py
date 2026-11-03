@@ -36,6 +36,9 @@ class DatasetOutput(NamedTuple):  # 这是dataset_driving.py的返回值
     # 3. LG单样本的结构化未来世界监督(driving + lg) 算是一种中间表示,不破坏driving数据的原始分布
     future_interaction_grid: Optional[Tensor] = None
     future_interaction_valid: Optional[bool] = None
+    # [2,T,H,W] C1/C2 each-future-frame occupancy, and reliable actor state.
+    future_interaction_temporal: Optional[Tensor] = None
+    critical_actor_status: Optional[int] = None
 
     # 4. 反事实对象移除后的真实重规划轨迹监督(仅lg)
     counterfactual_waypoints: Optional[List[Tuple[float, float]]] = None
@@ -96,6 +99,8 @@ class DrivingLabel(NamedTuple):
     #修改20260726：batch级LG结构化未来世界监督。
     future_interaction_grid: Optional[Tensor] = None
     future_interaction_valid: Optional[Tensor] = None
+    future_interaction_temporal: Optional[Tensor] = None  # [B,2,T,H,W]
+    critical_actor_status: Optional[Tensor] = None  # [B], values -1/0/1
 
     # batch级反事实对象移除重规划轨迹，形状[B,F,2]。
     counterfactual_waypoints: Optional[Tensor] = None

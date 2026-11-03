@@ -11,7 +11,7 @@ defaults:
 
 
 
-_target_: simlingo_training.dataloader.datamodule.DataModule
+_target_: simlingo_training.dataloader.stage2_data.DataModuleStage2
 
 
 
@@ -44,7 +44,7 @@ train_partitions_dreamer:
 ############################################### 普通 driving 数据集相关的配置 ###############################################
 driving_dataset:
 
-  # driving 数据集相关的内容在 dataset_driving_surround.py 中实现 
+  # driving 数据集相关的内容在 dataset_driving_surround.py 中实现
   _target_: simlingo_training.dataloader.dataset_driving_surround.Data_Driving_Surround
 
   # 普通Driving语言类型:
@@ -55,29 +55,27 @@ driving_dataset:
   driving_language_mode: four_questions
 
   # 普通Driving结构化未来世界监督开关
-  driving_use_future_interaction_grid: true                                 # 是否使用四通道结构化世界标签
-  driving_future_interaction_grid_folder: driving_future_interaction_grids  # driving数据对应的四通道结构化世界标签的存放文件夹名称
+  driving_use_future_interaction_grid: true                                 # 读取三语义通道+十帧占据
+  driving_future_interaction_grid_folder: driving_future_interaction_grids  # 原有标签目录保持不变
+  stage2_strict_negative_mask: true                                         # 仅对全部反事实测试无效的状态0关闭C2监督
 
   # 普通Driving主要关键参与者视觉token级空间监督
   driving_use_participant_spatial_attention_supervision: true                             # 是否使用[6,64]软标签监督
   driving_participant_attention_label_folder: driving_expert_conditioned_actor_selection  # [6,64]软标签监督存放文件夹名称
 
 
-
 ############################################### lg 数据集相关的配置 ###############################################
 dreamer_dataset:
 
-  # lg 数据集相关的内容在 dataset_lg_counterfactual.py 中实现
-  _target_: simlingo_training.dataloader.dataset_lg_counterfactual.Data_LG_Counterfactual
-
+  # 修改20261103：继承原LG反事实数据管线，读取三通道与逐帧占据。
+  _target_: simlingo_training.dataloader.stage2_data.Data_LG_Stage2
 
   use_lg_supervision: true                      # 是否启用 lg 监督
   lg_label_folder: language_grounded_waypoints  # lg 标签存放的文件夹名称
 
-
   lg_use_future_interaction_grid: true                         # 是否使用结构化未来世界标签,使用的话会加载到训练里
   lg_future_interaction_grid_folder: future_interaction_grids  # 结构化未来世界标签存放的文件夹名称
-
+  stage2_strict_negative_mask: true                             # 仅训练端屏蔽有尝试却全部无效的负反事实监督
 
   # 是否读取主要关键参与者六视角空间投影并生成6×64视觉token监督
   lg_use_participant_spatial_attention_supervision: true

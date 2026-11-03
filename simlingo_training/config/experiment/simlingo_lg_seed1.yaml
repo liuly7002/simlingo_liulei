@@ -5,7 +5,8 @@ defaults:
   - /data_module/base_dataset: dataset
 
 model:
-  _target_: simlingo_training.models.driving_interaction.InteractionGroundedDrivingModel
+  # 修改20261103：在原统一交互网络上增加以决策为中心的预测世界轨迹修正。
+  _target_: simlingo_training.models.decision_interaction_driving.DecisionInteractionDrivingModel
 
   lr: 3e-5
 
@@ -13,7 +14,7 @@ model:
   predict_route_as_wps: true # 是否预测path(参考路径)
   speed_wps_mode: 2d         # 表示预测自车未来waypoints是预测的二维的点信息,也就是xy
 
-  # 统一决策交互表示：route、ego future、primary actor、secondary actor。
+  # 统一决策交互表示：route、ego future、primary actor，保留三个语义 token。
   interaction_attention_dim: 128
   interaction_num_heads: 8
   interaction_dropout: 0.1
@@ -23,11 +24,12 @@ model:
   language_interaction_alignment_loss_weight: 0.05
   action_interaction_alignment_loss_weight: 0.05
 
-  # 第二阶段：当C4存在次要参与者时，防止主/次参与者token和空间注意力塌缩。
-  actor_attention_separation_loss_weight: 0.02
-  actor_token_separation_loss_weight: 0.02
-  actor_attention_overlap_margin: 0.35
-  actor_token_cosine_margin: 0.30
+  # 修改20261103：初始 Ego 轨迹低权重，修正后的最终 Ego 轨迹为主监督；
+  # Actor 正样本约占有效样本的5%，因此对二分类采用正样本加权。
+  initial_ego_waypoints_loss_weight: 0.10
+  final_ego_waypoints_loss_weight: 1.0
+  critical_actor_existence_loss_weight: 0.05
+  critical_actor_positive_weight: 18.0
 
   # 对主要因果参与者视觉token执行对象移除干预，并进行第二次联合前向。
   use_counterfactual_intervention_training: true
@@ -36,9 +38,8 @@ model:
   counterfactual_intervention_mask_gamma: 0.5
   counterfactual_language_min_change: 0.02
 
-  # 反事实视觉、语言、动作和未来世界损失权重。
+  # 反事实视觉、动作与未来世界损失；不让删除Actor的场景继续拟合原Q1/Q2。
   counterfactual_visual_suppression_loss_weight: 0.05
-  counterfactual_language_supervision_loss_weight: 0.10
   counterfactual_language_consistency_loss_weight: 0.05
   counterfactual_action_target_loss_weight: 0.10
   counterfactual_action_effect_loss_weight: 0.10
@@ -50,25 +51,16 @@ model:
   use_participant_spatial_attention_supervision: true
   participant_spatial_attention_loss_weight: 0.05
 
-  # 是否使用四通道结构化未来世界辅助预测
+  # 三语义结构化未来世界 C0/C1/C2 + C1/C2 的十帧时序预测。
   use_future_interaction_prediction: true
-
-  # 当前网络固定预测128×128。
   future_interaction_output_size: 128
-
-  # 未来世界辅助任务总权重
   future_interaction_loss_weight: 0.05
-
-  # Dice相对于BCE的权重。
+  future_interaction_temporal_loss_weight: 0.03
   future_interaction_dice_loss_weight: 1.0
-
-  # C0、C1较密集；C2、C4较稀疏。顺序为C0、C1、C2、C4。
   future_interaction_positive_weights:
-    [20.0, 20.0, 80.0, 100.0]
-
-  # 进一步提高稀疏actor通道在辅助任务中的权重。
+    [20.0, 20.0, 80.0]
   future_interaction_channel_weights:
-    [1.0, 1.0, 2.0, 4.0]
+    [1.0, 1.0, 2.0]
 
   language_model:
     variant: '/home/kemove/ll/InternVL2-1B'  # 语言模型的位置
@@ -81,8 +73,8 @@ model:
 
 data_module:
 
-  # 普通Driving和LG统一处理在 datamodule.py 中实现
-  _target_: simlingo_training.dataloader.datamodule.DataModule
+  # 修改20261103：保留原 datamodule 行为，并适配当前三通道标签与时序张量。
+  _target_: simlingo_training.dataloader.stage2_data.DataModuleStage2
 
   batch_size: 6
   num_workers: 8
@@ -91,8 +83,8 @@ data_module:
 
     data_path: database/simlingo_v2_2026_07_25_15_05_25                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
     bucket_path: database/simlingo_v2_2026_07_25_15_05_25/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
-    
-    pred_len: 11              
+
+    pred_len: 11
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
 
     # These remain active for the ordinary driving source. Data_LG constructs
