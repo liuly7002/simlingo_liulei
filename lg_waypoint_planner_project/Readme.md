@@ -38,7 +38,7 @@ python lg_waypoint_planner_project/tools_bev/generate_future_interaction_grids.p
   recursive: true
 ```
 
-#### 3.1 检查3通道结构化世界标签质量以用于优化网络【可选,网络优化阶段选择】
+#### 3.1 检查3通道结构化世界标签质量以用于优化网络【可选,网络优化阶段选择,暂时不再使用这个脚本】
 ```bash
 python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
 ```
@@ -52,6 +52,14 @@ python lg_waypoint_planner_project/tools_bev/analyze_future_interaction_grids.py
             "数据集根目录、单条 route 目录，或 future_interaction_grids 目录。"
         ),
     )
+```
+
+#### 3.2 全量标签质量检查
+```bash
+python lg_waypoint_planner_project/tools_bev/check_all_generated_labels.py \
+  --input /root/autodl-tmp/database/simlingo_v2_2026_09_12_22_24_28/data/simlingo \
+  --output /root/autodl-tmp/lg_driving_label_quality_report \
+  --progress-every 2000
 ```
 
 ### 4. CVAA 对照实验
