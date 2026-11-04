@@ -256,6 +256,15 @@ class DrivingDataModuleConfig:
     train_partitions_dreamer: Optional[Dict[str, float]] = None
     use_global_img: bool = False
 
+    # Stage-2 training only: retain EVERY status=1 training frame once per
+    # epoch and select a fixed without-replacement reliable status=0 pool.
+    # positive_ratio=0.75 means final positive:negative COUNT is about 3:1.
+    # Validation remains at the original distribution.
+    stage2_actor_balanced_sampling: bool = False
+    stage2_actor_positive_ratio: float = 0.75
+    stage2_actor_negative_seed: int = 9876
+    stage2_actor_sampling_cache_dir: str = "outputs/stage2_actor_sampling_cache"
+
     _target_: str = "simlingo_training.dataloader.datamodule.DataModule"
 
 

@@ -8,7 +8,9 @@ four-channel legacy interface to C0/C1/C2 and C1/C2 temporal occupancy.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -17,6 +19,7 @@ import torch
 
 from simlingo_training.dataloader.dataset_lg_counterfactual import Data_LG_Counterfactual
 from simlingo_training.dataloader.datamodule import DataModule
+from hydra.utils import get_original_cwd
 
 
 CHANNEL_NAMES = (
@@ -123,6 +126,190 @@ class Data_LG_Stage2(Data_LG_Counterfactual):
         )
 
 
+def _actor_label_paths(dataset, index: int) -> Tuple[Path, Path]:
+    """Locate stage-1 metadata for the *same current frame* as __getitem__.
+
+    No camera images, language, waypoints or occupancy grids are loaded here.
+    Labels are used only to build the training sampler, never as model inputs.
+    """
+    if isinstance(dataset, Data_LG_Stage2):
+        return (
+            dataset._future_interaction_grid_path_for_index(index),
+            dataset._lg_path_for_index(index),
+        )
+    if not bool(getattr(dataset, "driving_use_future_interaction_grid", False)):
+        raise ValueError("Balanced Actor sampling requires Driving stage-2 world labels")
+
+    measurement_entry = dataset.measurements[index]
+    if isinstance(measurement_entry, np.ndarray):
+        measurement_entry = measurement_entry.reshape(-1)[0]
+    elif isinstance(measurement_entry, (list, tuple)):
+        measurement_entry = measurement_entry[0]
+    measurement_dir = Path(Data_LG_Counterfactual._decode_path(measurement_entry))
+    route_dir = measurement_dir.parent
+    frame_id = int(dataset.sample_start[index]) + int(dataset.hist_len) - 1
+    frame_name = f"{frame_id:04d}"
+    return (
+        route_dir
+        / str(getattr(dataset, "driving_future_interaction_grid_folder", "driving_future_interaction_grids"))
+        / f"{frame_name}.npz",
+        route_dir
+        / str(getattr(dataset, "lg_label_folder", "language_grounded_waypoints"))
+        / f"{frame_name}.json.gz",
+    )
+
+
+def _actor_sampling_status(grid_path: Path, lg_json_path: Path, strict_negative: bool) -> int:
+    """Classify each available frame before building the exact training subset.
+
+    Status=-1, missing NPZ, invalid world or unverified Actor identity are
+    excluded.  A status-0 sample is treated exactly as in __getitem__:
+    attempted-but-all-invalid counterfactual tests are not reliable negatives.
+    """
+    if not grid_path.is_file():
+        return -1
+    # Read three small NPZ members, not the large occupancy arrays.
+    with np.load(str(grid_path), allow_pickle=False) as payload:
+        for key in ("valid", "critical_actor_status"):
+            if key not in payload.files:
+                raise ValueError(f"Missing {key} in stage-2 label: {grid_path}")
+        valid = bool(np.asarray(payload["valid"]).reshape(-1)[0])
+        status = int(np.asarray(payload["critical_actor_status"]).reshape(-1)[0])
+        actor_id = (
+            str(np.asarray(payload["critical_actor_id"]).reshape(-1)[0])
+            if "critical_actor_id" in payload.files else ""
+        )
+    if status not in (-1, 0, 1):
+        raise ValueError(f"Invalid critical_actor_status={status} in {grid_path}")
+    if status == 1 and not valid:
+        raise ValueError(f"Positive Actor frame has invalid world label: {grid_path}")
+    if not valid or status == -1:
+        return -1
+    if status == 1 and not actor_id:
+        raise ValueError(f"Positive Actor label is missing its ID: {grid_path}")
+    if status == 0 and strict_negative:
+        return strict_negative_actor_status(status, lg_json_path)
+    return status
+
+
+def _cached_actor_statuses(dataset, cache_directory: Path, source: str) -> np.ndarray:
+    """Cache sampled frame statuses without modifying source labels.
+
+    The fingerprint includes the original per-frame label paths and strict mask
+    setting. Stage-1 labels are immutable in this project; if they are edited
+    later, delete the cache directory before another training run.
+    """
+    if source == "lg" and not bool(getattr(dataset, "lg_use_future_interaction_grid", False)):
+        raise ValueError("Balanced Actor sampling requires LG stage-2 world labels")
+    strict = bool(getattr(dataset, "stage2_strict_negative_mask", True))
+    paths = []
+    signature = hashlib.sha256(b"stage2_actor_sampler_v1\0")
+    signature.update(source.encode("utf-8"))
+    signature.update(bytes([int(strict)]))
+    for index in range(len(dataset)):
+        grid_path, lg_path = _actor_label_paths(dataset, index)
+        paths.append((grid_path, lg_path))
+        signature.update(os.fsencode(grid_path))
+        signature.update(b"\0")
+        if strict:
+            signature.update(os.fsencode(lg_path))
+            signature.update(b"\0")
+    fingerprint = signature.hexdigest()
+    cache_file = cache_directory / f"{source}_{fingerprint}.npy"
+    if cache_file.is_file():
+        try:
+            cached = np.load(str(cache_file), allow_pickle=False)
+            if cached.dtype == np.dtype("int8") and cached.shape == (len(dataset),):
+                if np.isin(cached, (-1, 0, 1)).all():
+                    print(f"[Stage2 Actor sampling] cached index: {source}, {len(dataset)} samples", flush=True)
+                    return cached
+        except (OSError, ValueError):
+            pass  # Rebuild an incomplete or corrupted cache.
+
+    statuses = np.empty(len(paths), dtype=np.int8)
+    for index, (grid_path, lg_path) in enumerate(paths):
+        statuses[index] = _actor_sampling_status(grid_path, lg_path, strict)
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    # Different Lightning ranks may write the same index concurrently.
+    # Atomic replacement prevents partially written files from being reused.
+    temporary = cache_directory / f".{cache_file.stem}.{os.getpid()}.npy"
+    try:
+        with temporary.open("wb") as out:
+            np.save(out, statuses, allow_pickle=False)
+        os.replace(str(temporary), str(cache_file))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    print(f"[Stage2 Actor sampling] built index: {source}, {len(dataset)} samples", flush=True)
+    return statuses
+
+
+def _negative_quotas(source_pools, total_negative: int):
+    """Allocate one unique negative pool per source, proportional to positives.
+
+    Preserve the real LG/Driving mixture: source sizes are NOT forced to 50/50.
+    The final total is exact (within the integer precision of the desired 3:1
+    class ratio), provided there are enough reliable negatives.
+    """
+    total_positive = sum(len(pool["positive"]) for pool in source_pools)
+    if total_positive < 1:
+        raise ValueError("Actor-focused training has no confirmed positive samples")
+    available_negative = sum(len(pool["negative"]) for pool in source_pools)
+    if total_negative > available_negative:
+        raise ValueError(
+            f"Only {available_negative} reliable negatives available; "
+            f"need {total_negative} for the requested class ratio"
+        )
+
+    ideal = [total_negative * len(pool["positive"]) / total_positive for pool in source_pools]
+    quotas = [min(int(np.floor(want)), len(pool["negative"]))
+              for want, pool in zip(ideal, source_pools)]
+    remaining = total_negative - sum(quotas)
+    while remaining > 0:
+        eligible = [i for i, pool in enumerate(source_pools)
+                    if quotas[i] < len(pool["negative"])]
+        if not eligible:
+            raise ValueError("Unable to allocate the requested reliable negative samples")
+        # Prefer the source whose selected count is farthest below its ideal.
+        selected = max(eligible, key=lambda i: (ideal[i] - quotas[i], -i))
+        quotas[selected] += 1
+        remaining -= 1
+    return quotas
+
+
+def _target_negative_count(total_positive: int, positive_ratio: float,
+                           training_block: int, negative_capacity: int) -> int:
+    """Choose the nearest achievable 3:1 pool that does not require DDP padding.
+
+    With two devices and batch size one, the resulting dataset length is even.
+    All selected examples can therefore be consumed once per epoch without
+    duplicated DistributedSampler padding or drop_last losses.
+    """
+    if not (0.0 < positive_ratio < 1.0):
+        raise ValueError("stage2_actor_positive_ratio must be strictly between zero and one")
+    if total_positive < 1:
+        raise ValueError("No positive Actor samples remain after source filtering")
+    if negative_capacity < 1:
+        raise ValueError("No reliable negative Actor samples are available")
+    if training_block < 1:
+        raise ValueError("training_block must be positive")
+
+    desired = total_positive * (1.0 - positive_ratio) / positive_ratio
+    # Require N_positive + N_negative to be divisible by world_size*batch_size.
+    first = (-total_positive) % training_block
+    if first == 0:
+        first = training_block  # Both classes must be nonempty.
+    options = [first + k * training_block
+               for k in range((negative_capacity - first) // training_block + 1)]
+    if not options:
+        raise ValueError(
+            "Insufficient reliable negative samples for the distributed batch size: "
+            f"positives={total_positive}, available_negatives={negative_capacity}, "
+            f"world_size*batch_size={training_block}"
+        )
+    return min(options, key=lambda x: (abs(x - desired), x))
+
+
 class DataModuleStage2(DataModule):
     """Collate current [3,H,W] labels without rewriting legacy data logic.
 
@@ -130,6 +317,115 @@ class DataModuleStage2(DataModule):
     pad its local input to four channels, then discard the synthetic channel
     before returning training labels. The fourth channel is NEVER supervised.
     """
+
+    def setup(self, stage=None):
+        # Base DataModule still constructs the original training and validation
+        # datasets; only the training selection below changes.
+        super().setup(stage)
+        if self.predict or not bool(getattr(self, "stage2_actor_balanced_sampling", False)):
+            return
+        if self.train_dataset is None:
+            raise ValueError("Actor-focused training needs a nonempty training dataset")
+        if not isinstance(self.train_dataset, torch.utils.data.ConcatDataset):
+            raise TypeError("Expected original ConcatDataset from DataModule.setup")
+
+        positive_ratio = float(getattr(self, "stage2_actor_positive_ratio", 0.75))
+        cache_setting = str(getattr(self, "stage2_actor_sampling_cache_dir",
+                                    "outputs/stage2_actor_sampling_cache"))
+        cache_directory = Path(cache_setting)
+        if not cache_directory.is_absolute():
+            cache_directory = Path(get_original_cwd()) / cache_directory
+
+        # The original Bucket pipeline may contain extra overlapping subsets
+        # (turn_left, leading_object_vehicle, etc.). Use ONLY bucket_name=all
+        # from each source, otherwise some positive physical frames would be
+        # counted or trained multiple times in one epoch.
+        source_datasets = {}
+        for source_dataset in self.train_dataset.datasets:
+            if str(getattr(source_dataset, "bucket_name", "")) != "all":
+                continue
+            source = "lg" if isinstance(source_dataset, Data_LG_Stage2) else "driving"
+            if source in source_datasets:
+                raise ValueError(f"Duplicate all-bucket training dataset for {source}")
+            source_datasets[source] = source_dataset
+        if not source_datasets:
+            raise ValueError("Cannot find full bucket_name='all' training datasets")
+        if self.driving_dataset is not None and "driving" not in source_datasets:
+            raise ValueError("The full Driving 'all' bucket is missing")
+        if self.dreamer_dataset is not None and "lg" not in source_datasets:
+            raise ValueError("The full LG 'all' bucket is missing")
+
+        source_pools = []
+        for source in ("driving", "lg"):
+            if source not in source_datasets:
+                continue
+            source_dataset = source_datasets[source]
+            statuses = _cached_actor_statuses(source_dataset, cache_directory, source)
+            positive = np.flatnonzero(statuses == 1)
+            negative = np.flatnonzero(statuses == 0)
+            if len(positive) == 0 or len(negative) == 0:
+                raise ValueError(
+                    f"{source} full training bucket requires both positive and "
+                    f"reliable negative Actor labels (found {len(positive)}/{len(negative)})"
+                )
+            source_pools.append({
+                "source": source,
+                "dataset": source_dataset,
+                "positive": positive,
+                "negative": negative,
+                "unknown": int(np.count_nonzero(statuses == -1)),
+            })
+
+        total_positive = sum(len(pool["positive"]) for pool in source_pools)
+        negative_capacity = sum(len(pool["negative"]) for pool in source_pools)
+        # Lightning's DistributedSampler and train DataLoader(drop_last=True)
+        # must not silently duplicate/drop a positive frame in a training epoch.
+        trainer = getattr(self, "trainer", None)
+        world_size = int(getattr(trainer, "world_size", 1))
+        training_block = world_size * int(self.batch_size)
+        selected_negative = _target_negative_count(
+            total_positive, positive_ratio, training_block, negative_capacity,
+        )
+        quotas = _negative_quotas(source_pools, selected_negative)
+
+        # Fixed, reproducible *without-replacement* negative subset. Positive
+        # frames are NEVER sampled or subsampled: each appears exactly once in
+        # this epoch's dataset (and once per subsequent epoch, newly shuffled).
+        generator = np.random.default_rng(
+            int(getattr(self, "stage2_actor_negative_seed", 9876))
+        )
+        training_subsets = []
+        source_summary = {}
+        for pool, count in zip(source_pools, quotas):
+            sampled_negative = generator.choice(pool["negative"], size=count,
+                                                replace=False)
+            selected_indices = np.sort(np.concatenate((
+                pool["positive"], sampled_negative,
+            ))).tolist()
+            training_subsets.append(
+                torch.utils.data.Subset(pool["dataset"], selected_indices)
+            )
+            source_summary[pool["source"]] = {
+                "positive_all": len(pool["positive"]),
+                "reliable_negative_selected": count,
+                "reliable_negative_available": len(pool["negative"]),
+                "unknown_excluded": pool["unknown"],
+            }
+
+        self.train_dataset = torch.utils.data.ConcatDataset(training_subsets)
+        self.sampler_train = torch.utils.data.RandomSampler(
+            self.train_dataset, replacement=False,
+        )
+        actual_positive_ratio = total_positive / len(self.train_dataset)
+        print(
+            "[Stage2 Actor sampling] all positives retained ONCE per epoch; "
+            f"positive={total_positive}, reliable_negative={selected_negative}, "
+            f"actual_ratio={actual_positive_ratio:.4%}/"
+            f"{1.0-actual_positive_ratio:.4%}; "
+            f"sources={source_summary}; "
+            f"training_block={training_block}; validation=original distribution",
+            flush=True,
+        )
 
     def dl_collate_fn(self, data):
         converted = []

@@ -25,11 +25,11 @@ model:
   action_interaction_alignment_loss_weight: 0.05
 
   # 修改20261103：初始 Ego 轨迹低权重，修正后的最终 Ego 轨迹为主监督；
-  # Actor 正样本约占有效样本的5%，因此对二分类采用正样本加权。
+  # 全部正样本+按3:1选取可靠负样本，不再使用针对原始低正样本比例的18倍权重。
   initial_ego_waypoints_loss_weight: 0.10
   final_ego_waypoints_loss_weight: 1.0
   critical_actor_existence_loss_weight: 0.05
-  critical_actor_positive_weight: 18.0
+  critical_actor_positive_weight: 1.0
 
   # 对主要因果参与者视觉token执行对象移除干预，并进行第二次联合前向。
   use_counterfactual_intervention_training: true
@@ -79,10 +79,18 @@ data_module:
   batch_size: 6
   num_workers: 8
 
+  # 训练样本数量比为正样本:可靠负样本=3:1，不是每轮有放回的75%概率抽样。
+  # 全部有效status=1样本每轮各训练一次；从status=0中无放回固定选取约1/3正样本数。
+  # status=-1和反事实测试全部无效的不可靠负样本排除，验证集保持原始分布。
+  stage2_actor_balanced_sampling: true
+  stage2_actor_positive_ratio: 0.75
+  stage2_actor_negative_seed: 9876
+  stage2_actor_sampling_cache_dir: outputs/stage2_actor_sampling_cache
+
   base_dataset:
 
-    data_path: ../database/simlingo_v2_2026_09_12_22_24_28                        # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
-    bucket_path: ../database/simlingo_v2_2026_09_12_22_24_28 /bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    data_path: ../database/simlingo_v2_2026_09_12_22_24_28                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
+    bucket_path: ../database/simlingo_v2_2026_09_12_22_24_28/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
 
     pred_len: 11
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
