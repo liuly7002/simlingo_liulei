@@ -23,9 +23,7 @@ class Data_Dreamer(BaseDataset):  # pylint: disable=locally-disabled, invalid-na
     Custom dataset that dynamically loads a CARLA dataset from disk.
     """
 
-    def __init__(self,
-            **cfg,
-        ):
+    def __init__(self,**cfg,):
         super().__init__(dreamer=True, **cfg)
 
     def __getitem__(self, index):

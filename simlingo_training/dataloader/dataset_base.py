@@ -30,15 +30,9 @@ from simlingo_training.utils.projection import get_camera_intrinsics, project_po
 VIZ_DATA = False
 
 class BaseDataset(Dataset):
-    """
-    Base class for the dataset.
-    """
+
 
     def __init__(self, dreamer = False, evaluation = False, **cfg,):
-        """
-        __init__: 根据配置，扫描磁盘上的数据集目录, 筛选合法样本, 把后续 __getitem__() 要用到的所有"索引信息"先建立好。
-        """
-
 
         ################################################## 🏀 挂载 config 内容到 self 上 🏀 ##################################################
 
@@ -58,7 +52,7 @@ class BaseDataset(Dataset):
         ################################################## 🏀 初始化数据路径 🏀 ##################################################
 
         self.rgb_folder = 'rgb'          # 默认图像从 rgb/ 目录读取
-        self.dreamer_folder = 'dreamer'  # dreamer 相关文件默认在 dreamer/ 目录里
+        self.dreamer_folder = 'dreamer'  # dreamer 数据相关文件默认在 dreamer/ 目录里
 
 
 
@@ -78,9 +72,9 @@ class BaseDataset(Dataset):
 
         ################################################## 🏀 统计变量方便打印 🏀 ##################################################
 
-        total_routes = 0      # 一共看了多少route
-        perfect_routes = 0    # 有多少route合格
-        crashed_routes = 0    # 有多少route被过滤
+        total_routes = 0      # 一共看了多少 route
+        perfect_routes = 0    # 有多少 route 合格
+        crashed_routes = 0    # 有多少 route 被过滤
 
         fail_reasons = {}     # 过滤原因是什么
 
@@ -89,7 +83,7 @@ class BaseDataset(Dataset):
 
         ################################################## 🏀 初始化项目路径 🏀 ##################################################
 
-        # 获取程序启动前的原始项目根目录,这里是/home/kemove/ll/simlingo_liulei
+        # 获取程序启动前的原始项目根目录,就是项目根目录/home/kemove/ll/simlingo_liulei
         repo_path = get_original_cwd()
         
         
@@ -138,7 +132,6 @@ class BaseDataset(Dataset):
         
         ################################################## 🏀 评测模式下的特殊处理 🏀 ##################################################
 
-        # during eval we only want to load predefines paths
         # evaluation 模式下的特殊处理：评测时不要随便从整个数据集中抽样，而是只评测预定义好的固定样本
         # 这样做的好处是：每次评测一致、可以对比不同模型、可以针对 QA 或 commentary 任务固定 benchmark
         if evaluation:
@@ -203,7 +196,6 @@ class BaseDataset(Dataset):
             if self.use_commentary:  # 执行
                 prompt_probabilities['commentary'] = 1.0
             
-            # divide by the sum to get the probabilities
             # 然后归一化
             # 情况1：只用 driving = {'driving': 1.0}
             # 情况2：driving + qa = {'driving': 0.5, 'qa': 0.5}
@@ -297,7 +289,7 @@ class BaseDataset(Dataset):
         
         
         
-        
+
         ################################################## 🏀 对 old towns 进行处理 🏀 ##################################################
         # lb1_split 代表 old towns 数据
         # use_old_towns=False：排除 old towns
@@ -317,73 +309,23 @@ class BaseDataset(Dataset):
 
         ################################################## 🏀 将所有 route 拆分为"训练集"和"验证集" 🏀 ##################################################
 
-        # # 打乱所有 route 顺序,这个打乱只是在 route 级别随机化，避免总是按固定目录顺序加载
-        # random.shuffle(route_dirs)
-        # split_percentage = 0.99
-        
-        
-        # # 情况A：此时采用官方 town 划分,train 用 routes_training,val 用 routes_validation
-        # if dreamer or not self.use_town13:  # use_town13=True表示把 Town13 也纳入整体训练池/验证池中，而不再保留官方独立验证 town 的严格划分
-        #     # split the data into official training(Town12 and old Towns) and validation set (Town13)
-        #     if self.split == "train":
-        #         print("Using Town12 for training")
-        #         route_dirs = [route_dir for route_dir in route_dirs if 'routes_training' in route_dir]
-        #     elif self.split == "val":
-        #         print("Using Town13 for validation")
-        #         route_dirs = [route_dir for route_dir in route_dirs if 'routes_validation' in route_dir]
-        #         route_dirs = route_dirs[:int(0.02 * len(route_dirs))]  # 注意验证集这里还额外只取了前 2%
-        # else:
-        #     # use all towns
-        #     # 这里不是按 town 名字切，而是对所有 route 随机打乱后按比例切分
-        #     # 前 99% 做 train  后 1% 做 val
-        #     if self.split == "train":
-        #         route_dirs = route_dirs[:int(split_percentage * len(route_dirs))]  # 取出所有路线的前99%个路线作为训练集
-        #     elif self.split == "val":
-        #         route_dirs = route_dirs[int(split_percentage * len(route_dirs)):]  # 取出所有路线的最后1%作为验证集
+        # use_official_route_split = True 时：
+        #   train 只使用 routes_training 文件夹下的数据；
+        #   val   只使用 routes_validation 文件夹下的数据；
+        use_official_route_split = bool(getattr(self, "use_official_route_split", False,))  # True
 
-
-        #修改20260728：普通Driving和LG可统一采用固定的官方route目录划分。
-        #
-        # use_official_route_split=True时：
-        #   train只使用routes_training；
-        #   val只使用routes_validation；
-        #   不再随机执行99%/1%划分；
-        #   不再只截取Town13验证路线的2%；
-        #   对route路径排序，保证不同数据源和不同运行使用相同路线集合。
-        use_official_route_split = bool(
-            getattr(
-                self,
-                "use_official_route_split",
-                False,
-            )
-        )
-
-        if use_official_route_split:
+        if use_official_route_split: # 执行这个
+            
+            # 1. 训练阶段执行
             if self.split == "train":
-                route_dirs = sorted(
-                    route_dir
-                    for route_dir in route_dirs
-                    if "routes_training" in Path(route_dir).parts
-                )
-                print(
-                    "Using routes_training for training: "
-                    f"{len(route_dirs)} routes"
-                )
-
+                route_dirs = sorted(route_dir for route_dir in route_dirs if "routes_training" in Path(route_dir).parts)
+                print("Using routes_training for training: " f"{len(route_dirs)} routes")  # Using routes_training for training: 1647 routes
+            # 2. 验证阶段执行
             elif self.split == "val":
-                route_dirs = sorted(
-                    route_dir
-                    for route_dir in route_dirs
-                    if "routes_validation" in Path(route_dir).parts
-                )
-                print(
-                    "Using fixed routes_validation for validation: "
-                    f"{len(route_dirs)} routes"
-                )
+                route_dirs = sorted(route_dir for route_dir in route_dirs if "routes_validation" in Path(route_dir).parts)
+                print("Using fixed routes_validation for validation: " f"{len(route_dirs)} routes")  # Using fixed routes_validation for validation: 219 routes
 
         else:
-            # 保留原SimLingo的数据划分逻辑，
-            # 便于其他不使用统一route划分的实验继续运行。
             random.shuffle(route_dirs)
             split_percentage = 0.99
 
@@ -425,7 +367,7 @@ class BaseDataset(Dataset):
                         ):
                     ]
 
-        total_routes += len(route_dirs)  # 一共看了多少 route
+        total_routes += len(route_dirs)  # 一共看了多少 route  1647 + 219 = 1866
 
         
         
@@ -436,15 +378,18 @@ class BaseDataset(Dataset):
         ################################################## 🇨🇳 开始遍历每一条 route 🇨🇳##################################################
         
         start_route = 0
-        # route 级别遍历
+        
+        # 一、route 级别遍历
         for sub_root in tqdm(route_dirs, file=sys.stdout):
 
-            start_route+=1
-            route_dir = sub_root  # 当前 route 的根目录 '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43'
+            start_route += 1
+
+            route_dir = sub_root  # route_dir 为当前 route 的根目录 '/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43'
 
             # 如果是 dreamer 模式下，就要求 route 对应的 dreamer 目录必须存在，否则整条 route 不要
             if dreamer:
-                dreamer_dir = route_dir.replace('data/', f'{self.dreamer_folder}/')
+                dreamer_dir = route_dir.replace('data/', f'{self.dreamer_folder}/') # dreamer_dir 为'/home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/dreamer/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43'
+                # 安全性检查
                 if not os.path.exists(dreamer_dir):
                     print(f"!!! dreamer_dir {dreamer_dir} does not exist, skipping route")
                     continue
@@ -493,21 +438,24 @@ class BaseDataset(Dataset):
 
 
             ############################### 🍑 开始遍历当前 route 内的每一帧样本 🍑 ###############################
-            # 通过筛选完美路线+1
+            # 合格路线+1
             perfect_routes += 1
 
-            # 该条合格 route 的样本总数 
+            # 该条合格 route 的样本总数, 以该条 route 下的 rgb/ 目录下的图像帧数为准
             num_seq = len(os.listdir(route_dir + f'/{self.rgb_folder}'))
             
 
-            # route内的样本级别遍历
+            # 二、遍历当前 route 内的每一帧样本,从 skip_first_n_frames(10) 开始，到 num_seq - pred_len - hist_len - 1 结束
             for seq in range(self.skip_first_n_frames, num_seq - self.pred_len - self.hist_len - 1):
-            # 从 skip_first_n_frames(10) 开始，到 num_seq - pred_len - hist_len - 1 结束
-            # 1）为什么从 skip_first_n_frames 开始？
-            # 因为前面几帧可能：车辆还没稳定、传感器/控制初始化阶段不可靠、刚开局信息不完整，所以前几帧跳过。
-            # 2）为什么结束到 num_seq - pred_len - hist_len - 1？
-            # 因为一个样本不仅需要当前帧，还需要：历史帧 hist_len、未来帧 pred_len，所以末尾不够长的序列不能作为样本，否则未来 measurement / future waypoints 不够。
-            
+               
+                """
+                从 skip_first_n_frames(10) 开始，到 num_seq - pred_len - hist_len - 1 结束
+                1) 为什么从 skip_first_n_frames 开始？
+                因为前面几帧可能：车辆还没稳定、传感器/控制初始化阶段不可靠、刚开局信息不完整，所以前几帧跳过。
+                2) 为什么结束到 num_seq - pred_len - hist_len - 1?
+                因为一个样本不仅需要当前帧，还需要：历史帧 hist_len、未来帧 pred_len,所以末尾不够长的序列不能作为样本,否则未来 measurement / future waypoints 不够。
+                """
+                
                 image = []
                 box = []
                 measurement = []
@@ -559,7 +507,6 @@ class BaseDataset(Dataset):
 
                 ############################### 🍑 2. image & box 文件 🍑 ###############################
 
-                # Loads the current (and past) frames (if seq_len > 1)
                 # 构造历史图像路径和 box 路径
                 skip = False
                 augment_exist = True
@@ -605,15 +552,6 @@ class BaseDataset(Dataset):
         
 
 
-
-        ################################################## 🇨🇳 Print for debug 🇨🇳##################################################
-
-        # print(f'[{self.split} samples]: Loading {len(self.images)} images from {self.data_path} for bucket {self.bucket_name}')
-        # print('Total amount of routes:', total_routes)
-        # print('Crashed routes:', crashed_routes)
-        # print('Perfect routes:', perfect_routes)
-        # print('Fail reasons:', fail_reasons)
-
     def __len__(self):
         """Returns the length of the dataset. """
         return self.images.shape[0]
@@ -622,47 +560,58 @@ class BaseDataset(Dataset):
         
         loaded_measurements = []
 
-        #################################### 🍑 一、先 append 当前时刻的 measurement 🍑 ####################################
-        # Since we load measurements for future time steps, we load and store them separately
+        #################################### 🍑 一、先 append 当前帧的 measurement 🍑 ####################################
         for i in range(self.hist_len):
+            
+            # 文件路径
             measurement_file = str(measurements[0], encoding='utf-8') + (f'/{(sample_start + i):04}.json.gz')
 
+            # 解析文件
             with gzip.open(measurement_file, 'rt') as f1:
                 measurements_i = ujson.load(f1)
-            loaded_measurements.append(measurements_i)
+            
+            # 放入 loaded_measurements
+            loaded_measurements.append(measurements_i)  # 只有当前帧的 measurement,因为 hist_len=1,所以只会执行一次
 
 
         #################################### 🍑 二、再 append 未来时刻的 measurement 🍑 ####################################
-        end = self.pred_len + self.hist_len
-        start = self.hist_len
+        end = self.pred_len + self.hist_len  # 11 + 1 = 12
+        start = self.hist_len  # 1
         # start : 1, end : 12
 
         for i in range(start, end):  # i=1,2,...,11
             try:
+
+                # 未来1到未来11帧的 measurement .json.gz 文件路径
                 measurement_file = str(measurements[0], encoding='utf-8') + (f'/{(sample_start + i):04}.json.gz')
 
                 with gzip.open(measurement_file, 'rt') as f1:
                     measurements_i = ujson.load(f1)
+                
                 loaded_measurements.append(measurements_i)
+
             except FileNotFoundError:
+
                 # If the file is not found, we just use the last available measurement
                 print(f"File not found: {measurement_file}")
                 loaded_measurements.append(loaded_measurements[-1])
+        
         current_measurement = loaded_measurements[self.hist_len - 1]
 
         measurement_file_current = str(measurements[0], encoding='utf-8') + (f'/{(sample_start + start-1):04}.json.gz')
+
         return loaded_measurements, current_measurement, measurement_file_current
 
     def load_waypoints(self, data, loaded_measurements, aug_translation=0.0, aug_rotation=0.0):
 
         #################################### 🍑 将自车当前帧及未来11帧的自车在carla世界坐标系下的位置转换到自车坐标系 🍑 ####################################
         waypoints = self.get_waypoints(loaded_measurements[self.hist_len - 1:], y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
-        data['waypoints'] = np.array(waypoints[1:-1])   # waypoints 总计12个[x,y], 取自车坐标系下 未来10帧的自车的位置[x,y]（若增强则增强）
+        data['waypoints'] = np.array(waypoints[1:-1])   # waypoints 总计10个[x,y], 取自车坐标系下 未来10帧的自车的位置[x,y]（无增强）
 
 
         #################################### 🍑 将自车当前帧及未来11帧的自车在carla世界坐标系下的位置转换到自车坐标系 🍑 ####################################
         waypoints_org = self.get_waypoints(loaded_measurements[self.hist_len - 1:], y_augmentation=0, yaw_augmentation=0)
-        data['waypoints_org'] = np.array(waypoints_org[1:-1])  # waypoints_org 总计12个[x,y], 取自车坐标系下 未来10帧的自车的位置[x,y]（无增强）
+        data['waypoints_org'] = np.array(waypoints_org[1:-1])  # waypoints_org 总计10个[x,y], 取自车坐标系下 未来10帧的自车的位置[x,y]（无增强）
         
         
         
@@ -673,18 +622,18 @@ class BaseDataset(Dataset):
         # 累加距离(从起点开始,沿轨迹累计走了多远)
         waypoints_1d = np.cumsum(waypoints_1d)
         waypoints_1d = [[x, 0] for x in waypoints_1d]
-        # waypoints_1d 总计11个[x,0], 取未来10帧的自车位置之间的累计路径距离（无增强）
+        # waypoints_1d 总计10个[x,0], 取未来10帧的自车位置之间的累计路径距离（无增强）
         data['waypoints_1d'] = np.array(waypoints_1d[:-1]).reshape(-1, 2)
 
         
         #################################### 🍑 waypoints 矩阵形式 🍑 ####################################
         waypoints = [np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, 0], [0, 0, 0, 1]]) for x, y in waypoints]
-        data['ego_waypoints'] = np.array(waypoints[:-1])  # 11个 4×4 矩阵, 当前帧及未来10帧的自车在自车坐标系下的位置[x,y]（若增强则增强）
+        data['ego_waypoints'] = np.array(waypoints[:-1])  # 10个 4×4 矩阵, 当前帧及未来10帧的自车在自车坐标系下的位置[x,y]（无增强）
         
         
         #################################### 🍑 waypoints_org 矩阵 🍑 ####################################
         waypoints_org = [np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, 0], [0, 0, 0, 1]]) for x, y in waypoints_org]
-        data['ego_waypoints_org'] = np.array(waypoints_org[:-1])  # 11个 4×4 矩阵, 当前帧及未来10帧的自车在自车坐标系下的位置[x,y]（无增强）
+        data['ego_waypoints_org'] = np.array(waypoints_org[:-1])  # 10个 4×4 矩阵, 当前帧及未来10帧的自车在自车坐标系下的位置[x,y]（无增强）
 
 
         return data
@@ -698,29 +647,29 @@ class BaseDataset(Dataset):
 
         
 
-        ############################# 🍒 40个路径点(自车坐标系下前方),进行旋转平移,为的是与增强后的图像匹配 🍒 #############################
+        ############################# 🍒 40个原始路径点(自车坐标系下前方),进行旋转平移,为的是与增强后的图像匹配 🍒 #############################
         route = current_measurement['route_original']
         route = self.augment_route(route, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
 
 
-        ############################# 🍒 40个路径点(自车坐标系下前方),不管图像增补增强都不进行旋转平移,保持原始 🍒 #############################
+        ############################# 🍒 40个原始路径点(自车坐标系下前方),不管图像增补增强都不进行旋转平移,保持原始 🍒 #############################
         route_adjusted = np.array(current_measurement['route'])
         route_adjusted_org = self.augment_route(route_adjusted, y_augmentation=0, yaw_augmentation=0)
         
 
-        ############################# 🍒 40个路径点(自车坐标系下前方),又进行旋转平移,为的是与增强后的图像匹配 🍒 #############################
+        ############################# 🍒 40个原始路径点(自车坐标系下前方),又进行旋转平移,为的是与增强后的图像匹配 🍒 #############################
         # 这个route_adjusted与route一样的东西
         route_adjusted = self.augment_route(route_adjusted, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
         
         
 
-        ############################# 🍒 保证使用20个 route 点(自车坐标系下前方) 🍒 #############################
+        ############################# 🍒 先将原始路径截取或补齐至20个点(自车坐标系下前方) 🍒 #############################
         if len(route) < self.num_route_points:
             num_missing = self.num_route_points - len(route)
             route = np.array(route)
             # Fill the empty spots by repeating the last point.
             route = np.vstack((route, np.tile(route[-1], (num_missing, 1))))
-        else:
+        else:  # 执行
             route = np.array(route[:self.num_route_points])
             
 
@@ -737,9 +686,9 @@ class BaseDataset(Dataset):
         ############################# 🍒 20个点进行等间距采样,两点之间相距1m 🍒 #############################
         route = self.equal_spacing_route(route)  # [20,2]
         
-        data['route'] = route
-        data['route_adjusted_org'] = route_adjusted_org
-        data['route_adjusted'] = route_adjusted
+        data['route'] = route                             # 先截取或者补齐20个点,再等间距采样
+        data['route_adjusted_org'] = route_adjusted_org   # 使用完整的40个点进行重采样
+        data['route_adjusted'] = route_adjusted           # 使用完整的40个点进行重采样
 
         """
         data['route'] = route  
@@ -789,8 +738,6 @@ class BaseDataset(Dataset):
             images_i = cv2.imread(images_path, cv2.IMREAD_COLOR)
             images_i = cv2.cvtColor(images_i, cv2.COLOR_BGR2RGB)
 
-            # if self.img_augmentation: # and random.random() <= self.img_augmentation_prob:
-            #     images_i = self.tfs(image=images_i)  # 对图像进行随机增强
             # 图像随机增强仅用于训练集。
             # 验证阶段保持输入图像固定，避免验证指标随随机增强波动。
             if self.split == "train" and self.img_augmentation:
@@ -1275,6 +1222,8 @@ class BaseDataset(Dataset):
 
         return waypoints_aug
 
+
+# 图像增强(不是几何增强)
 def image_augmenter(prob=0.2, cutout=False):
     """
     prob = 0.5 的含义：
@@ -1316,15 +1265,11 @@ def image_augmenter(prob=0.2, cutout=False):
 
     return augmenter  # 返回的是一个增强器对象,后续可以将其作为一套随机增强规则来使用
 
-def get_camera_intrinsics(w, h, fov):
-    """
-    Get camera intrinsics matrix from width, height and fov.
-    Returns:
-        K: A float32 tensor of shape ``[3, 3]`` containing the intrinsic calibration matrices for
-            the carla camera.
-    """
 
-    # print(f"[CAMERA MATRIX] Load camera intrinsics for TF++ default camera with w: {w}, h: {h}, fov: {fov}")
+
+##################################### 相机参数 #####################################
+# 1. 相机内参
+def get_camera_intrinsics(w, h, fov):
 
     focal = w / (2.0 * np.tan(fov * np.pi / 360.0))
     K = np.identity(3)
@@ -1335,17 +1280,9 @@ def get_camera_intrinsics(w, h, fov):
     K = torch.tensor(K, dtype=torch.float32)
     return K
 
+# 2. 相机外参
 def get_camera_extrinsics():
-    """
-    Get camera extrinsics matrix for the carla camera.
-    extrinsics: A float32 tensor of shape ``[4, 4]`` containing the extrinic calibration matrix for
-            the carla camera. The extriniscs are specified as homogeneous matrices of the form ``[R t; 0 1]``
-    """
 
-    # camera_pos = [-1.5, 0.0, 2.0]  # x, y, z mounting position of the camera
-    # camera_rot_0 = [0.0, 0.0, 0.0]  # Roll Pitch Yaw of camera 0 in degree
-
-    # print("[CAMERA MATRIX] Load camera extrinsics for TF++ default camera with x: -1.5, y: 0.0, z: 2.0, roll: 0.0, pitch: 0.0, yaw: 0.0")
     extrinsics = np.zeros((4, 4), dtype=np.float32)
     extrinsics[3, 3] = 1.0
     extrinsics[:3, :3] = np.eye(3)
@@ -1355,13 +1292,8 @@ def get_camera_extrinsics():
 
     return extrinsics
 
+# 3. 相机畸变
 def get_camera_distortion():
-    """
-    Get camera distortion matrix for the carla camera.
-    distortion: A float32 tensor of shape ``[14 + 1]`` containing the camera distortion co-efficients
-            ``[k0, k1, ..., k13, d]`` where ``k0`` to ``k13`` are distortion co-efficients and d specifies the
-            distortion model as defined by the DistortionType enum in camera_info.hpp
-    """
 
     print("[CAMERA MATRIX] Load camera distortion for TF++ default camera. No distortion.")
     distortion = np.zeros(14 + 1, dtype=np.float32)

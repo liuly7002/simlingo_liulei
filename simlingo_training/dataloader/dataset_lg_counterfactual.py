@@ -21,14 +21,6 @@ _COUNTERFACTUAL_INTENT_TEXT = {
 
 
 class Data_LG_Counterfactual(Data_LG):  # pylint: disable=invalid-name
-    """
-    在LG语言、轨迹、四通道和参与者空间监督之上，读取对象移除后的
-    真实反事实重规划结果，并由该结果构造对应的四问语言监督。
-
-    轨迹来自标签生成阶段真实执行参与者删除与重新规划后保存的
-    ``reference.object_removed_reference_waypoints``。反事实语言则由同一次
-    重规划保存的factor、intent和轨迹确定，不使用完整场景答案作为替代。
-    """
 
     @staticmethod
     def _actor_identity(actor: Dict) -> Tuple[str, str]:

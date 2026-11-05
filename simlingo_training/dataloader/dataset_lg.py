@@ -31,6 +31,7 @@ class Data_LG(SurroundBaseDataset):
 
     def __init__(self, **cfg):
         
+        # 安全性检查
         # 如果决定使用 lg 数据,但未启用 use_lg_supervision,则抛出异常,提示用户修改配置
         if not bool(cfg.get("use_lg_supervision", False)):
             raise ValueError(
@@ -39,27 +40,27 @@ class Data_LG(SurroundBaseDataset):
                 "or switch back to the original Data_Dreamer target."
             )
 
-        # 加载配置文件并修改
+        ################################## 🥭 设置配置文件 🥭 ##################################
         base_cfg = dict(cfg)
+
         base_cfg["use_qa"] = False                 # lg 不使用 QA
         base_cfg["use_commentary"] = False         # lg 不使用 commentary
         base_cfg["img_shift_augmentation"] = False # lg 与普通 Driving 统一使用无几何增强六视角图像
 
-        #修改20260728：启用统一官方route划分后，
-        # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑。
-        #
+        # 启用统一官方route划分后，
+        # LG不再单独修改use_town13，保证LG与普通Driving使用同一划分逻辑
         # 只有未启用新的统一划分开关时，才保留旧的
         # lg_match_dreamer_split兼容行为。
         if (bool(base_cfg.get("lg_match_dreamer_split",True,)) and not bool(base_cfg.get("use_official_route_split",False,))):
             base_cfg["use_town13"] = False
 
-        # 调用父类构造函数，初始化数据集
+        # 调用父类构造函数SurroundBaseDataset,形成完整数据池,这里还是文件的形式,也就是第一阶段的本地文件阶段
         super().__init__(dreamer=False, **base_cfg)
 
         # lg标签存放的文件夹名称,默认"language_grounded_waypoints"
         self.lg_label_folder = str(getattr(self,"lg_label_folder","language_grounded_waypoints",))
 
-        # 是否使用结构化未来世界标签
+        # 是否使用结构化未来世界标签,这里是使用
         self.lg_use_future_interaction_grid = bool(getattr( self, "lg_use_future_interaction_grid",False,))
 
         # 结构化未来世界标签存放的文件夹名称,默认"future_interaction_grids"
@@ -415,7 +416,7 @@ class Data_LG(SurroundBaseDataset):
 
             # lg标签文件路径, label_path = ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/language_grounded_waypoints/0026.json.gz
             label_path = self._lg_path_for_index(index)
-            # 如果文件缺失
+            # 安全性检查
             if not label_path.is_file():
                 reasons["missing_label"] += 1
                 continue
@@ -425,15 +426,8 @@ class Data_LG(SurroundBaseDataset):
                 payload = self._load_gzip_json(label_path)
                 # 检查lg标签数据的有效性,如果有效则valid=True,reason=ok,否则为valid=False,reason=无效原因
                 valid, reason = self._validate_payload(payload)
-            except (
-                OSError,
-                EOFError,
-                ValueError,
-                ujson.JSONDecodeError,
-            ) as exc:
-                reasons[
-                    f"read_error:{type(exc).__name__}"
-                ] += 1
+            except (OSError,EOFError,ValueError,ujson.JSONDecodeError,) as exc:
+                reasons[f"read_error:{type(exc).__name__}"] += 1
                 continue
 
             # 如果lg标签数据无效,则统计无效原因并跳过该样本
@@ -630,10 +624,10 @@ class Data_LG(SurroundBaseDataset):
 
         ########################################### 🥭 初始化(父类的父类初始化得到) 🥭 ###########################################
 
-        surround_images = self.surround_images[index]  # 六视角图像路径.../rgb_front/0026.jpg  .../rgb_front_left/0026.jpg  .../rgb_front_right/0026.jpg  .../rgb_rear/0026.jpg  .../rgb_rear_left/0026.jpg  .../rgb_rear_right/0026.jpg
-        measurements = self.measurements[index]
-        sample_start = self.sample_start[index]
-        lg_path = Path(self._decode_path(self.lg_label_paths[index]))  # lg 标签文件路径
+        surround_images = self.surround_images[index]  # 六视角图像路径
+        measurements = self.measurements[index]  # measurements路径
+        sample_start = self.sample_start[index]  # 
+        lg_path = Path(self._decode_path(self.lg_label_paths[index]))  # 当前帧的 lg 标签文件路径
         
         # images: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/rgb/0026.jpg'], 
         # measurements: [b'/root/simlingo/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_493_route0_02_28_11_00_43/measurements'], 
@@ -757,7 +751,7 @@ class Data_LG(SurroundBaseDataset):
 
 
 
-        ########################################### 🥭 当前帧的四通道结构化未来世界标签 🥭 ###########################################
+        ########################################### 🥭 当前帧的三通道结构化未来世界标签 🥭 ###########################################
        
         future_interaction_grid = None
         future_interaction_valid = False
@@ -769,7 +763,7 @@ class Data_LG(SurroundBaseDataset):
             # ....../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/future_interaction_grids/0026.json.gz
             future_interaction_path = self._future_interaction_grid_path_for_index(index)
             
-            # future_interaction_grid 为4通道结构化世界标签内容
+            # future_interaction_grid 为3通道结构化世界标签内容
             # future_interaction_valid 为是都有效
             future_interaction_grid, future_interaction_valid = self._load_future_interaction_grid(future_interaction_path)
 

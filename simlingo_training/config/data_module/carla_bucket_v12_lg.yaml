@@ -56,7 +56,7 @@ driving_dataset:
 
   # 普通Driving结构化未来世界监督开关
   driving_use_future_interaction_grid: true                                 # 读取三语义通道+十帧占据
-  driving_future_interaction_grid_folder: driving_future_interaction_grids  # 原有标签目录保持不变
+  driving_future_interaction_grid_folder: driving_future_interaction_grids  # 三通道+十帧占据标签存放的文件夹名称
   stage2_strict_negative_mask: true                                         # 仅对全部反事实测试无效的状态0关闭C2监督
 
   # 普通Driving主要关键参与者视觉token级空间监督

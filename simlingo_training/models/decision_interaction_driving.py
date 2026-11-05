@@ -1,15 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Decision-centred, three-semantic-world VLA training and inference.
-
-Perception/candidate context -> initial route and ego intent -> predicted
-spatiotemporal interaction world -> corrected ego trajectory. The route and
-language task heads remain those of SimLingo; no ground-truth future world
-is ever used as a refinement input.
-"""
 from __future__ import annotations
-
 from typing import Dict, Optional, Tuple
-
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -34,12 +25,6 @@ from simlingo_training.utils.custom_types import DrivingExample
 
 
 class DecisionInteractionDrivingModel(InteractionGroundedDrivingModel):
-    """Preserve the existing language/route paths, replace only interaction losses.
-
-    The existing parent supplies feature extraction, joint Transformer and
-    counterfactual visual intervention. This class deliberately overrides
-    training/inference because the previous heads assumed C0/C1/C2/C4.
-    """
 
     def __init__(self, cfg_data_module, processor, cache_dir, **cfg):
         super().__init__(cfg_data_module=cfg_data_module, processor=processor,
@@ -116,8 +101,8 @@ class DecisionInteractionDrivingModel(InteractionGroundedDrivingModel):
         interaction_outputs: Dict, question_mask: Tensor,
         question_valid: Tensor, full_prediction: Dict,
         full_world: Dict, world_gt: Tensor,
-        world_valid: Tensor, actor_status: Tensor,
-    ) -> Tuple[Dict, Dict]:
+        world_valid: Tensor, actor_status: Tensor,) -> Tuple[Dict, Dict]:
+
         b = contextual_tokens.shape[0]
         zero = contextual_tokens.float().sum(dim=(1, 2)) * 0.0
         zero = zero + self.interaction_reasoner.counterfactual_parameter_zero().float()
@@ -353,9 +338,10 @@ class DecisionInteractionDrivingModel(InteractionGroundedDrivingModel):
         losses = summarise_losses(only_losses, weights=self._loss_weights())
         return losses, {}
 
-    def forward(self, example: DrivingExample, return_language: Optional[bool] = None,
-                prompt_ids: Optional[Tensor] = None):
-        del return_language, prompt_ids
+    def forward(self, example: DrivingExample, return_language: Optional[bool] = None, prompt_ids: Optional[Tensor] = None):
+        
+        del return_language, prompt_ids  # 表示当前实现并不使用传入的这两个参数。是否生成语言由 self.predict_language 控制
+        
         self.speed_wps = None
         self.route = None
         self.language = []
@@ -364,8 +350,10 @@ class DecisionInteractionDrivingModel(InteractionGroundedDrivingModel):
         self.primary_spatial_attention = None
         self.contextual_interaction_tokens = None
         self.initial_speed_wps = None
-        adaptor_dict = self._replace_multimodal_placeholders(example, inference=True)
+        
+        adaptor_dict = self._replace_multimodal_placeholders(example, inference=True)  # [B,L+30,D]
         batch_size = int(adaptor_dict["language_inputs"].shape[0])
+        
         for i in range(batch_size):
             sl = slice(i, i + 1)
             interaction = self._build_pre_language_interaction(adaptor_dict, batch_slice=sl)

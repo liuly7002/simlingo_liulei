@@ -93,10 +93,10 @@ class DrivingModel(pl.LightningModule):
 
 
 
-        # 四通道结构化未来世界辅助预测头
+        # 三通道结构化未来世界辅助预测头
         self.future_interaction_decoder = None
 
-        # 如果使用四通道结构化未来世界辅助预测,那么构造解码器
+        # 如果使用三通道结构化未来世界辅助预测,那么构造解码器
         if bool(getattr(self,"use_future_interaction_prediction",False,)):
             
             self.future_interaction_decoder = (

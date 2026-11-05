@@ -5,6 +5,7 @@ defaults:
   - /data_module/base_dataset: dataset
 
 model:
+
   # 修改20261103：在原统一交互网络上增加以决策为中心的预测世界轨迹修正。
   _target_: simlingo_training.models.decision_interaction_driving.DecisionInteractionDrivingModel
 
@@ -79,11 +80,11 @@ data_module:
   batch_size: 6
   num_workers: 8
 
-  # 训练样本数量比为正样本:可靠负样本=3:1，不是每轮有放回的75%概率抽样。
+  # 训练样本数量比为正样本:可靠负样本=3:1
   # 全部有效status=1样本每轮各训练一次；从status=0中无放回固定选取约1/3正样本数。
   # status=-1和反事实测试全部无效的不可靠负样本排除，验证集保持原始分布。
   stage2_actor_balanced_sampling: true
-  stage2_actor_positive_ratio: 0.75
+  stage2_actor_positive_ratio: 0.75  # 表示最终训练样本集合中正样本所占比例为 75%
   stage2_actor_negative_seed: 9876
   stage2_actor_sampling_cache_dir: outputs/stage2_actor_sampling_cache
 
@@ -92,30 +93,25 @@ data_module:
     data_path: ../database/simlingo_v2_2026_09_12_22_24_28                       # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
     bucket_path: ../database/simlingo_v2_2026_09_12_22_24_28/bucketsv2_simlingo  # ⚠️ 训练的时候数据集加载的位置,训练前需要修改这里
 
-    pred_len: 11
+    pred_len: 11              # 未来11帧
     cut_bottom_quarter: true  # 是否裁剪图像下方四分之一区域(图像的这部分是车头引擎盖)
 
-    # These remain active for the ordinary driving source. Data_LG constructs
-    # its own language and locally disables DriveLM/commentary loading.
     use_commentary: true
-    use_qa: true
-    qa_augmentation: true
+    use_qa: true                      # 是否使用VQA
+    qa_augmentation: true             # 是否进行VQA增强(随机替换问题、答案)
 
-    img_shift_augmentation: true      # 是否进行图像增强(噪声、模糊等,不是几何增强)
-    img_shift_augmentation_prob: 0.5  # 图像曾请的概率
+    img_shift_augmentation: false     # 是否进行图像的几何增强
+    img_shift_augmentation_prob: 0.5  # 图像几何增强的概率 几何增强关闭后，该概率不参与实际判断
     hist_len: 1                       # 历史帧长度,1表示不使用历史帧,只使用当前帧,2表示使用当前帧和上一帧,以此类推
 
-    route_as: target_point             # none command target_point
+    route_as: target_point            # none command target_point
     use_lmdrive_commands: false
 
-    use_old_towns: true
-    use_town13: true
+    use_old_towns: true               # 是否使用旧的城镇数据集,如果为false,则只使用town13数据集
+    use_town13: true                  # 是否使用town13数据集,如果为false,则只使用旧的城镇数据集
     use_safety_flag: false
 
-    # 普通Driving和LG统一使用官方route目录划分。
-    # train：routes_training
-    # val：routes_validation，并使用全部固定Town13验证路线。
-    use_official_route_split: true
+    use_official_route_split: true    # 是否使用官方的训练集和验证集划分,如果为false,则会随机划分99%训练集和1%验证集 
 
   # LG switches can also be overridden here from the command line, e.g.:
   # data_module.dreamer_dataset.lg_use_language=false

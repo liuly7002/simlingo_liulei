@@ -28,13 +28,11 @@ from simlingo_training.utils.custom_types import (
 
 class InteractionGroundedDrivingModel(DrivingModel):
     """
-    统一语言—交互—动作模型，并执行参与者删除反事实训练。
-
     序列固定为：
-        [4个统一交互token | 语言token | 30个Driving query]
+        [3个统一交互token | 语言token | 30个Driving query]
 
-    因此语言生成、轨迹预测和四通道未来世界预测不再通过相互独立的
-    后处理分支读取交互信息，而是在同一次因果Transformer前向中共享证据。
+    因此语言生成、轨迹预测和三通道未来世界预测不再通过相互独立的
+    后处理分支读取交互信息,而是在同一次因果Transformer前向中共享证据。
     """
 
     def __init__(self,cfg_data_module,processor,cache_dir,**cfg,):
@@ -47,7 +45,7 @@ class InteractionGroundedDrivingModel(DrivingModel):
                 "Stage-2 interaction reasoning requires DrivingAdaptor."
             )
 
-        # 构造四个交互token [B,4,D]
+        # 构造三个交互token [B,3,D]
         self.interaction_reasoner = PreLanguageInteractionReasoner(
             hidden_size=self.language_model.hidden_size,
             num_route_queries=int(

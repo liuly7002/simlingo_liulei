@@ -9,7 +9,7 @@ import numpy as np
 
 from simlingo_training.dataloader.dataset_base import BaseDataset  # 父类
 
-
+# 六视角图像的顺序,一定是 front, front_left, front_right, rear, rear_left, rear_right
 SURROUND_CAMERA_ORDER: Tuple[str, ...] = (
     "front",
     "front_left",
@@ -19,8 +19,9 @@ SURROUND_CAMERA_ORDER: Tuple[str, ...] = (
     "rear_right",
 )
 
+# 六视角图像的文件夹名称,按顺序查找
 SURROUND_CAMERA_FOLDERS: Dict[str, Tuple[str, ...]] = {
-    "front": ("rgb_front", "rgb"),
+    "front": ("rgb_front", "rgb"),       # 实际上应该是 rgb_front,但是为了兼容旧数据集,所以也可以是 rgb
     "front_left": ("rgb_front_left",),
     "front_right": ("rgb_front_right",),
     "rear": ("rgb_rear",),
@@ -30,11 +31,14 @@ SURROUND_CAMERA_FOLDERS: Dict[str, Tuple[str, ...]] = {
 
 
 class SurroundDatasetMixin:
-    """Add six-view indexing/loading to a dataset already built by BaseDataset."""
 
     def _initialize_surround_dataset(self) -> None:
+        
+        # 初始化六视角图像的顺序
         self.surround_camera_order = tuple(SURROUND_CAMERA_ORDER)
+        # 初始化六视角图像的文件夹名称
         self.surround_camera_folders = dict(SURROUND_CAMERA_FOLDERS)
+        
         self._build_surround_image_index()
 
     @staticmethod
@@ -91,7 +95,7 @@ class SurroundDatasetMixin:
 
         for folder_name in folders:
             
-            # 拼接路径 -> ...../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48/六视角图像分别的文件夹名称例rgb_rear/0026.jpg
+            # 拼接路径 -> /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43/六视角图像分别的文件夹名称例rgb_rear/0026.jpg
             candidate = route_dir / folder_name / frame_filename
             
             # 如果存在该.jpg文件那么就直接返回该.jpg文件的详细路径
@@ -103,19 +107,20 @@ class SurroundDatasetMixin:
 
     def _build_surround_image_index(self) -> None:
 
-        # 所有样本包含的图像的数量
+        # 数据池中所有样本的数量,这里以 self.images 的长度为基准
         original_count = len(self.images)  # self.images=.jpg文件路径,整个数据集所有样本
         
         valid_indices: List[int] = []
         valid_surround_paths: List[List[List[str]]] = []
         reasons = Counter()
 
+        # 一、遍历数据池中的所有样本,也就是整个数据集中的所有样本
         for sample_index in range(original_count):
 
-            # 如果存在历史帧的话,会有历史帧数量的图像.jpg文件路径
+            # 当前帧的图像路径,这里的 self.images[sample_index] 是一个列表,里面包含了当前样本的历史帧的图像路径(实际上我们并没有使用历史帧,这里就只有一帧),所以需要 reshape(-1) 展平为一维数组
             temporal_front_paths = np.asarray(self.images[sample_index]).reshape(-1)
 
-            # 如果当前数量与历史帧数量不一致就跳过当前样本
+            # 安全性检查,如果当前数量与历史帧数量不一致就跳过当前样本
             if len(temporal_front_paths) != int(self.hist_len):
                 reasons["invalid_history_length"] += 1
                 continue
@@ -123,17 +128,17 @@ class SurroundDatasetMixin:
             temporal_views: List[List[str]] = []
             sample_valid = True
 
-            # 遍历每一帧
+            # 二、遍历每一帧,实际上就一帧
             for front_entry in temporal_front_paths:
 
                 # 解析当前帧.jpg文件的路径名称
                 front_path = Path(self._decode_dataset_path(front_entry))
 
                 # 上上级目录
-                route_dir = front_path.parent.parent  # ...../Town04_Rep0_Town04_lr_0_route0_07_25_20_57_48
+                route_dir = front_path.parent.parent  # /home/kemove/ll/simlingo_liulei/database/simlingo_v2_2026_02_28/data/simlingo/training_3_scenarios/routes_training/random_weather_seed_3_balanced_100/Town12_Rep0_1553_route0_02_28_10_56_43
 
                 # 文件名
-                frame_filename = front_path.name  # 0026.jpg
+                frame_filename = front_path.name      # 0026.jpg
 
                 # 六视角图像文件路径名称
                 frame_views: List[str] = []
@@ -148,7 +153,7 @@ class SurroundDatasetMixin:
                         break
                     
                     # 如果文件没有问题,那么就保存下来
-                    frame_views.append(str(camera_path))
+                    frame_views.append(str(camera_path))  # 依次为 front, front_left, front_right, rear, rear_left, rear_right 的 .jpg文件路径
 
                     # 最终 frame_views 中就按顺序保存了六视角的图像的 .jpg路径名称
 
@@ -180,14 +185,7 @@ class SurroundDatasetMixin:
             )
 
     def load_surround_images(self, data: Dict, surround_images: Sequence[Sequence],) -> Dict:
-        """
-        Load the six synchronized RGB views into [T, V, C, H, W].
 
-        No geometric camera augmentation is performed. During training, the
-        existing photometric augmenter may still be used; all six views from
-        the same timestep share one deterministic augmentation instance.
-        Validation images remain deterministic.
-        """
         paths = np.asarray(surround_images)
         expected_shape = (
             int(self.hist_len),

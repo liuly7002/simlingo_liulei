@@ -30,10 +30,19 @@ CHANNEL_NAMES = (
 TEMPORAL_NAMES = ("C1_ego_future", "C2_critical_actor")
 
 
+
+
+###################################################################### 🤠 功能一: 形成最终lg样本 🤠 ######################################################################
+
 def load_stage2_grid(path: Path) -> Tuple[Optional[np.ndarray], bool, Optional[np.ndarray], int]:
-    """Read one genuine stage-1 label without manufacturing missing positives."""
+
+    # path = /root/autodl-tmp/database/simlingo_v2_2026_09_12_22_24_28/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_25/Town12_Rep0_101_route0_09_13_21_09_57/driving_future_interaction_grids/0000.npz
+    
+    # 安全性检查
     if not path.is_file():
         return None, False, None, -1
+
+    # 加载.npz文件,也就是读取三通道+十帧占据的标签数据
     with np.load(str(path), allow_pickle=False) as data:
         required = {
             "future_interaction_grid", "future_interaction_temporal", "valid",
@@ -70,6 +79,14 @@ def load_stage2_grid(path: Path) -> Tuple[Optional[np.ndarray], bool, Optional[n
         raise ValueError(f"C1 does not agree with its temporal average: {path}")
     if not np.allclose(grid[2], temporal[1].mean(axis=0), atol=3e-5, rtol=0):
         raise ValueError(f"C2 does not agree with its temporal average: {path}")
+
+    """
+    本函数直接看这里：
+    grid: [3,H,W] 三通道占据网格,分别是 -> C0:参考路径对应的自车 Footprint 占据, C1:自车未来10帧 Footprint 的平均占据, C2:关键 Actor 未来10帧 Footprint 的平均占据
+    valid: bool, 表示当前帧的结构化未来世界标签是否有效 True: 标签有效, False: 标签无效,不应直接作为有效的未来世界监督
+    temporal: [2,10,H,W] 未来10帧的逐帧占据信息 两个通道分别是 -> temporal[0]:自车未来10帧的逐帧 Footprint 占据, temporal[1]:关键 Actor 未来10帧的逐帧 Footprint 占据
+    status: int, 关键 Actor 的三状态标签 -1:无法可靠判断,关键 Actor 监督应屏蔽, 0:未确认存在决策关键Actor, 1:存在确认的决策关键 Actor
+    """
     return grid, valid, temporal, status
 
 
@@ -125,6 +142,9 @@ class Data_LG_Stage2(Data_LG_Counterfactual):
             camera_attention_valid=(bool(sample.camera_attention_valid) and valid and status == 1),
         )
 
+
+
+###################################################################### 🤠 功能二:  🤠 ######################################################################
 
 def _actor_label_paths(dataset, index: int) -> Tuple[Path, Path]:
     """Locate stage-1 metadata for the *same current frame* as __getitem__.
@@ -311,12 +331,6 @@ def _target_negative_count(total_positive: int, positive_ratio: float,
 
 
 class DataModuleStage2(DataModule):
-    """Collate current [3,H,W] labels without rewriting legacy data logic.
-
-    The parent collate still contains a four-channel shape check. Temporarily
-    pad its local input to four channels, then discard the synthetic channel
-    before returning training labels. The fourth channel is NEVER supervised.
-    """
 
     def setup(self, stage=None):
         # Base DataModule still constructs the original training and validation
