@@ -1,8 +1,8 @@
 class GlobalConfig:
     def __init__(self):
-        """ base architecture configurations """
+        """Configuration for SimLingo-LG Stage-2 Bench2Drive evaluation."""
         # -----------------------------------------------------------------------------
-        # Lingo agent
+        # Lingo agent (unchanged controllers / dynamics)
         # -----------------------------------------------------------------------------
         self.eval_route_as = 'target_point' # "target_point" or "target_point_command" "command", -1 -> use from model config
         # if target_point_command (trained on both we eval with targetpoint)
@@ -27,16 +27,11 @@ class GlobalConfig:
         # -----------------------------------------------------------------------------
         # PID controller
         # -----------------------------------------------------------------------------
-        # We are minimizing the angle to the waypoint that is at least aim_distance
-        # meters away, while driving
         self.aim_distance_very_fast = 7.0  # 2.0
         self.aim_distance_fast = 3.0  # 2.0
         self.aim_distance_slow = 2.25
-        # Meters per second threshold switching between aim_distance_fast and
-        # aim_distance_slow
         self.aim_distance_threshold = 5.5
         self.aim_distance_threshold2 = 15
-        # Controller
         self.turn_kp = 3.25 #1.25 -- these were the values for LB1
         self.turn_ki = 1.0 #0.75
         self.turn_kd = 1.0 #0.3
@@ -48,13 +43,13 @@ class GlobalConfig:
         self.speed_n = 20  # buffer size
 
         # -----------------------------------------------------------------------------
-        # Sensor config
+        # SIX RGB cameras: must match team_code/data_agent_surround.py
+        # front, front_left, front_right, rear, rear_left, rear_right
         # -----------------------------------------------------------------------------
-        self.num_cameras = [0] #,3] #,1,2]
-        # cam 1
-        self.camera_pos_0 = [-1.5, 0.0, 2.0]  # x, y, z mounting position of the camera
-        self.camera_rot_0 = [0.0, 0.0, 0.0]  # Roll Pitch Yaw of camera 0 in degree
-
-        self.camera_width_0 = 1024  # Camera width in pixel during data collection
-        self.camera_height_0 = 512  # Camera height in pixel during data collection
-        self.camera_fov_0 = 110
+        self.num_cameras = [0, 1, 2, 3, 4, 5]
+        for idx, yaw in enumerate((0.0, -60.0, 60.0, 180.0, -120.0, 120.0)):
+            setattr(self, 'camera_pos_%d' % idx, [-1.5, 0.0, 2.0])
+            setattr(self, 'camera_rot_%d' % idx, [0.0, 0.0, yaw])
+            setattr(self, 'camera_width_%d' % idx, 1024)
+            setattr(self, 'camera_height_%d' % idx, 512)
+            setattr(self, 'camera_fov_%d' % idx, 110)

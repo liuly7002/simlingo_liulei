@@ -57,9 +57,6 @@ class DataModule(LightningDataModule):
         self.NUM_IMAGE_TOKENS_PER_PATCH_AFTER_POOL = 32
 
         ######################################## 🥬 图像占位 🥬 ########################################
-        # taken from:
-        # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/train/constants.py#L7
-        # https://github.com/OpenGVLab/InternVL/blob/9d3a709b16874e73ffdd38b9cf53296fae4589b9/internvl_chat/internvl/model/internvl_chat/modeling_internvl_chat.py#L294
         self.IMG_START_TOKEN='<img>'
         self.IMG_END_TOKEN='</img>'
         self.IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'  # 图像token占位符
@@ -81,7 +78,6 @@ class DataModule(LightningDataModule):
         else:
             self.tokenizer = self.processor
         
-        # TODO: not needed anymore?
         # 给 tokenizer 增加任务专用标记，让语言模型能识别自动驾驶结构化信息。
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
         self.tokenizer.padding_side = "left"  # padding 加在左边，而不是右边。
@@ -168,7 +164,7 @@ class DataModule(LightningDataModule):
         整理对象移除后的反事实重规划轨迹。
 
         返回：
-            counterfactual_waypoints:       [B,F,2]
+            counterfactual_waypoints:       [B,10,2]
             counterfactual_waypoints_valid: [B]
             counterfactual_causal_score:    [B]
         """
@@ -237,36 +233,25 @@ class DataModule(LightningDataModule):
         )
 
     def _build_counterfactual_prompt(self,data,placeholder_values,):
-        """
-        构造独立反事实文本序列
 
-        有真实反事实语言标签的LG样本使用反事实四问答案
-        其他样本仅使用中性的Waypoints:前缀
-        """
-
+        # 反事实对话
         counterfactual_conversations = []
 
         for sample in data:
 
-            # 反事实文本标签
+            # 反事实文本标签,这是完整内容,即包括问题和答案,其中问题不变,但是答案是针对反事实场景的描述,这是与完整场景的语言标签不一样的地方
             counterfactual_conversation = getattr(sample,"counterfactual_conversation",None,)
 
-            # LG样本存在真实反事实四问文本
+            ####################### LG样本存在真实反事实四问文本(这是正统) #######################
             if counterfactual_conversation is not None:
                 counterfactual_conversations.append(copy.deepcopy(counterfactual_conversation))
                 continue
 
+
+            ####################### LG样本不存在真实反事实四问文本(这是兼容) #######################
             # 普通Driving或没有反事实语言标签的样本，
-            # 复用原始user问题，但不使用原始assistant答案。
-            user_message = next((
-                    copy.deepcopy(message)
-                    for message in sample.conversation
-                    if str(
-                        message.get("role", "")
-                    ) == "user"
-                ),
-                None,
-            )
+            # 复用原始user问题，但不使用原始assistant答案。这就说明问题是一致的,只不过回答是针对反事实场景的回答
+            user_message = next((copy.deepcopy(message) for message in sample.conversation if str(message.get("role", "")) == "user"),None,)
 
             # 安全性检查
             if user_message is None:
@@ -293,6 +278,7 @@ class DataModule(LightningDataModule):
 
         counterfactual_dict, _ = get_custom_chat_template(counterfactual_conversations,self.tokenizer,self.encoder_variant,self.num_image_tokens_total,)
 
+        # 反事实场景的语言的内容
         return LanguageLabel(
             phrase_ids=counterfactual_dict["phrase_ids"],            # [BS,L] token id 
             phrase_valid=counterfactual_dict["phrase_valid"],        # [BS,L] 有效性
@@ -611,7 +597,7 @@ class DataModule(LightningDataModule):
 
 
         # 每张图像会被分为2个patch
-        grid_nums = [self.NUM_IMAGE_PATCHES]
+        grid_nums = [self.NUM_IMAGE_PATCHES]  # grid_nums = 2
         
         
         
@@ -623,7 +609,8 @@ class DataModule(LightningDataModule):
 
 
 
-        # 遍历这个batch中的每一个样本,取出它的img_ff_org_size(这是未经裁减的前视图像)
+        # 遍历每一个batch中的每一个样本,取出它的img_ff_org_size(这是未经裁减的前视图像)
+        # image_ff_org_size [T,C,H,W]
         image_ff_org = torch.tensor(np.asarray([data[i].image_ff_org_size for i in range(BS)]))
 
         
@@ -634,14 +621,16 @@ class DataModule(LightningDataModule):
         ################################################### 🦺 1.图像预处理 🦺 ###################################################
 
         for idx, img_to_consider in enumerate(self.IMAGES_TO_CONSIDER):
-            # idx = 0, img_to_consider = image_surround 
+            # idx = 0, img_to_consider = "image_surround" 
             
             
-            # 获取裁减底部后的六视角图像 [T,V,C,H,W]
+            # 裁减底部后的六视角图像 [T,6,C,H,W]
             img_tmp = getattr(data[0], img_to_consider) # 等价于img_tmp = data[0].image_surround  也就是从 batch 第一个样本里取出六视角图像
 
             # 如果考虑的是六视角图像
             if img_to_consider == 'image_surround':
+                
+                # 六视角图像的尺寸
                 T, V, C, H, W = img_tmp.shape
 
                 # 安全性检查,检查视角数量是否为6个
@@ -661,7 +650,7 @@ class DataModule(LightningDataModule):
             assert T == 1, "Only one timestep as input supported"
             
             # 对于当前 batch 中每个样本：
-            # 如果这个样本的 image_ff 不为空，就取它
+            # 如果这个样本的 image_surround 不为空，就取它
             # 如果为空，就用一个和 img_tmp 形状相同的全零图像代替
             # 作用是避免某些样本图像缺失时程序崩掉
             # 这是一种兜底策略
@@ -703,7 +692,7 @@ class DataModule(LightningDataModule):
             else:
                 raise ValueError(f"Image preprocessing for {self.encoder_variant} not implemented")
                 
-            images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T*V, 2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
+            images_pixel = images_processed['pixel_values']  # 预处理后的像素张量 形状为 [BS*T, V*2, 3, 448, 448]  也就是说，一张图像可能被拆成多个 patch，每个 patch 都变成适合视觉模型输入的张量
             image_sizes = images_processed['image_sizes']    # 当前帧图像的尺寸信息 形状为 [BS*T*V, 2]，每行是一个 [原图高度 H, 原图宽度 W]
             
             
@@ -723,15 +712,18 @@ class DataModule(LightningDataModule):
             new_height = images_pixel.shape[3]       # 取patch高度  448
             new_width = images_pixel.shape[4]        # 取patch宽度  448
             images_pixel = images_pixel.view(BS, T, V, num_patches, C, new_height, new_width)
-            images_pixel = images_pixel.view(BS, T, V * num_patches, C, new_height, new_width)  # 六视角按固定顺序展开为 [BS,T,12,C,H,W]
+            images_pixel = images_pixel.view(BS, T, V * num_patches, C, new_height, new_width)  # 六视角按固定顺序展开为 [BS,T,6x2,C,H,W]
             # images_pixel 就是 DrivingInput.camera_images 的标准格式
 
+            # 如果是六视角图像
             if img_to_consider == 'image_surround':
-                image_ff_pixel = images_pixel  # [BS, T, 12, 3, 448, 448] 六视角，每个视角2个patch
-                image_ff_sizes = image_sizes   # [BS*T*V, 2]
+                image_ff_pixel = images_pixel  # [BS, T, 6x2, 3, 448, 448] 六视角，每个视角2个patch 这就是六视角图像的预处理结果
+                image_ff_sizes = image_sizes   # [BS*T*6x2, 2]
+            # 如果只有前视图像
             elif img_to_consider == 'image_ff':
                 image_ff_pixel = images_pixel  # [BS, T, 2, 3, 448, 448] 这就是前视图图像的预处理结果
                 image_ff_sizes = image_sizes   # [BS*T, 2] 
+            # 其他情况报错
             else:
                 raise ValueError(f"Image type {img_to_consider} not supported")
 
@@ -744,16 +736,17 @@ class DataModule(LightningDataModule):
         
         
         
-        ################################################### 🦺 2.文本预处理 🦺 ###################################################
+        ################################################### 🦺 2. 完整场景语言文本预处理 Token 化 🦺 ###################################################
         
         
-        # 把 batch 中每个样本的对话文本取出来
+        # 把 batch 中每个样本的对话文本取出来,这里的对话指的是包含问题和答案的完整对话
         conversations = [data[i].conversation for i in range(BS)]
         # conversations = [[{'role': 'user', 'content': [{'type': 'text', 'text': 'Current speed: 10.0 m/s. Target waypoint: <TARGET_POINT><TARGET_POINT>. Predict the waypoints.'}, {'type': 'image'}]}, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Waypoints:'}]}]]
 
         conversation_dict, question_dict = get_custom_chat_template(conversations, self.tokenizer, self.encoder_variant, self.num_image_tokens_total)
         
         """
+        # 问题+答案(训练阶段使用)
             conversation_dict = {
             'phrase_ids': prompt_tokenized_ids,       # token id 形状为[B,L]
             'phrase_valid': prompt_tokenized_valid,   # 标记哪些token不是padding 形状为[B,L]
@@ -761,6 +754,7 @@ class DataModule(LightningDataModule):
             'language_string': prompts,               # 原始文本 形状为[B]  包括问题和答案！！！！！！！！！！！！
             'loss_masking': loss_mask                 # 哪些位置计算loss
 
+        # 仅问题(推理阶段使用)
             question_dict = {
             'phrase_ids': prompt_tokenized_ids,       # token id 形状为[B,L]
             'phrase_valid': prompt_tokenized_valid,   # 标记哪些token不是padding 形状为[B,L]
@@ -812,6 +806,7 @@ class DataModule(LightningDataModule):
         ################################################### 🦺 4.将 placeholder_values 融合进来 🦺 ###################################################
 
 
+        # 问题+答案(训练阶段使用)
         prompt_languagelabel = LanguageLabel(
             phrase_ids=conversation_dict['phrase_ids'],           # token id
             phrase_valid=conversation_dict['phrase_valid'],       # 标记哪些 token 不是 padding 的
@@ -821,6 +816,7 @@ class DataModule(LightningDataModule):
             loss_masking=conversation_dict['loss_masking'],       # 当前language_string里哪些位置需要计算loss
         )
 
+        # 仅问题(推理阶段使用)
         prompt_question_languagelabel = LanguageLabel(
             phrase_ids=question_dict['phrase_ids'],               # token id
             phrase_valid=question_dict['phrase_valid'],           # 标记哪些 token 不是 padding 的
@@ -830,6 +826,7 @@ class DataModule(LightningDataModule):
             loss_masking=question_dict['loss_masking'],           # 当前 language_string 里哪些位置需要计算loss
         )
 
+        # 没什么用
         # 从当前batch中的每个样本中抽出文本答案
         answer_string_list = [data[i].answer[0]['content'][0]['text'] for i in range(BS)]
         answer_label =  LanguageLabel(
@@ -846,9 +843,20 @@ class DataModule(LightningDataModule):
 
 
 
-        ################################################### 🦺 独立反事实文本序列 🦺 ###################################################
+        ################################################### 🦺 ！！！独立反事实文本序列！！！ token化 🦺 ###################################################
 
         counterfactual_prompt = (self._build_counterfactual_prompt(data=data,placeholder_values=(prompt_languagelabel.placeholder_values),))
+        """
+        问题+答案
+        counterfactual_prompt =  LanguageLabel(
+            phrase_ids=counterfactual_dict["phrase_ids"],            # [BS,L] token id 
+            phrase_valid=counterfactual_dict["phrase_valid"],        # [BS,L] 有效性
+            phrase_mask=counterfactual_dict["phrase_mask"],          # [BS,L] 有效性
+            placeholder_values=placeholder_values,                   # {151662: [[x_0,  y_0],[x_1,  y_1]]}
+            language_string=counterfactual_dict["language_string"],  # 文本
+            loss_masking=counterfactual_dict["loss_masking"],        # [BS,L] 有效性
+        )
+        """
         
 
 
@@ -857,7 +865,7 @@ class DataModule(LightningDataModule):
         ################################################### 🦺 5.拉取 waypoints 信息 🦺 ###################################################
         
 
-        # 构造 waypoints 标签 这里的 waypoints 是未来轨迹标签，通常是一个点序列，形状是 [B, F, 2]，其中 F 是未来轨迹点的数量，每个点有 x,y 两个坐标
+        # 构造 waypoints 标签 这里的 waypoints 是未来轨迹标签，通常是一个点序列，形状是 [B, 10, 2]，每个点有 x,y 两个坐标
         if self.base_dataset.use_1d_wps:
             waypoints = torch.tensor(np.asarray([data[i].waypoints_1d for i in range(len(data))])).float() # [B, F, 2] 11 future waypoints 0.2s apart
         else:  # 执行
@@ -874,6 +882,11 @@ class DataModule(LightningDataModule):
 
         counterfactual_waypoints,counterfactual_waypoints_valid,counterfactual_causal_score = self._collate_counterfactual_waypoints(data=data,waypoint_shape=waypoint_shape,)
 
+        """
+            counterfactual_waypoints:       [B,10,2]  反事实场景重新规划出来的轨迹
+            counterfactual_waypoints_valid: [B]
+            counterfactual_causal_score:    [B]
+        """
         
         
 
@@ -883,6 +896,7 @@ class DataModule(LightningDataModule):
 
         camera_attention_target,camera_attention_valid = self._collate_participant_spatial_attention(data)
 
+        # camera_attention_target: 六视角关键 Actor 的空间注意力软监督 [B,6,64]
 
 
 
@@ -890,17 +904,22 @@ class DataModule(LightningDataModule):
 
 
 
-        ################################################### 🦺 单样本的四通道结构化未来世界标签 🦺 ###################################################
+        ################################################### 🦺 单样本的三通道结构化未来世界标签 🦺 ###################################################
 
         future_interaction_grid = None
         future_interaction_valid = torch.zeros((BS,),dtype=torch.bool,)
         future_interaction_shape = None
 
         for sample_index, sample in enumerate(data):
+
+            # 加载样本数据中的三通道结构化未来世界 [3,H,W] 三通道占据网格,分别是 -> C0:参考路径对应的自车 Footprint 占据, C1:自车未来10帧 Footprint 的平均占据, C2:关键 Actor 未来10帧 Footprint 的平均占据
             sample_grid = getattr(sample,"future_interaction_grid",None,)
+            
+            # 安全性检查
             if sample_grid is None:
                 continue
 
+            # 数据格式
             sample_grid = np.asarray(sample_grid,dtype=np.float32,)
 
             # 安全性检查
@@ -936,7 +955,7 @@ class DataModule(LightningDataModule):
                     f"{tuple(sample_grid.shape)}."
                 )
 
-            # 保存四通道结构化世界标签
+            # 保存三通道结构化世界标签
             future_interaction_grid[sample_index] = torch.from_numpy(sample_grid)
 
             # 保存有效性
@@ -968,8 +987,8 @@ class DataModule(LightningDataModule):
 
 
         # 1. 模型输入
-        driving_input=DrivingInput(
-                camera_images=image_ff_pixel,  # [B, T, V, 3, 448, 448] uint8 [0, 255]  这是视觉主输入
+        driving_input = DrivingInput(
+                camera_images=image_ff_pixel,  # [B, T, 12, 3, 448, 448] uint8 [0, 255]  六视角图像,这是视觉主输入
                 image_sizes=image_ff_sizes,    # [12, 2]，每行是一个 [原图高度 H 1024, 原图宽度 W 512裁减底部]
                 camera_intrinsics = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), BS, dim=0).view(BS, 3, 3).float(),  # 相机内参
                 camera_extrinsics = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), BS, dim=0).view(BS, 4, 4).float(),           # 相机外参
@@ -982,11 +1001,18 @@ class DataModule(LightningDataModule):
 
 
         # 2. 模型监督
-        driving_label=DrivingLabel(
+        driving_label = DrivingLabel(
                 
-                waypoints=waypoints,        # waypoints 未来轨迹监督 [B, 10, 2] float32
-                path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # [B, 20, 2]
-                answer=answer_label,        # 文本答案监督
+                # 完整场景下自车未来10个路径点监督
+                waypoints=waypoints,        # 完成场景下自车未来轨迹监督 [B, 10, 2] float32
+                
+                # 完整场景下path waypoints监督
+                path=torch.tensor(np.asarray([data[i].path for i in range(len(data))])).float(), # 完整场景下参考路径轨迹监督[B, 20, 2]
+                
+                # 完整场景下语言回答监督
+                answer=answer_label,        # 完整场景下文本答案监督
+                
+                
                 image_ff_org=image_ff_org,  # 没有经过裁剪的原始前视图像
                 eval_infos=eval_infos,      # 预测模式下的额外评估信息
                 
@@ -994,7 +1020,7 @@ class DataModule(LightningDataModule):
                 camera_attention_target=(camera_attention_target),
                 camera_attention_valid=(camera_attention_valid),  # false 就不会参与损失计算
 
-                # 四通道结构化未来世界监督
+                # 三通道结构化未来世界监督
                 future_interaction_grid=(future_interaction_grid),
                 future_interaction_valid=(future_interaction_valid),  # false 就不会参与损失计算
 

@@ -35,8 +35,8 @@ from transformers import AutoConfig, AutoProcessor
 import scenario_logger
 import team_code.transfuser_utils as t_u
 from scenario_logger import ScenarioLogger
-from simlingo_training.utils.custom_types import DrivingInput, LanguageLabel
-from simlingo_training.utils.internvl2_utils import build_transform, dynamic_preprocess
+from simlingo_training.utils.custom_types import DrivingInput, DrivingExample, LanguageLabel
+from simlingo_training.utils.internvl2_utils import preprocess_image_batch, get_custom_chat_template
 from team_code.config_simlingo import GlobalConfig
 from team_code.nav_planner import LateralPIDController, RoutePlanner
 from team_code.simlingo_utils import (
@@ -89,8 +89,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.DrivingInput = {}
         self.config = GlobalConfig()
 
-        if self.config.eval_route_as == -1:
-            self.config.eval_route_as = self.model.route_as
+        # Resolve -1 from the loaded training configuration after reading Hydra.
 
         self.last_command = -1
         self.last_command_tmp = -1
@@ -111,7 +110,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         # thread.start()
 
         self.route_path = os.environ.get('ROUTES', '')
-        route_type = self.route_path.split('data/benchmarks/')[-1].split('/')[0]
+        route_type = pathlib.Path(self.route_path).parent.name or 'bench2drive'
         route_number = str(pathlib.Path(self.route_path).stem)
 
 
@@ -144,36 +143,60 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.route_planner_max_distance = 50.0
         self.route_planner_min_distance = 7.5
 
-        #load config from .hydra folder
-        self.config_load_path = Path(self.config_path).parent.parent.parent / '.hydra' / 'config.yaml'
-        with open(self.config_load_path, 'r') as file:
-            cfg = OmegaConf.load(file)
+        # Load the ORIGINAL resolved Hydra configuration saved with the checkpoint.
+        # The exported file lives in 009.ckpt/pytorch_model.pt/pytorch_model.bin,
+        # i.e. it is nested deeper than the official SimLingo layout.
+        checkpoint = Path(self.config_path).expanduser().resolve()
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"Model state_dict not found: {checkpoint}")
+        candidates = [parent / '.hydra' / 'config.yaml' for parent in checkpoint.parents]
+        self.config_load_path = next((x for x in candidates if x.is_file()), None)
+        if self.config_load_path is None:
+            raise FileNotFoundError(f"Missing original .hydra/config.yaml near {checkpoint}")
+        cfg = OmegaConf.load(self.config_load_path)
         self.cfg = cfg
         self.cfg.model.vision_model.use_global_img = cfg.data_module.use_global_img
-    
-        processor = AutoProcessor.from_pretrained(cfg.model.vision_model.variant, trust_remote_code=True)
-        if 'tokenizer' in processor.__dict__:
-                self.tokenizer = processor.tokenizer
-        else:
-                self.tokenizer = processor
-        self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
-        self.tokenizer.padding_side = "left"
-        # llm_tokenizer = AutoTokenizer.from_pretrained(cfg.model.language_model.variant)
-        cache_dir = f"pretrained/{(cfg.model.vision_model.variant.split('/')[1])}"
+        if self.config.eval_route_as == -1:
+            self.config.eval_route_as = cfg.data_module.base_dataset.route_as
+
+        processor = AutoProcessor.from_pretrained(
+            cfg.model.vision_model.variant, trust_remote_code=True
+        )
+        self.tokenizer = processor.tokenizer if hasattr(processor, 'tokenizer') else processor
+        self.tokenizer.add_special_tokens({'additional_special_tokens': [
+            '<WAYPOINTS>', '<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>',
+            '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>',
+            '<TARGET_POINT>',
+        ]})
+        self.tokenizer.padding_side = 'left'
+
+        # Mirror the training-time bfloat16 model construction. The exported
+        # DeepSpeed weights are fp32 tensors and load_state_dict will cast into
+        # the module parameter dtype. Never silently ignore missing parameters.
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(torch.bfloat16)
-        self.model = hydra.utils.instantiate(
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+            self.model = hydra.utils.instantiate(
                 cfg.model,
                 cfg_data_module=cfg.data_module,
                 processor=processor,
-                cache_dir=cache_dir,
-                _recursive_=False
+                cache_dir=None,
+                _recursive_=False,
             ).to(self.device)
-        torch.set_default_dtype(default_dtype)
-        self.model.load_state_dict(torch.load(self.config_path))
-        self.iter = self.config_path.split("epoch=")[-1].split("/")[0]
-        self.session = self.config_path.split("/")[-4]
-        
+        finally:
+            torch.set_default_dtype(default_dtype)
+        state = torch.load(str(checkpoint), map_location='cpu')
+        if isinstance(state, dict) and 'state_dict' in state and isinstance(state['state_dict'], dict):
+            state = state['state_dict']
+        if not isinstance(state, dict):
+            raise TypeError(f"Expected state_dict in {checkpoint}, received {type(state)}")
+        self.model.load_state_dict(state, strict=True)
+        del state
+        self.model.eval()
+        print(f"[Stage-2] Model loaded strictly from {checkpoint}", flush=True)
+        self.iter = checkpoint.parent.parent.name.replace('.ckpt', '')
+        self.session = self.config_load_path.parent.parent.name
+
         self.T = 1
         self.stuck_detector = 0
         self.force_move = 0
@@ -209,16 +232,16 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.state_log = deque(maxlen=max((self.lidar_seq_len * self.data_save_freq), 2))
 
         # Path to where visualizations and other debug output gets stored
-        self.save_path = os.environ.get('SAVE_PATH') + self.save_path_root
+        self.save_path = str(Path(os.environ.get('SAVE_PATH', '/tmp/simlingo_eval')) / str(self.save_path_root or 'route'))
         # self.checkpoint_path = os.environ.get('CHECKPOINT_ENDPOINT').
 
         # Logger that generates logs used for infraction replay in the results_parser.
         if self.save_path is not None and route_index is not None:
-            self.save_path = pathlib.Path(self.save_path) / route_index
+            self.save_path = str(pathlib.Path(self.save_path) / str(route_index))
             pathlib.Path(self.save_path).mkdir(parents=True, exist_ok=True)
 
             self.lon_logger = ScenarioLogger(
-                    save_path=self.save_path,
+                    save_path=pathlib.Path(self.save_path),
                     route_index=route_index,
                     logging_freq=self.logging_freq,
                     log_only=True,
@@ -356,60 +379,42 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
     @torch.inference_mode()  # Turns off gradient computation
     def tick(self, input_data):
         """Pre-processes sensor data and runs the Unscented Kalman Filter"""
+        # EXACT six-view training order; each camera is split into TWO patches.
         rgb = []
-
         if HD_VIZ:
             self.hd_cam_for_viz = input_data['rgb_viz'][1][:, :, :3]
-
         for camera_pos in self.config.num_cameras:
-            rgb_cam = 'rgb_' + str(camera_pos)
-            camera = input_data[rgb_cam][1][:, :, :3]
+            key = 'rgb_' + str(camera_pos)
+            if key not in input_data:
+                raise KeyError(f"Missing Stage-2 camera sensor: {key}")
+            camera = input_data[key][1][:, :, :3]
             if camera_pos == 0:
                 self.camera_for_viz = camera.copy()
-
-            # Also add jpg artifacts at test time, because the training data was saved as jpg.
-            _, compressed_image_i = cv2.imencode('.jpg', camera)
-            camera = cv2.imdecode(compressed_image_i, cv2.IMREAD_UNCHANGED)
-
+            _, encoded = cv2.imencode('.jpg', camera)
+            camera = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
             rgb_pos = cv2.cvtColor(camera, cv2.COLOR_BGR2RGB)
-            rgb_pos = rgb_pos[:int(rgb_pos.shape[0] - (rgb_pos.shape[0] * 4.8) // 16), :, :] # do this from config to ensure it is the same as in training
-
-            # Switch to pytorch channel first order
-            rgb_pos = np.transpose(rgb_pos, (2, 0, 1))
-            rgb.append(rgb_pos)
-
-        rgb = np.array(rgb)
+            crop_height = int(rgb_pos.shape[0] - (rgb_pos.shape[0] * 4.8) // 16)
+            rgb_pos = rgb_pos[:crop_height]
+            rgb.append(np.transpose(rgb_pos, (2, 0, 1)))
+        assert len(rgb) == 6, f"Stage-2 needs six cameras, got {len(rgb)}"
+        rgb = np.stack(rgb, axis=0)  # [6, C, H, W]
         self.image_buffer.append(rgb)
 
-        rgbs = rgb
-        image_sizes = None
-        
-        if 'internvl2' in self.cfg.model.vision_model.variant.lower():
-            T, C, H, W = rgbs.shape
-            transform = build_transform(input_size=448)
-            images_processed_tmp = []
-            images_sizes_tmp = []
-            
-            image = Image.fromarray(rgbs.squeeze(0).transpose(1, 2, 0))
-            images = dynamic_preprocess(image, image_size=448, use_thumbnail=self.cfg.model.vision_model.use_global_img, max_num=2)
-            pixel_values = [transform(image) for image in images]
-            pixel_values = torch.stack(pixel_values)
-            images_processed_tmp.append(pixel_values)
-            images_sizes_tmp.append([image.size[1], image.size[0]])
-            
-            images_processed = {
-                    'pixel_values': torch.stack(images_processed_tmp), 
-                    'image_sizes': torch.tensor(images_sizes_tmp)
-                    }  
-            processed_image = images_processed['pixel_values']
-            num_patches = processed_image.shape[1]
-            new_height = processed_image.shape[3]
-            new_width = processed_image.shape[4]
-            processed_image = processed_image.view(1, self.T, num_patches, C, new_height, new_width)
-            
-        else:
-            raise NotImplementedError(f"Encoder {self.cfg.data_module.encoder} not implemented yet")
-        
+        if 'internvl2' not in self.cfg.model.vision_model.variant.lower():
+            raise NotImplementedError('Stage-2 expects InternVL2 image encoder')
+        images_batch_list = [torch.from_numpy(x).float() for x in rgb]
+        images_processed = preprocess_image_batch(
+            images_batch_list,
+            input_size=448,
+            use_global_img=bool(self.cfg.data_module.use_global_img),
+            max_num_grid=2,
+        )
+        pixels = images_processed['pixel_values']
+        if tuple(pixels.shape) != (6, 2, 3, 448, 448):
+            raise RuntimeError(f"Expected [6,2,3,448,448], got {tuple(pixels.shape)}")
+        processed_image = pixels.view(1, 1, 12, 3, 448, 448)
+        image_sizes = images_processed['image_sizes']
+
         gps_pos = self._route_planner.convert_gps_to_carla(input_data['gps'][1])
         
         compass = t_u.preprocess_compass(input_data['imu'][1][-1])
@@ -562,102 +567,55 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.prompt = prompt
         
         conversation_all = [
-                {
-                "role": "user",
-                "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image"},
-                        ],
-                },
-                {
-                "role": "assistant",
-                "content": [
-                        {"type": "text", "text": "Waypoints:"},
-                        ],
-                },
+            {'role': 'user', 'content': [
+                {'type': 'text', 'text': prompt}, {'type': 'image'},
+            ]},
+            {'role': 'assistant', 'content': [
+                {'type': 'text', 'text': 'Waypoints:'},
+            ]},
         ]
-        conv_batch_list = [conversation_all]
-        questions = []
-        for conv in conv_batch_list:
-                for i in range(len(conv)):
-                        questions.append(conv[i]['content'][0]['text'])
-                        conv[i]['content'] = conv[i]['content'][0]['text']
-                        
-        cache_dir = f"pretrained/{(self.cfg.model.vision_model.variant.split('/')[1])}"
-        # get absolute path from workspace dir not wokring dir
-        cache_dir = to_absolute_path(cache_dir)
-        model_path = f"{cache_dir}/conversation.py"
-        if not os.path.exists(model_path):
-                from huggingface_hub import snapshot_download
-                snapshot_download(repo_id=self.cfg.model.vision_model.variant, local_dir=cache_dir)
-                
-        #import from file from model_path
-        spec = importlib.util.spec_from_file_location('get_conv_template', model_path)
-        conv_module = importlib.util.module_from_spec(spec)
-        sys.modules['get_conv_template'] = conv_module
-        spec.loader.exec_module(conv_module)
-        
-        if not hasattr(self, 'tmp_config'):
-                self.tmp_config = AutoConfig.from_pretrained(self.cfg.model.vision_model.variant, trust_remote_code=True)
-                image_size = self.tmp_config.force_image_size or self.tmp_config.vision_config.image_size
-                patch_size = self.tmp_config.vision_config.patch_size
-                
-                self.num_image_token = int((image_size // patch_size) ** 2 * (self.tmp_config.downsample_ratio ** 2))
-                
-        prompt_batch_list = []
-        for idx, conv in enumerate(conv_batch_list):
-                question = questions[idx]
-                if '<image>' not in question:
-                        question = '<image>\n' + question
-                template = conv_module.get_conv_template('internlm2-chat')
-                template_inference = None
-                
-                template_inference = conv_module.get_conv_template('internlm2-chat')
-                for conv_part_idx, conv_part in enumerate(conv):
-                        if conv_part['role'] == 'assistant':
-                                # template.append_message(template.roles[1], conv_part['content'])
-                                template.append_message(template.roles[1], None)
-                        elif conv_part['role'] == 'user':
-                                if conv_part_idx == 0 and '<image>' not in conv_part['content']:
-                                        # add image token
-                                        conv_part['content'] = '<image>\n' + conv_part['content']
-                                template.append_message(template.roles[0], conv_part['content'])
-                        else:
-                                raise ValueError(f"Role {conv_part['role']} not supported")
-                            
-                query = template.get_prompt()
-                # remove system prompt
-                system_prompt = template.system_template.replace('{system_message}', template.system_message) + template.sep
-                query = query.replace(system_prompt, '')
-                
-                IMG_START_TOKEN='<img>'
-                IMG_END_TOKEN='</img>'
-                IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'
-                num_patches_all = 2 # sum(grid_nums)
-
-                image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * self.num_image_token * num_patches_all + IMG_END_TOKEN
-                query = query.replace('<image>', image_tokens, 1)
-                prompt_batch_list.append(query)
-                
-        prompt_tokenized = self.tokenizer(prompt_batch_list, padding=True, return_tensors="pt", return_offsets_mapping=True, add_special_tokens=False)
-        prompt_tokenized_ids = prompt_tokenized["input_ids"]
-        prompt_tokenized_char_offsets = prompt_tokenized["offset_mapping"].view(1, -1, 2)
-        prompt_tokenized_valid = prompt_tokenized["input_ids"] != self.tokenizer.pad_token_id
-        prompt_tokenized_mask = prompt_tokenized_valid
-        
+        _, question_dict = get_custom_chat_template(
+            [conversation_all],
+            self.tokenizer,
+            self.cfg.model.vision_model.variant,
+            num_image_tokens_total=6 * 2 * 32,
+        )
+        token_ids = question_dict['phrase_ids']
+        image_token_id = self.tokenizer.convert_tokens_to_ids('<IMG_CONTEXT>')
+        visual_count = int((token_ids == image_token_id).sum().item())
+        if visual_count != 384:
+            raise RuntimeError(f"Expected 384 IMG_CONTEXT tokens; got {visual_count}")
+        tp_id = self.tokenizer.convert_tokens_to_ids('<TARGET_POINT>')
+        tp_count = int((token_ids == tp_id).sum().item())
+        if tp_count != 2:
+            raise RuntimeError(f"Expected 2 TARGET_POINT tokens; got {tp_count}")
         ll = LanguageLabel(
-                phrase_ids=prompt_tokenized_ids.to(self.device),
-                phrase_valid=prompt_tokenized_valid.to(self.device),
-                phrase_mask=prompt_tokenized_mask.to(self.device),
-                placeholder_values=placeholder_batch_list,
-                language_string=prompt_batch_list,
-                loss_masking=None,
+            phrase_ids=question_dict['phrase_ids'].to(self.device),
+            phrase_valid=question_dict['phrase_valid'].to(self.device),
+            phrase_mask=question_dict['phrase_mask'].to(self.device),
+            placeholder_values=placeholder_batch_list,
+            language_string=question_dict['language_string'],
+            loss_masking=question_dict['loss_masking'].to(self.device),
         )
 
         self.DrivingInput["camera_images"] = processed_image.to(self.device).bfloat16()
         self.DrivingInput["image_sizes"] = image_sizes
-        self.DrivingInput["camera_intrinsics"] = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), 1, dim=0).view(1, 3, 3).float().to(self.device),
-        self.DrivingInput["camera_extrinsics"] = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), 1, dim=0).view(1, 4, 4).float().to(self.device),
+        K = get_camera_intrinsics(
+            self.config.camera_width_0, self.config.camera_height_0,
+            self.config.camera_fov_0,
+        ).to(self.device)
+        self.DrivingInput['camera_intrinsics'] = K[None, None].repeat(1, 6, 1, 1)
+        extrinsics = []
+        for camera_pos in self.config.num_cameras:
+            yaw = math.radians(self.config.__dict__[f'camera_rot_{camera_pos}'][2])
+            E = get_camera_extrinsics().clone()
+            E[:3, :3] = torch.tensor([
+                [math.cos(yaw), -math.sin(yaw), 0.0],
+                [math.sin(yaw),  math.cos(yaw), 0.0],
+                [0.0, 0.0, 1.0],
+            ], dtype=torch.float32)
+            extrinsics.append(E)
+        self.DrivingInput['camera_extrinsics'] = torch.stack(extrinsics)[None].to(self.device)
         self.DrivingInput["vehicle_speed"] = result['speed']
         self.DrivingInput["target_point"] = result['target_point'].to(self.device)
         self.DrivingInput["prompt"] = ll
@@ -681,7 +639,13 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
 
         # initialize DrivingInput with dict self.DrivingInput
         model_input = DrivingInput(**self.DrivingInput)
-        pred_speed_wps, pred_route, language = self.model(model_input)
+        example = DrivingExample(
+            driving_input=model_input,
+            driving_label=None,
+            run_id=['bench2drive_eval'],
+        )
+        # DecisionInteractionDrivingModel.forward() returns FINAL refined speed_wps.
+        pred_speed_wps, pred_route, language = self.model(example)
         pred_speed_wps = pred_speed_wps.float() if pred_speed_wps is not None else None
         pred_route = pred_route.float() if pred_route is not None else None
 
@@ -864,7 +828,9 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
 
         del self.model
         del self.config
-        if self.cfg.data_module.encoder == 'llavanext':
+        # Stage-2 configs have no data_module.encoder; missing means InternVL2.
+        # Only the old LLaVA-NeXT branch requires this explicit processor cleanup.
+        if OmegaConf.select(self.cfg, 'data_module.encoder', default=None) == 'llavanext':
             del self.processor
 
 

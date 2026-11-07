@@ -223,3 +223,30 @@ mkdir /home/liulei/ll/simlingo/software               # 创建软件存放根目
 mkdir /home/liulei/ll/simlingo/software/carla0915     # 创建carla0915存放根目录
 cd /home/liulei/ll/simlingo/software/carla0915        # 进入carla0915存放根目录
 ```
+
+
+## 五、关于 "评估"
+
+### 1. 一条路线评估测试
+
+```bash
+cd /root/autodl-tmp/simlingo_liulei
+
+python start_eval_simlingo.py \
+    --limit 1 \
+    --workers 1 \
+    --gpu-ids 0,1 \
+    --graphics-ids 2,0
+
+```
+
+
+### 2. 全量220条路线评估
+```bash
+cd /root/autodl-tmp/simlingo_liulei
+
+python start_eval_simlingo.py \
+  --workers 1 \
+  --gpu-ids 0,1 \
+  --graphics-ids 2,0
+```
