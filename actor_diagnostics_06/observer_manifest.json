@@ -1,0 +1,9 @@
+{
+  "format": "carla_actor_observer_v1",
+  "port": 10000,
+  "ego_local_axes": "forward positive X, left positive Y, via CARLA world yaw",
+  "bbox": "CARLA actor ground-truth bounding-box vertices (world XYZ)",
+  "frame_alignment": "CARLA world snapshot frame; not the agent step index",
+  "collision_sensor": true,
+  "warning": "Observer is external; no truth passed to SENSORS agent; synchronous tick frames may be skipped if observer is slow."
+}

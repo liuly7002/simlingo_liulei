@@ -826,6 +826,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                     route=pred_route, initial=self.model.initial_speed_wps,
                     final=pred_speed_wps, returned_control=control,
                     ukf_stored_control=self.control,
+                    pid_debug=getattr(self, '_stage2_pid_debug', None),
                     language=language[0] if language else None,
                 )
             except Exception as exc:
@@ -871,6 +872,20 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         route_interp = self.interpolate_waypoints(route_waypoints.squeeze())
 
         steer = self.turn_controller.step(route_interp, speed)
+
+        # Read-only values computed by the ORIGINAL PID. No control law changes.
+        if getattr(self, 'stage2_diagnostics', None) is not None and self.stage2_diagnostics.enabled:
+            self._stage2_pid_debug = {
+                'desired_speed_mps': float(desired_speed),
+                'actual_speed_mps': float(np.asarray(speed).reshape(-1)[0]),
+                'speed_error_mps': float(desired_speed - np.asarray(speed).reshape(-1)[0]),
+                'brake_decision': bool(np.asarray(brake).reshape(-1)[0]),
+                'speed_waypoint_pair_indices': [int(half_second - 2), int(one_second - 2)],
+                'speed_waypoint_pair_distance_m': float(desired_speed / 2.0),
+                'throttle_after_pid': float(np.asarray(throttle).reshape(-1)[0]),
+                'steer_before_clip': float(np.asarray(steer).reshape(-1)[0]),
+                'forced_creep_remaining': int(getattr(self, 'force_move', 0)),
+            }
 
         steer = np.clip(steer, -1.0, 1.0)
         steer = round(steer, 3)

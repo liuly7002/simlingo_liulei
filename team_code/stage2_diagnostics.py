@@ -30,7 +30,7 @@ class Stage2Diagnostics:
 
     def _write_manifest(self):
         manifest = {
-            'format': 'simlingo_stage2_diagnostics_v1',
+            'format': 'simlingo_stage2_diagnostics_v2',
             'scalar_file': 'frames.jsonl',
             'grid_folder': 'grids',
             'scalar_every': self.every,
@@ -43,6 +43,9 @@ class Stage2Diagnostics:
             'c1_c2_overlap_warning': 'Decoder C1/C2 overlap is only a probability-map proxy; it is NOT final ego-waypoints/actor physical overlap.',
             'controls': 'returned_control is applied by leaderboard; ukf_stored_control may differ during warmup',
             'checkpoint_note': 'No weights or predictions are modified by this recorder.',
+            'pid_debug': 'desired_speed_mps is the exact ORIGINAL control_pid speed target; no recomputation or changes.',
+            'trajectory_delta_raw': 'un-gated refinement_head output; final ego = initial + gate*delta, before finite-precision rounding.',
+            'actor_ground_truth': 'Not available from a SENSORS agent; use separate CARLA observer to record ground-truth actor tracks.',
         }
         (self.root / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -101,7 +104,7 @@ class Stage2Diagnostics:
                     np.vstack((np.zeros((1, 2), np.float32), points)), axis=0), axis=1).sum())}
 
     def record(self, frame, timestamp, speed_mps, model, route, initial, final,
-               returned_control, ukf_stored_control=None, language=None):
+               returned_control, ukf_stored_control=None, pid_debug=None, language=None):
         if not self.enabled or frame % self.every:
             return
         init_xy = self._waypoints(initial)
@@ -119,6 +122,7 @@ class Stage2Diagnostics:
             'initial_ego': self._description(init_xy),
             'final_ego': self._description(final_xy),
             'language': str(language) if language is not None else None,
+            'pid_debug': dict(pid_debug) if isinstance(pid_debug, dict) else None,
         }
         if init_xy is not None and final_xy is not None and init_xy.shape == final_xy.shape:
             difference = np.linalg.norm(final_xy - init_xy, axis=1)
@@ -127,6 +131,26 @@ class Stage2Diagnostics:
         else:
             record['refinement_mean_displacement_m'] = None
             record['refinement_max_displacement_m'] = None
+
+        # The raw correction is computed *before* sigmoid actor gating. This
+        # distinguishes a weak refinement head from an overly restrictive gate.
+        raw_delta = self._waypoints(out.get('trajectory_delta'))
+        record['trajectory_delta_raw'] = self._description(raw_delta)
+        if raw_delta is not None and len(raw_delta):
+            raw_norm = np.linalg.norm(raw_delta, axis=1)
+            record['raw_delta_mean_norm_m'] = float(raw_norm.mean())
+            record['raw_delta_max_norm_m'] = float(raw_norm.max())
+        else:
+            record['raw_delta_mean_norm_m'] = None
+            record['raw_delta_max_norm_m'] = None
+        gate_value = record['actor_gate']
+        if gate_value is not None and raw_delta is not None:
+            gated_norm = np.linalg.norm(raw_delta * gate_value, axis=1)
+            record['gate_times_delta_mean_norm_m'] = float(gated_norm.mean())
+            record['gate_times_delta_max_norm_m'] = float(gated_norm.max())
+        else:
+            record['gate_times_delta_mean_norm_m'] = None
+            record['gate_times_delta_max_norm_m'] = None
 
         logits = getattr(model, 'future_interaction_temporal_logits', None)
         if isinstance(logits, torch.Tensor) and logits.ndim == 5 and logits.shape[1] == 2:
