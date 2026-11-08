@@ -154,6 +154,25 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         if self.config_load_path is None:
             raise FileNotFoundError(f"Missing original .hydra/config.yaml near {checkpoint}")
         cfg = OmegaConf.load(self.config_load_path)
+        # On the local 4080 PC, retain the training configuration and exact
+        # weights, but resolve the two Hugging Face model paths to a local
+        # InternVL2-1B folder supplied via --model-dir. This changes only the
+        # filesystem location, not any model parameter or evaluation behavior.
+        local_model_dir = os.environ.get('SIMLINGO_MODEL_DIR', '').strip()
+        if local_model_dir:
+            local_model_dir = str(Path(local_model_dir).expanduser().resolve())
+            if not (Path(local_model_dir) / 'config.json').is_file():
+                raise FileNotFoundError(
+                    f'InternVL2-1B config.json not found at: {local_model_dir}'
+                )
+            if 'internvl2' not in Path(local_model_dir).name.lower():
+                raise ValueError(
+                    'The local model directory must contain InternVL2 in its name: '
+                    + local_model_dir
+                )
+            print(f'[Local] Using InternVL2-1B model files: {local_model_dir}', flush=True)
+            cfg.model.language_model.variant = local_model_dir
+            cfg.model.vision_model.variant = local_model_dir
         self.cfg = cfg
         self.cfg.model.vision_model.use_global_img = cfg.data_module.use_global_img
         if self.config.eval_route_as == -1:

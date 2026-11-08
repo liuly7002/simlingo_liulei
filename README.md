@@ -250,3 +250,9 @@ python start_eval_simlingo.py \
   --gpu-ids 0,1 \
   --graphics-ids 2,0
 ```
+
+### 3. 结果导出
+```bash
+python Bench2Drive/tools/merge_route_json.py \
+  -f /root/autodl-tmp/simlingo_liulei/eval_results/Bench2Drive/simlingo_lg_stage2/bench2drive/1/res
+```
