@@ -50,8 +50,6 @@ python start_eval_simlingo.py \
   --gpu-ids 0 \
   --graphics-ids 0 \
   --show-carla-window \
-  --window-width 1280 \
-  --window-height 720 \
   --trajectory-viz \
   --trajectory-every 3 \
   --trajectory-save \
@@ -60,10 +58,27 @@ python start_eval_simlingo.py \
   --carla-root "/home/kemove/ll/simlingo/carla0915"
 
 
+python start_eval_simlingo.py \
+  --route bench2drive_06 \
+  --workers 1 \
+  --gpu-ids 0 \
+  --graphics-ids 0 \
+  --show-carla-window \
+  --trajectory-viz \
+  --trajectory-every 5 \
+  --diagnostics \
+  --diagnostic-every 1 \
+  --diagnostic-grid-every 5 \
+  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
+  --model-dir "/home/kemove/ll/InternVL2-1B" \
+  --carla-root "/home/kemove/ll/simlingo/carla0915" \
+  --results-root "/home/kemove/ll/simlingo_liulei/eval_results/Bench2Drive_diagnostics"
+
+
 列出所有的bench2drive的路线以便查看
 python start_eval_simlingo.py --list-routes --routes-dir /home/kemove/ll/simlingo_liulei/leaderboard/data/bench2drive_split
 
-# """
+"""
 
 
 
@@ -199,6 +214,9 @@ def build_environment(cfg, route, viz_root, model_gpu):
         'SIMLINGO_TRAJ_VIZ': '1' if cfg.get('trajectory_viz', False) else '0',
         'SIMLINGO_TRAJ_SAVE': '1' if cfg.get('trajectory_save', False) else '0',
         'SIMLINGO_TRAJ_EVERY': str(cfg.get('trajectory_every', 5)),
+        'SIMLINGO_STAGE2_DIAG': '1' if cfg.get('diagnostics', False) else '0',
+        'SIMLINGO_STAGE2_DIAG_EVERY': str(cfg.get('diagnostic_every', 1)),
+        'SIMLINGO_STAGE2_DIAG_GRID_EVERY': str(cfg.get('diagnostic_grid_every', 5)),
         'OMP_NUM_THREADS': env.get('OMP_NUM_THREADS', '8'),
         'OPENBLAS_NUM_THREADS': '1',
         'TOKENIZERS_PARALLELISM': 'false',
@@ -415,6 +433,12 @@ def main():
                         help='Optional process timeout; disabled by default')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print selected routes and configured paths without starting CARLA')
+    parser.add_argument('--diagnostics', action='store_true',
+                        help='Save read-only Stage-2 gate/trajectory/control and C1/C2 occupancy diagnostics')
+    parser.add_argument('--diagnostic-every', type=int, default=1,
+                        help='Record scalar diagnostics every N ticks (default 1)')
+    parser.add_argument('--diagnostic-grid-every', type=int, default=5,
+                        help='Save C1/C2 temporal probability grids every N ticks (default 5)')
     parser.add_argument('--trajectory-viz', action='store_true',
                         help='Open live front-camera + BEV prediction window (read-only)')
     parser.add_argument('--trajectory-save', action='store_true',
@@ -442,6 +466,11 @@ def main():
     cfg['trajectory_viz'] = bool(args.trajectory_viz)
     cfg['trajectory_save'] = bool(args.trajectory_save)
     cfg['trajectory_every'] = args.trajectory_every
+    cfg['diagnostics'] = bool(args.diagnostics)
+    cfg['diagnostic_every'] = args.diagnostic_every
+    cfg['diagnostic_grid_every'] = args.diagnostic_grid_every
+    if args.diagnostic_every < 1 or args.diagnostic_grid_every < 1:
+        parser.error('--diagnostic-every and --diagnostic-grid-every must be >= 1')
     if args.trajectory_every < 1:
         parser.error('--trajectory-every must be >= 1')
     if args.trajectory_viz and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):

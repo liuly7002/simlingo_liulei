@@ -39,6 +39,7 @@ from simlingo_training.utils.custom_types import DrivingInput, DrivingExample, L
 from simlingo_training.utils.internvl2_utils import preprocess_image_batch, get_custom_chat_template
 from team_code.config_simlingo import GlobalConfig
 from team_code.trajectory_visualizer import TrajectoryVisualizer
+from team_code.stage2_diagnostics import Stage2Diagnostics
 from team_code.nav_planner import LateralPIDController, RoutePlanner
 from team_code.simlingo_utils import (
     get_camera_extrinsics,
@@ -98,6 +99,16 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                      'trajectory_viz' / str(self.save_path_root or 'route'),
         )
         self._trajectory_viz_error_reported = False
+        # Optional read-only Stage-2 diagnostics, independent from GUI and PNG saving.
+        self.stage2_diagnostics = Stage2Diagnostics(
+            output_dir=Path(os.environ.get('SAVE_PATH', '/tmp/simlingo_eval')) /
+                       'stage2_diagnostics' / str(self.save_path_root or 'route') /
+                       ('run_' + time.strftime('%Y%m%d_%H%M%S') + '_pid' + str(os.getpid())),
+            enabled=os.environ.get('SIMLINGO_STAGE2_DIAG', '0') == '1',
+            every=int(os.environ.get('SIMLINGO_STAGE2_DIAG_EVERY', '1')),
+            grid_every=int(os.environ.get('SIMLINGO_STAGE2_DIAG_GRID_EVERY', '5')),
+        )
+        self._stage2_diag_error_reported = False
 
         # Resolve -1 from the loaded training configuration after reading Hydra.
 
@@ -222,6 +233,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.model.load_state_dict(state, strict=True)
         del state
         self.model.eval()
+        self.stage2_diagnostics.attach(self.model)
         print(f"[Stage-2] Model loaded strictly from {checkpoint}", flush=True)
         self.iter = checkpoint.parent.parent.name.replace('.ckpt', '')
         self.session = self.config_load_path.parent.parent.name
@@ -804,6 +816,26 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         else:
             self.control = control
             
+        if self.stage2_diagnostics.enabled:
+            try:
+                # Record *returned* control, not just self.control (the latter is
+                # the historical UKF action and can differ during warmup).
+                self.stage2_diagnostics.record(
+                    frame=self.step, timestamp=timestamp,
+                    speed_mps=gt_velocity, model=self.model,
+                    route=pred_route, initial=self.model.initial_speed_wps,
+                    final=pred_speed_wps, returned_control=control,
+                    ukf_stored_control=self.control,
+                    language=language[0] if language else None,
+                )
+            except Exception as exc:
+                if not self._stage2_diag_error_reported:
+                    print('[Stage2Diag] Disabled after error: {}: {}'.format(
+                        type(exc).__name__, exc), flush=True)
+                    self._stage2_diag_error_reported = True
+                self.stage2_diagnostics.close()
+                self.stage2_diagnostics.enabled = False
+
         metric_info = self.get_metric_info()
         self.metric_info[self.step] = metric_info
         if self.save_path_metric is not None and self.step % 1 == 0:
@@ -876,6 +908,9 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         The leaderboard client doesn't properly clear up the agent after the route finishes so we need to do it here.
         Also writes logging files to disk.
         """
+
+        if hasattr(self, 'stage2_diagnostics'):
+            self.stage2_diagnostics.close()
 
         # Close the optional trajectory GUI before releasing the model.
         if hasattr(self, 'trajectory_visualizer'):
