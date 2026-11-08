@@ -356,7 +356,7 @@ def main(cfg: TrainConfig):
                 mode=cfg.checkpoint_mode,
                 save_top_k=1,
                 save_last=False,
-                every_n_epochs=1,
+                every_n_epochs=int(cfg.val_every_n_epochs),
                 save_on_train_epoch_end=False,
                 auto_insert_metric_name=False,
             )
