@@ -20,10 +20,51 @@ python start_eval_simlingo.py \
   --carla-root "/home/kemove/ll/simlingo/carla0915"
 
 
+# 开启 KV Cache
+SIMLINGO_USE_KV_CACHE=1 python start_eval_simlingo.py \
+  --route bench2drive_04 \
+  --workers 1 \
+  --gpu-ids 0 \
+  --graphics-ids 0 \
+  --show-carla-window \
+  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
+  --model-dir "/home/kemove/ll/InternVL2-1B" \
+  --carla-root "/home/kemove/ll/simlingo/carla0915"
+
+
+# 不开启 KV Cache
+  SIMLINGO_USE_KV_CACHE=0 python start_eval_simlingo.py \
+  --route bench2drive_04 \
+  --workers 1 \
+  --gpu-ids 0 \
+  --graphics-ids 0 \
+  --show-carla-window \
+  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
+  --model-dir "/home/kemove/ll/InternVL2-1B" \
+  --carla-root "/home/kemove/ll/simlingo/carla0915"
+
+
+python start_eval_simlingo.py \
+  --route bench2drive_06 \
+  --workers 1 \
+  --gpu-ids 0 \
+  --graphics-ids 0 \
+  --show-carla-window \
+  --window-width 1280 \
+  --window-height 720 \
+  --trajectory-viz \
+  --trajectory-every 3 \
+  --trajectory-save \
+  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
+  --model-dir "/home/kemove/ll/InternVL2-1B" \
+  --carla-root "/home/kemove/ll/simlingo/carla0915"
+
+
 列出所有的bench2drive的路线以便查看
 python start_eval_simlingo.py --list-routes --routes-dir /home/kemove/ll/simlingo_liulei/leaderboard/data/bench2drive_split
 
 # """
+
 
 
 import argparse
@@ -155,6 +196,9 @@ def build_environment(cfg, route, viz_root, model_gpu):
         'SAVE_PATH': str(viz_root),
         'CUDA_VISIBLE_DEVICES': str(model_gpu),
         'SIMLINGO_MODEL_DIR': cfg.get('model_dir', ''),
+        'SIMLINGO_TRAJ_VIZ': '1' if cfg.get('trajectory_viz', False) else '0',
+        'SIMLINGO_TRAJ_SAVE': '1' if cfg.get('trajectory_save', False) else '0',
+        'SIMLINGO_TRAJ_EVERY': str(cfg.get('trajectory_every', 5)),
         'OMP_NUM_THREADS': env.get('OMP_NUM_THREADS', '8'),
         'OPENBLAS_NUM_THREADS': '1',
         'TOKENIZERS_PARALLELISM': 'false',
@@ -371,6 +415,12 @@ def main():
                         help='Optional process timeout; disabled by default')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print selected routes and configured paths without starting CARLA')
+    parser.add_argument('--trajectory-viz', action='store_true',
+                        help='Open live front-camera + BEV prediction window (read-only)')
+    parser.add_argument('--trajectory-save', action='store_true',
+                        help='Save visualized frames and prediction .npz data')
+    parser.add_argument('--trajectory-every', type=int, default=5,
+                        help='Draw/update every N simulation ticks (default 5)')
     parser.add_argument('--show-carla-window', '--carla-window',
                         action='store_true', dest='show_carla_window',
                         help='Display the real CARLA Unreal window instead of -RenderOffScreen')
@@ -389,6 +439,13 @@ def main():
     cfg['rpc_port'] = args.rpc_port
     cfg['tm_port'] = args.tm_port
     cfg['show_carla_window'] = bool(args.show_carla_window)
+    cfg['trajectory_viz'] = bool(args.trajectory_viz)
+    cfg['trajectory_save'] = bool(args.trajectory_save)
+    cfg['trajectory_every'] = args.trajectory_every
+    if args.trajectory_every < 1:
+        parser.error('--trajectory-every must be >= 1')
+    if args.trajectory_viz and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        print('[TrajectoryViz] Warning: desktop display unavailable, GUI will be disabled.', flush=True)
     cfg['window_width'] = args.window_width
     cfg['window_height'] = args.window_height
     if args.window_width < 320 or args.window_height < 240:
@@ -436,6 +493,8 @@ def main():
         print('InternVL2-1B: {}'.format(cfg['model_dir'] or '<original Hydra config path>'))
         print('CARLA root: {}'.format(cfg['carla_root']))
         print('Model GPU(s): {} | graphics adapter(s): {}'.format(gpu_ids, graphics_ids))
+        print('Trajectory window={} save={} every={}'.format(
+            cfg['trajectory_viz'], cfg['trajectory_save'], cfg['trajectory_every']))
         print('CARLA window: {} ({}x{})'.format(
             'enabled' if cfg['show_carla_window'] else 'headless',
             cfg['window_width'], cfg['window_height']))

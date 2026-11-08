@@ -6,6 +6,7 @@ from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from transformers import AutoModel, AutoTokenizer
 
 from typing import Any, Dict, Optional, Tuple
+import os
 from torch.nn import functional as F
 
 import torch
@@ -28,7 +29,7 @@ CONFIGS: Dict[str, Dict[str, Any]] = {
     "70B": dict(
         num_hidden_layers=80, num_attention_heads=64, hidden_size=8192, intermediate_size=28672, num_key_value_heads=8
     ),
-    "tiny-llama-1.1b": dict(  # 969M
+    "tiny-llama-1.1b": dict(
         num_hidden_layers=22, num_attention_heads=32, hidden_size=2048, intermediate_size=5632, num_key_value_heads=4
     ),
     "phi": dict(
@@ -81,7 +82,7 @@ class LLM(nn.Module):
             raise ValueError(f"Carefull: Variant {self.variant} not tested.")
             print('Loading pretrained model')
             self.model = LlavaNextForConditionalGeneration.from_pretrained(self.variant, trust_remote_code=True)
-            self.tokenizer = LlavaNextProcessor.from_pretrained(self.variant, torch_dtype="auto",  trust_remote_code=True).tokenizer
+            self.tokenizer = LlavaNextProcessor.from_pretrained(self.variant, torch_dtype="auto",  trust_remote_code=True)
             self.model = self.model.language_model
             self.model.embed_tokens = self.model.base_model.embed_tokens
         elif 'internvl' in self.variant.lower():
@@ -106,10 +107,10 @@ class LLM(nn.Module):
         if self.lora:
             from peft import get_peft_model
             from peft import LoraConfig
-            
+
             print('Using PEFT model')
             peft_config = LoraConfig(
-                inference_mode=False, 
+                inference_mode=False,
                 r=self.lora_r,
                 lora_alpha=self.lora_alpha,
                 lora_dropout=self.lora_dropout,
@@ -252,8 +253,9 @@ class LLM(nn.Module):
         restrict_tokens: Optional[Tuple[int, int]] = None,
         attention_mask = None,
         position_ids = None,
+        use_kv_cache: Optional[bool] = None,
     ) -> Tuple[Tensor, int]:
-        
+
         if input_embed_matrix is None:
             if self.embed_tokens is None:
                 raise ValueError(
@@ -274,24 +276,70 @@ class LLM(nn.Module):
         if eos_token_id is not None:
             sampled_tokens.fill_(eos_token_id)
 
+        # KV cache is an INFERENCE-ONLY optimization. Keep the original
+        # full-prefix decoder for training and for reproducibility checks.
+        # Set SIMLINGO_USE_KV_CACHE=0 to restore the old evaluation behavior.
+        if use_kv_cache is None:
+            use_kv_cache = (
+                not self.training
+                and os.environ.get('SIMLINGO_USE_KV_CACHE', '1').strip().lower()
+                not in ('0', 'false', 'off', 'no')
+            )
+        # The existing Stage-2 call uses position_ids=None. Other callers
+        # supplying custom position IDs retain the original decoding path.
+        if position_ids is not None:
+            use_kv_cache = False
+
+        # The cached and legacy branches use exactly the same sampling,
+        # EOS handling, and returned concatenated token embeddings.
+        past_key_values = None
+        next_step_embeds = None
+        if use_kv_cache and attention_mask is None:
+            attention_mask = torch.ones(
+                input_embeds.shape[:2], dtype=torch.bool, device=input_embeds.device
+            )
+
         # we start with all sequences left to complete
         incomplete_seq_mask = torch.ones(input_embeds.size(0), dtype=torch.bool, device=input_embeds.device)
         for i in range(max_new_tokens):
-            features, logits = self.forward(
-                embeddings=input_embeds, 
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-            )
-
-            last_hidden_state = features[:, -1]
+            if use_kv_cache:
+                # Prefill once with the full visual/language prefix. Afterwards
+                # process only the single newly generated token; all earlier
+                # keys and values come from past_key_values.
+                step_embeds = input_embeds if i == 0 else next_step_embeds
+                outputs = self.model(
+                    inputs_embeds=step_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=None,
+                    past_key_values=past_key_values,
+                    use_cache=True,  # override config.use_cache=False only here
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                past_key_values = outputs.past_key_values
+                if past_key_values is None:
+                    raise RuntimeError(
+                        'The language model did not return past_key_values. '
+                        'Disable SIMLINGO_USE_KV_CACHE or check the model/PEFT version.'
+                    )
+                last_hidden_state = outputs.hidden_states[-1][:, -1]
+            else:
+                features, logits = self.forward(
+                    embeddings=input_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                )
+                last_hidden_state = features[:, -1]
 
             # sample the next token
             logits = F.linear(last_hidden_state, logit_matrix)
-            
+
             next_token = self.sample_categorical(
                 logits, temperature=temperature, top_k=top_k, top_p=top_p, restrict_tokens=restrict_tokens
             )
             x = F.embedding(next_token.unsqueeze(1), input_embed_matrix)
+            if use_kv_cache:
+                next_step_embeds = x
 
             input_embeds = torch.cat([input_embeds, x], dim=1)
             attention_mask = torch.cat([attention_mask, torch.ones((input_embeds.size(0), 1), device=input_embeds.device)], dim=1)

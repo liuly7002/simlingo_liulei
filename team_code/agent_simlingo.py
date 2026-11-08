@@ -38,6 +38,7 @@ from scenario_logger import ScenarioLogger
 from simlingo_training.utils.custom_types import DrivingInput, DrivingExample, LanguageLabel
 from simlingo_training.utils.internvl2_utils import preprocess_image_batch, get_custom_chat_template
 from team_code.config_simlingo import GlobalConfig
+from team_code.trajectory_visualizer import TrajectoryVisualizer
 from team_code.nav_planner import LateralPIDController, RoutePlanner
 from team_code.simlingo_utils import (
     get_camera_extrinsics,
@@ -88,6 +89,15 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.device = torch.device('cuda')
         self.DrivingInput = {}
         self.config = GlobalConfig()
+        # Independent, read-only trajectory visualization; disabled by default.
+        self.trajectory_visualizer = TrajectoryVisualizer(
+            show=os.environ.get('SIMLINGO_TRAJ_VIZ', '0') == '1',
+            save=os.environ.get('SIMLINGO_TRAJ_SAVE', '0') == '1',
+            every=int(os.environ.get('SIMLINGO_TRAJ_EVERY', '5')),
+            save_dir=Path(os.environ.get('SAVE_PATH', '/tmp/simlingo_eval')) /
+                     'trajectory_viz' / str(self.save_path_root or 'route'),
+        )
+        self._trajectory_viz_error_reported = False
 
         # Resolve -1 from the loaded training configuration after reading Hydra.
 
@@ -670,6 +680,28 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
 
         # prepare velocity input
         gt_velocity = tick_data['speed']
+        # Read already-predicted tensors only; never alter the model/control outputs.
+        # Draw AFTER inference and BEFORE PID to compare initial vs refined paths.
+        if self.trajectory_visualizer.show or self.trajectory_visualizer.save:
+            if self.step % self.trajectory_visualizer.every == 0:
+                try:
+                    self.trajectory_visualizer.update(
+                        frame=self.step,
+                        camera=self.camera_for_viz,
+                        route=pred_route,
+                        initial=self.model.initial_speed_wps,
+                        final=pred_speed_wps,
+                        velocity=gt_velocity,
+                        answer=language[0] if language else None,
+                    )
+                except Exception as exc:
+                    if not self._trajectory_viz_error_reported:
+                        print('[TrajectoryViz] Disabled due to visualization error: '
+                              '{}: {}'.format(type(exc).__name__, exc), flush=True)
+                        self._trajectory_viz_error_reported = True
+                    self.trajectory_visualizer.show = False
+                    self.trajectory_visualizer.save = False
+
 
         if DEBUG and self.step%5 == 0:
             tvec = None
@@ -845,6 +877,9 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         Also writes logging files to disk.
         """
 
+        # Close the optional trajectory GUI before releasing the model.
+        if hasattr(self, 'trajectory_visualizer'):
+            self.trajectory_visualizer.close()
         del self.model
         del self.config
         # Stage-2 configs have no data_module.encoder; missing means InternVL2.
