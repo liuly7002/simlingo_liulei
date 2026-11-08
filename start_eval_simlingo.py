@@ -59,7 +59,7 @@ python start_eval_simlingo.py \
 
 
 python start_eval_simlingo.py \
-  --route bench2drive_06 \
+  --route bench2drive_07 \
   --workers 1 \
   --gpu-ids 0 \
   --graphics-ids 0 \
