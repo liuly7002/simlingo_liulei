@@ -308,22 +308,73 @@ def main(cfg: TrainConfig):
 
     # Optional checkpointing. With the switch disabled, this reproduces the
     # current repository behavior exactly. Enable it for closed-loop evaluation.
-    if bool(cfg.enable_checkpointing):
-        monitor = cfg.checkpoint_monitor
-        if monitor is not None and str(monitor).strip().lower() in {"", "none", "null"}:
-            monitor = None
+    # if bool(cfg.enable_checkpointing):
+    #     monitor = cfg.checkpoint_monitor
+    #     if monitor is not None and str(monitor).strip().lower() in {"", "none", "null"}:
+    #         monitor = None
 
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=cfg.checkpoint_dir,
-            filename=cfg.checkpoint_filename,
-            monitor=monitor,
-            mode=cfg.checkpoint_mode,
-            save_top_k=int(cfg.checkpoint_save_top_k),
-            save_last=bool(cfg.checkpoint_save_last),
-            every_n_epochs=int(cfg.val_every_n_epochs),
-            auto_insert_metric_name=False,
+    #     checkpoint_callback = ModelCheckpoint(
+    #         dirpath=cfg.checkpoint_dir,
+    #         filename=cfg.checkpoint_filename,
+    #         monitor=monitor,
+    #         mode=cfg.checkpoint_mode,
+    #         save_top_k=int(cfg.checkpoint_save_top_k),
+    #         save_last=bool(cfg.checkpoint_save_last),
+    #         every_n_epochs=int(cfg.val_every_n_epochs),
+    #         auto_insert_metric_name=False,
+    #     )
+    #     callbacks.insert(0, checkpoint_callback)
+
+
+    if bool(cfg.enable_checkpointing):
+        from pathlib import Path
+
+        ckpt_root = Path(cfg.checkpoint_dir)
+        monitor = str(cfg.checkpoint_monitor)
+
+        # 1. 每次验证均保存，不删除历史模型
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=str(ckpt_root / "every_validation"),
+                filename="{epoch:03d}",
+                monitor=monitor,
+                mode=cfg.checkpoint_mode,
+                save_top_k=-1,
+                save_last=False,
+                every_n_epochs=1,
+                save_on_train_epoch_end=False,
+                auto_insert_metric_name=False,
+            )
         )
-        callbacks.insert(0, checkpoint_callback)
+
+        # 2. 独立保存验证集表现最好的模型
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=str(ckpt_root / "best"),
+                filename="{epoch:03d}",
+                monitor=monitor,
+                mode=cfg.checkpoint_mode,
+                save_top_k=1,
+                save_last=False,
+                every_n_epochs=1,
+                save_on_train_epoch_end=False,
+                auto_insert_metric_name=False,
+            )
+        )
+
+        # 3. 独立保存最新训练轮次
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=str(ckpt_root / "last"),
+                filename="{epoch:03d}",
+                save_top_k=0,
+                save_last=True,
+                every_n_epochs=1,
+                save_on_train_epoch_end=True,
+                auto_insert_metric_name=False,
+            )
+        )
+
 
     if not cfg.debug:
         callbacks.append(lr_monitor)
