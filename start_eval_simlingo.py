@@ -4,62 +4,12 @@
 """
 本地操作指令：
 
-codna activate simlingo
+conda activate simlingo
 
 
+# 最新命令
 python start_eval_simlingo.py \
-  --route bench2drive_04 \
-  --workers 1 \
-  --gpu-ids 0 \
-  --graphics-ids 0 \
-  --show-carla-window \
-  --window-width 1280 \
-  --window-height 720 \
-  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
-  --model-dir "/home/kemove/ll/InternVL2-1B" \
-  --carla-root "/home/kemove/ll/simlingo/carla0915"
-
-
-# 开启 KV Cache
-SIMLINGO_USE_KV_CACHE=1 python start_eval_simlingo.py \
-  --route bench2drive_04 \
-  --workers 1 \
-  --gpu-ids 0 \
-  --graphics-ids 0 \
-  --show-carla-window \
-  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
-  --model-dir "/home/kemove/ll/InternVL2-1B" \
-  --carla-root "/home/kemove/ll/simlingo/carla0915"
-
-
-# 不开启 KV Cache
-  SIMLINGO_USE_KV_CACHE=0 python start_eval_simlingo.py \
-  --route bench2drive_04 \
-  --workers 1 \
-  --gpu-ids 0 \
-  --graphics-ids 0 \
-  --show-carla-window \
-  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
-  --model-dir "/home/kemove/ll/InternVL2-1B" \
-  --carla-root "/home/kemove/ll/simlingo/carla0915"
-
-
-python start_eval_simlingo.py \
-  --route bench2drive_06 \
-  --workers 1 \
-  --gpu-ids 0 \
-  --graphics-ids 0 \
-  --show-carla-window \
-  --trajectory-viz \
-  --trajectory-every 3 \
-  --trajectory-save \
-  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
-  --model-dir "/home/kemove/ll/InternVL2-1B" \
-  --carla-root "/home/kemove/ll/simlingo/carla0915"
-
-
-python start_eval_simlingo.py \
-  --route bench2drive_07 \
+  --route bench2drive_05 \
   --workers 1 \
   --gpu-ids 0 \
   --graphics-ids 0 \
@@ -69,7 +19,7 @@ python start_eval_simlingo.py \
   --diagnostics \
   --diagnostic-every 1 \
   --diagnostic-grid-every 5 \
-  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_04_09_48_33_simlingo_lg_stage2_seed1/checkpoints/009.ckpt/pytorch_model.pt/pytorch_model.bin" \
+  --checkpoint "/home/kemove/ll/A论文/VLA相关资料/完整网络训练结果/outputs/2026_11_08_19_30_25_simlingo_lg_stage2_seed1/checkpoints/every_validation/011.ckpt/pytorch_model.pt/pytorch_model.bin" \
   --model-dir "/home/kemove/ll/InternVL2-1B" \
   --carla-root "/home/kemove/ll/simlingo/carla0915" \
   --results-root "/home/kemove/ll/simlingo_liulei/eval_results/Bench2Drive_diagnostics"

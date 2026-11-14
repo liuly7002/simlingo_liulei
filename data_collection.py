@@ -16,7 +16,7 @@ from pathlib import Path
 import random
 import re
 
-DEBUG = False   # For debug
+DEBUG = True   # For debug
 
 def make_bash(code_dir, route_file_number, agent_name, route_file, ckeckpoint_endpoint, save_pth, seed, carla_root, town, repetition):
     print(f"[Debug] Writing ...")
@@ -210,14 +210,6 @@ if __name__ == "__main__":
     route_folder = f"{code_root}/data/simlingo"                                                # 收集路线文件(.xml)存放的位置
     if not DEBUG:
 
-        ####################### 原收集路线 #######################
-        # routes = glob.glob(f"{route_folder}/**/*balanced*/*.xml", recursive=True)     # 只对含balanced的目录当前层下的 .xml 文件
-        # routes_lb1 = glob.glob(f"{route_folder}/**/*lb1*/**/*.xml", recursive=True)   # 对lb1_split文件夹下的所有路线进行收集
-        # routes = routes + routes_lb1                                                            # 用于收集数据的全部路线
-        # Set a random seed of 42 to shuffle the order of routes in a reproducible manner.
-        # random.seed(120)
-        # random.shuffle(routes)
-
         ####################### 新收集路线 #######################
         ####################### training #######################
 
@@ -278,7 +270,7 @@ if __name__ == "__main__":
         random.shuffle(routes)
     else:  # true for debug
         print("[Debug] There's only one route, which makes debugging easier ......")
-        routes = ["/home/kemove/ll/simlingo/data/simlingo/training_1_scenario/routes_training/random_weather_seed_1_balanced_150/1.xml"]
+        routes = ["/home/kemove/ll/simlingo_liulei/leaderboard/data/bench2drive_split/bench2drive_08.xml"]
 
     if len(routes) == 0:
         raise RuntimeError(f"No route xml found under: {route_folder}")
@@ -296,16 +288,19 @@ if __name__ == "__main__":
             seed_counter += 1
 
             # 从 route 字符串路径中解析出属于哪个 Town。
-            try:
-                town = re.search(r"Town(\d+)", route).group(0)
-            except Exception:
-                if "validation" in route:
-                    town = "Town13"
-                elif "training" in route:
-                    town = "Town12"
-                else:
-                    print(f"[SKIP] Town not found in route: {route}")
-                    continue
+            if not DEBUG:
+                try:
+                    town = re.search(r"Town(\d+)", route).group(0)
+                except Exception:
+                    if "validation" in route:
+                        town = "Town13"
+                    elif "training" in route:
+                        town = "Town12"
+                    else:
+                        print(f"[SKIP] Town not found in route: {route}")
+                        continue
+            else:
+                town = "Test"
 
             scenario_type = route.split("/")[-5:-1]
             scenario_type = "/".join(scenario_type)

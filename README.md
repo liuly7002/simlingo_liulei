@@ -205,10 +205,30 @@ export PYTHONPATH=$PYTHONPATH:/home/kemove/ll/simlingo_liulei
 
 ### 2. 网页查看训练结果
 ```
-# simlingo_liulei 根目录下执行
-wandb sync ./outputs/2026_05_04_16_53_04_simlingo_seed1/wandb/offline-run-20260504_165419-2026_05_04_16_53_04_simlingo_seed1
+# 1.查看当前wandb版本,需要使用wandb版本为0.24.2
+python -c "import wandb; print(wandb.__version__)"
+# 2.更新wandb版本到24.2,因为旧版本不支持86位API Key,所以需要更新wandb版本
+python -m pip install --upgrade "wandb==0.24.2"
+# 3.再次查看版本
+python -c "import wandb; print(wandb.__version__)"
+# 4.安装完成后重新登陆
+wandb login --relogin
+# 5.simlingo_liulei 根目录下执行,查看训练结果
+wandb sync \
+  --entity liulyustb-university-of-science-and-technology-beijing \
+  --project simlingo \
+  --include-synced \
+  ./outputs/2026_05_04_16_53_04_simlingo_seed1/wandb/offline-run-20260504_165419-2026_05_04_16_53_04_simlingo_seed1
 ```
 
+
+### 3. 训练模型整理为.pt文件格式才能进行仿真评估
+```bash
+conda activate simlingo
+export PYTHONPATH=$PYTHON:/root/autodl-tmp/simlingo_liulei
+cd /root/autodl-tmp/simlingo_liulei/outputs/2026_11_08_19_30_25_simlingo_lg_stage2_seed1/checkpoints/every_validation/001.ckpt
+python zero_to_fp32.py . pytorch_model.pt
+```
 
 ## 五、安装 Carla 0.9.15
 
