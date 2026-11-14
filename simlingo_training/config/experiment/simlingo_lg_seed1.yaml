@@ -113,15 +113,16 @@ data_module:
 
     use_official_route_split: true    # 是否使用官方的训练集和验证集划分,如果为false,则会随机划分99%训练集和1%验证集 
 
-  # LG switches can also be overridden here from the command line, e.g.:
-  # data_module.dreamer_dataset.lg_use_language=false
-  dreamer_dataset:
-    lg_use_language: true
-    lg_use_waypoints: true
-    lg_language_mode: four_questions
+  # 1.正常情况下lg参与训练的设置
+  # dreamer_dataset:
+  #   lg_use_language: true
+  #   lg_use_waypoints: true
+  #   lg_language_mode: four_questions
+  # 2. lg不参与训练的设置,此时只有driving数据参与训练
+  dreamer_dataset: null
 
 max_epochs: 15          # 最大 epoch
-val_every_n_epochs: 2   # 每2轮训练验证一次
+val_every_n_epochs: 1   # 每1轮训练验证一次
 
 gpus: 1
 seed: 9876
